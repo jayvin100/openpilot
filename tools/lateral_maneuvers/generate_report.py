@@ -10,6 +10,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from openpilot.common.utils import tabulate
 
+from cereal import car
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.system.hardware.hw import Paths
 from openpilot.common.constants import CV
@@ -49,12 +50,14 @@ def report(platform, route, _description, CP, ID, maneuvers):
       t_carState, carState = zip(*[(m.logMonoTime, m.carState) for m in msgs if m.which() == 'carState'], strict=True)
       t_controlsState, controlsState = zip(*[(m.logMonoTime, m.controlsState) for m in msgs if m.which() == 'controlsState'], strict=True)
       t_lateralPlan, lateralPlan = zip(*[(m.logMonoTime, m.lateralManeuverPlan) for m in msgs if m.which() == 'lateralManeuverPlan' and m.valid], strict=True)
+      t_carOutput, carOutput = zip(*[(m.logMonoTime, m.carOutput) for m in msgs if m.which() == 'carOutput'], strict=True)
 
       # make time relative seconds
       t_carControl = [(t - t_carControl[0]) / 1e9 for t in t_carControl]
       t_carState = [(t - t_carState[0]) / 1e9 for t in t_carState]
       t_controlsState = [(t - t_controlsState[0]) / 1e9 for t in t_controlsState]
       t_lateralPlan = [(t - t_lateralPlan[0]) / 1e9 for t in t_lateralPlan]
+      t_carOutput = [(t - t_carOutput[0]) / 1e9 for t in t_carOutput]
 
       # maneuver validity
       latActive = [m.latActive for m in carControl]
@@ -115,8 +118,9 @@ def report(platform, route, _description, CP, ID, maneuvers):
           builder.append('</h3>')
 
       plt.rcParams['font.size'] = 40
-      fig = plt.figure(figsize=(30, 18))
-      ax = fig.subplots(2, 1, sharex=True, gridspec_kw={'height_ratios': [5, 3]})
+      is_angle_control = CP.steerControlType == car.CarParams.SteerControlType.angle
+      fig = plt.figure(figsize=(30, 24))
+      ax = fig.subplots(3, 1, sharex=True, gridspec_kw={'height_ratios': [5, 3, 3]})
 
       ax[0].grid(linewidth=4)
       desired_lat_accel = [lat_accel(m.desiredCurvature, v) for m, v in zip(lateralPlan, [s.vEgo for s in carState], strict=False)]
@@ -129,10 +133,21 @@ def report(platform, route, _description, CP, ID, maneuvers):
       actual_lat_accel = [lat_accel(cs.curvature, v) for cs, v in zip(controlsState, [m.vEgo for m in carState], strict=False)]
       ax[0].plot(t_controlsState[:len(actual_lat_accel)], actual_lat_accel, label='actual lat accel', linewidth=6)
       ax[0].set_ylabel('Lateral Accel (m/s^2)')
-      ax[0].legend(prop={'size': 30})
 
       for ct, cv in cross_markers:
         ax[0].plot(ct, cv, marker='o', markersize=50, markeredgewidth=7, markeredgecolor='black', markerfacecolor='None')
+
+      ax_cmd = ax[0].twinx()
+      if is_angle_control:
+        line_cmd, = ax_cmd.plot(t_carOutput, [-m.actuatorsOutput.steeringAngleDeg for m in carOutput], 'm', label='steer angle', linewidth=6)
+        ax_cmd.set_ylabel('Steer Angle (deg)')
+      else:
+        line_cmd, = ax_cmd.plot(t_carOutput, [-m.actuatorsOutput.torque for m in carOutput], 'm', label='steer torque', linewidth=6)
+        ax_cmd.set_ylabel('Steer Torque')
+      line_eps, = ax_cmd.plot(t_carState, [-m.steeringTorqueEps for m in carState], 'r', label='EPS torque', linewidth=6)
+
+      lines = [l for l in ax[0].get_lines() if not l.get_label().startswith('_')] + [line_cmd, line_eps]
+      ax[0].legend(lines, [l.get_label() for l in lines], prop={'size': 30})
 
       ax[1].grid(linewidth=4)
       ax[1].plot(t_carState, [m.vEgo * CV.MS_TO_MPH for m in carState], 'g', label='vEgo', linewidth=6)

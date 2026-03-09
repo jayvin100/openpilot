@@ -34,8 +34,9 @@ class Maneuver:
   _repeated: int = 0
   _baseline_curvature: float = 0.0
 
-  def get_accel(self, v_ego: float, lat_active: bool, curvature: float) -> float:
-    ready = abs(v_ego - self.initial_speed) < 1.0 and lat_active and abs(curvature) < 0.001
+  def get_accel(self, v_ego: float, lat_active: bool, curvature: float, roll: float) -> float:
+    # only start maneuver on straight, flat roads
+    ready = abs(v_ego - self.initial_speed) < 1.0 and lat_active and abs(curvature) < 0.0005 and abs(roll) < 0.01
     self._ready_cnt = (self._ready_cnt + 1) if ready else 0
 
     if self._ready_cnt > (3. / DT_MDL):
@@ -155,11 +156,12 @@ def main():
     cur_curvature = sm['controlsState'].curvature
 
     if maneuver is not None:
-      # abort active maneuver on steering override
-      if maneuver.active and sm['carState'].steeringPressed:
+      # reset maneuver on steering override
+      if sm['carState'].steeringPressed:
         maneuver.reset()
 
-      accel = maneuver.get_accel(v_ego, sm['carControl'].latActive, cur_curvature)
+      roll = sm['carControl'].orientationNED[0]
+      accel = maneuver.get_accel(v_ego, sm['carControl'].latActive, cur_curvature, roll)
 
       if maneuver.active:
         action_remaining = maneuver.actions[maneuver._action_index].time_bp[-1] - maneuver._action_frames * DT_MDL
