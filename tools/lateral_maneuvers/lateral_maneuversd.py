@@ -3,7 +3,7 @@ import numpy as np
 from dataclasses import dataclass
 
 from cereal import messaging, car
-from openpilot.common.constants import CV
+from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY, CV
 from openpilot.common.realtime import DT_MDL
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
@@ -33,6 +33,7 @@ class Maneuver:
   _ready_cnt: int = 0
   _repeated: int = 0
   _baseline_curvature: float = 0.0
+  _baseline_roll: float = 0.0
 
   def get_accel(self, v_ego: float, lat_active: bool, curvature: float, roll: float) -> float:
     # only start maneuver on straight, flat roads
@@ -42,6 +43,7 @@ class Maneuver:
     if self._ready_cnt > (3. / DT_MDL):
       if not self._active:
         self._baseline_curvature = curvature
+        self._baseline_roll = roll
       self._active = True
 
     if not self._active:
@@ -184,7 +186,8 @@ def main():
 
     plan_send.valid = maneuver is not None and maneuver.active
     if plan_send.valid:
-      plan_send.lateralManeuverPlan.desiredCurvature = maneuver._baseline_curvature + accel / max(v_ego, MIN_SPEED) ** 2
+      roll_compensation = ACCELERATION_DUE_TO_GRAVITY * (roll - maneuver._baseline_roll)
+      plan_send.lateralManeuverPlan.desiredCurvature = maneuver._baseline_curvature + (accel - roll_compensation) / max(v_ego, MIN_SPEED) ** 2
     pm.send('lateralManeuverPlan', plan_send)
 
     if maneuver is not None and maneuver.finished:
