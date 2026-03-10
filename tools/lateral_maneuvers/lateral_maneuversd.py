@@ -36,8 +36,8 @@ class Maneuver:
   _baseline_roll: float = 0.0
 
   def get_accel(self, v_ego: float, lat_active: bool, curvature: float, roll: float) -> float:
-    # only start maneuver on straight roads
-    ready = abs(v_ego - self.initial_speed) < 1.0 and lat_active and abs(curvature) < 0.0005
+    # only start maneuver on straight, flat roads
+    ready = abs(v_ego - self.initial_speed) < 1.0 and lat_active and abs(curvature) < 0.0005 and abs(roll) < 0.01
     self._ready_cnt = (self._ready_cnt + 1) if ready else 0
 
     if self._ready_cnt > (3. / DT_MDL):
