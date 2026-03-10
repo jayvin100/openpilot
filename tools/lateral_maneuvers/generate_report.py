@@ -2,6 +2,7 @@
 import argparse
 import base64
 import io
+import math
 import os
 import pprint
 import webbrowser
@@ -118,7 +119,6 @@ def report(platform, route, _description, CP, ID, maneuvers):
           builder.append('</h3>')
 
       plt.rcParams['font.size'] = 40
-      is_angle_control = CP.steerControlType == car.CarParams.SteerControlType.angle
       fig = plt.figure(figsize=(30, 24))
       ax = fig.subplots(3, 1, sharex=True, gridspec_kw={'height_ratios': [5, 3, 3]})
 
@@ -137,23 +137,26 @@ def report(platform, route, _description, CP, ID, maneuvers):
       for ct, cv in cross_markers:
         ax[0].plot(ct, cv, marker='o', markersize=50, markeredgewidth=7, markeredgecolor='black', markerfacecolor='None')
 
-      ax_cmd = ax[0].twinx()
-      if is_angle_control:
-        line_cmd, = ax_cmd.plot(t_carOutput, [-m.actuatorsOutput.steeringAngleDeg for m in carOutput], 'm', label='steer angle', linewidth=6)
-        ax_cmd.set_ylabel('Steer Angle (deg)')
+      ax2 = ax[0].twinx()
+      if CP.steerControlType == car.CarParams.SteerControlType.angle:
+        ax2.plot(t_carOutput, [-m.actuatorsOutput.steeringAngleDeg for m in carOutput], 'C2', label='steer angle', linewidth=6)
       else:
-        line_cmd, = ax_cmd.plot(t_carOutput, [-m.actuatorsOutput.torque for m in carOutput], 'm', label='steer torque', linewidth=6)
-        ax_cmd.set_ylabel('Steer Torque')
-      line_eps, = ax_cmd.plot(t_carState, [-m.steeringTorqueEps for m in carState], 'r', label='EPS torque', linewidth=6)
+        ax2.plot(t_carOutput, [-m.actuatorsOutput.torque for m in carOutput], 'C2', label='steer torque', linewidth=6)
 
-      lines = [l for l in ax[0].get_lines() if not l.get_label().startswith('_')] + [line_cmd, line_eps]
-      ax[0].legend(lines, [l.get_label() for l in lines], prop={'size': 30})
+      h1, l1 = ax[0].get_legend_handles_labels()
+      h2, l2 = ax2.get_legend_handles_labels()
+      ax[0].legend(h1 + h2, l1 + l2, prop={'size': 30})
 
       ax[1].grid(linewidth=4)
       ax[1].plot(t_carState, [m.vEgo * CV.MS_TO_MPH for m in carState], 'g', label='vEgo', linewidth=6)
       ax[1].set_ylabel('Velocity (mph)')
       ax[1].yaxis.set_major_formatter(plt.FormatStrFormatter('%.1f'))
       ax[1].legend()
+
+      ax[2].grid(linewidth=4)
+      ax[2].plot(t_carControl, [math.degrees(m.orientationNED[0]) for m in carControl], label='roll', linewidth=6)
+      ax[2].set_ylabel('Roll (deg)')
+      ax[2].legend()
 
       ax[-1].set_xlabel("Time (s)")
       fig.tight_layout()
