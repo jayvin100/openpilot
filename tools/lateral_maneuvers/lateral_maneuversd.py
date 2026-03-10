@@ -162,7 +162,7 @@ def main():
       if sm['carState'].steeringPressed:
         maneuver.reset()
 
-      roll = sm['carControl'].orientationNED[0]
+      roll = sm['carControl'].orientationNED[0] if len(sm['carControl'].orientationNED) == 3 else 0.0
       accel = maneuver.get_accel(v_ego, sm['carControl'].latActive, cur_curvature, roll)
 
       if maneuver.active:
