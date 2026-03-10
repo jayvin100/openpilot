@@ -13,7 +13,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import MIN_SPEED
 # thresholds for starting maneuvers
 MAX_SPEED_DEV = 1.0 # deviation in m/s
 MAX_CURV = 0.0005 # 2 km radius
-MAX_ROLL = 0.01 # 0.57°
+MAX_ROLL = 0.03 # 1.71°
 
 @dataclass
 class Action:
@@ -183,7 +183,7 @@ def main():
         roll_deg = math.degrees(roll)
         alert_msg.alertDebug.alertText1 = 'Go straight'
         max_roll_deg = math.degrees(MAX_ROLL)
-        alert_msg.alertDebug.alertText2 = f'{ready_time:0.1f}s curv={cur_curvature:.4f}<{MAX_CURV} roll={roll_deg:.1f}<{max_roll_deg:.1f}'
+        alert_msg.alertDebug.alertText2 = f'{ready_time:0.1f}s \ncurv={cur_curvature:.4f}<{MAX_CURV} \nroll={roll_deg:.1f}<{max_roll_deg:.1f}'
     else:
       alert_msg.alertDebug.alertText1 = 'Maneuvers Finished'
 
