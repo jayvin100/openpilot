@@ -111,7 +111,7 @@ def report(platform, route, _description, CP, ID, maneuvers):
               builder.append(f', <strong>crossed in {cross_time:.3f}s</strong>')
               cross_markers.append((t, act_target + baseline_accel))
               if maneuver_valid:
-                target_cross_times[description].append(cross_time)
+                target_cross_times[f"{description} ({act_target:+.1f})"].append(cross_time)
               break
             prev_crossed = crossed
           else:
@@ -148,7 +148,7 @@ def report(platform, route, _description, CP, ID, maneuvers):
       ax[0].legend(h1 + h2, l1 + l2, prop={'size': 30})
 
       ax[1].grid(linewidth=4)
-      ax[1].plot(t_carState, [m.vEgo * CV.MS_TO_MPH for m in carState], 'g', label='vEgo', linewidth=6)
+      ax[1].plot(t_carState, [m.vEgo * CV.MS_TO_MPH for m in carState], label='vEgo', linewidth=6)
       ax[1].set_ylabel('Velocity (mph)')
       ax[1].yaxis.set_major_formatter(plt.FormatStrFormatter('%.1f'))
       ax[1].legend()
@@ -171,11 +171,8 @@ def report(platform, route, _description, CP, ID, maneuvers):
   summary = ["<h2>Summary</h2>\n"]
   cols = ['maneuver', 'crossed', 'mean', 'min', 'max']
   table = []
-  for description, runs in maneuvers:
-    times = target_cross_times[description]
-    targets_per_run = 1 if description.startswith('sine') else 2
-    total_targets = len(runs) * targets_per_run
-    l = [description, f'{len(times)}/{total_targets}']
+  for description, times in target_cross_times.items():
+    l = [description, len(times)]
     if len(times):
       l.extend([round(sum(times) / len(times), 2), round(min(times), 2), round(max(times), 2)])
     table.append(l)

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import math
 import numpy as np
 from dataclasses import dataclass
 
@@ -9,6 +10,10 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.lib.drive_helpers import MIN_SPEED
 
+# thresholds for starting maneuvers
+MAX_SPEED_DEV = 1.0 # deviation in m/s
+MAX_CURV = 0.0005 # 2 km radius
+MAX_ROLL = 0.01 # 0.57°
 
 @dataclass
 class Action:
@@ -36,7 +41,7 @@ class Maneuver:
 
   def get_accel(self, v_ego: float, lat_active: bool, curvature: float, roll: float) -> float:
     # only start maneuver on straight, flat roads
-    ready = abs(v_ego - self.initial_speed) < 1.0 and lat_active and abs(curvature) < 0.0005 and abs(roll) < 0.01
+    ready = abs(v_ego - self.initial_speed) < MAX_SPEED_DEV and lat_active and abs(curvature) < MAX_CURV and abs(roll) < MAX_ROLL
     self._ready_cnt = (self._ready_cnt + 1) if ready else 0
 
     if self._ready_cnt > (3. / DT_MDL):
@@ -105,7 +110,7 @@ MANEUVERS = [
   Maneuver(
     "sine 0.5Hz 50mph",
     [_sine_action(1.0, 2.0, 2.0), Action([0.0], [0.5])],
-    repeat=1,
+    repeat=2,
     initial_speed=50. * CV.MPH_TO_MS,
   ),
   Maneuver(
@@ -123,7 +128,7 @@ MANEUVERS = [
   Maneuver(
     "sine 0.5Hz 70mph",
     [_sine_action(1.0, 2.0, 2.0), Action([0.0], [0.5])],
-    repeat=1,
+    repeat=2,
     initial_speed=70. * CV.MPH_TO_MS,
   ),
 ]
@@ -175,8 +180,10 @@ def main():
         alert_msg.alertDebug.alertText1 = f'Set speed to {maneuver.initial_speed * CV.MS_TO_MPH:0.0f} mph'
       else:
         ready_time = max(3. - maneuver._ready_cnt * DT_MDL, 0)
+        roll_deg = math.degrees(roll)
         alert_msg.alertDebug.alertText1 = 'Go straight'
-        alert_msg.alertDebug.alertText2 = f'{ready_time:0.1f}s'
+        max_roll_deg = math.degrees(MAX_ROLL)
+        alert_msg.alertDebug.alertText2 = f'{ready_time:0.1f}s curv={cur_curvature:.4f}<{MAX_CURV} roll={roll_deg:.1f}<{max_roll_deg:.1f}'
     else:
       alert_msg.alertDebug.alertText1 = 'Maneuvers Finished'
 
