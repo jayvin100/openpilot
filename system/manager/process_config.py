@@ -69,10 +69,10 @@ def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not started
 
 def or_(*fns):
-  return lambda *args: operator.or_(*(fn(*args) for fn in fns))
+  return lambda *args: any(fn(*args) for fn in fns)
 
 def and_(*fns):
-  return lambda *args: operator.and_(*(fn(*args) for fn in fns))
+  return lambda *args: all(fn(*args) for fn in fns)
 
 procs = [
   DaemonProcess("manage_athenad", "system.athena.manage_athenad", "AthenadPid"),
