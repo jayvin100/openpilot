@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 """
-smolcard — drive a Hiwonder Ackermann chassis directly from the comma4.
+smolcard — replaces card.py and joystickd for the Hiwonder Ackermann chassis.
 
-Subscribes to openpilot's testJoystick messages (same as joystickd) and
-translates them into motor/steering commands over USB serial to the
-Hiwonder STM32 controller board.
+Integrates with openpilot's body teleop system:
+  - Writes CarParams with notCar=True so webrtcd/bodyteleop processes start
+  - Subscribes to testJoystick (from browser via WebRTC)
+  - Publishes carState (battery/telemetry back to browser)
+  - Drives motors/steering over USB serial to the Hiwonder STM32 board
 
-Usage:
-  # enable joystick mode, then run:
-  python3 tools/smolcar/smolcard.py
-
-  # send joystick input from another terminal:
-  python3 tools/joystick/joystick_control.py
+Enable with: echo -n "1" > /data/params/d/SmolcarEnabled
 """
 import time
 
-from cereal import messaging
-from openpilot.common.realtime import DT_CTRL, Ratekeeper
+from cereal import car, messaging
 from openpilot.common.params import Params
+from openpilot.common.realtime import DT_CTRL, Ratekeeper
+from openpilot.common.swaglog import cloudlog
 
 from openpilot.tools.smolcar.board import Board
 
@@ -28,15 +26,57 @@ SERVO_RANGE = 444        # max deflection from center (~40 degrees)
 STEERING_SERVO_ID = 3    # PWM servo channel for steering
 
 
+def write_car_params(params: Params) -> None:
+  """Write CarParams so the manager starts notCar processes (webrtcd, bodyteleop, bridge)."""
+  CP = car.CarParams.new_message()
+  CP.notCar = True
+  CP.carName = "smolcar"
+  CP.carFingerprint = "HIWONDER_ACKERMANN"
+  CP.openpilotLongitudinalControl = True
+  CP.passive = False
+
+  cp_bytes = CP.to_bytes()
+  params.put("CarParams", cp_bytes)
+  params.put_nonblocking("CarParamsCache", cp_bytes)
+  params.put_nonblocking("CarParamsPersistent", cp_bytes)
+
+
+def publish_car_state(pm: messaging.PubMaster, frame: int, battery: float = 0.0) -> None:
+  """Publish carState so webrtcd can send telemetry back to the browser."""
+  cs_msg = messaging.new_message('carState')
+  cs_msg.valid = True
+  CS = cs_msg.carState
+  CS.fuelGauge = battery
+  CS.vEgo = 0.0
+  CS.canValid = True
+  pm.send('carState', cs_msg)
+
+  # also publish controlsState so joystickd doesn't complain if it's running
+  ctrl_msg = messaging.new_message('controlsState')
+  ctrl_msg.valid = True
+  pm.send('controlsState', ctrl_msg)
+
+  # carParams every 50s
+  if frame % int(50. / DT_CTRL) == 0:
+    cp_msg = messaging.new_message('carParams')
+    cp_msg.valid = True
+    pm.send('carParams', cp_msg)
+
+
 def main():
   params = Params()
+
+  # set up params so the bodyteleop stack starts
   params.put_bool("JoystickDebugMode", True)
+  write_car_params(params)
+  cloudlog.info("smolcard: CarParams written (notCar=True)")
 
   board = Board()
-  board.set_buzzer(1900, 0.1, 0.05, 2)  # beep to confirm connection
-  print("smolcard: board connected, waiting for joystick input...")
+  board.set_buzzer(1900, 0.1, 0.05, 2)
+  cloudlog.info("smolcard: board connected on %s", board.port.port)
 
   sm = messaging.SubMaster(['testJoystick'], frequency=1. / DT_CTRL)
+  pm = messaging.PubMaster(['carState', 'controlsState', 'carParams', 'carOutput'])
   rk = Ratekeeper(100, print_delay_threshold=None)
 
   try:
@@ -64,12 +104,20 @@ def main():
       pulse = SERVO_CENTER + int(steer * SERVO_RANGE)
       board.set_steering(pulse, servo_id=STEERING_SERVO_ID)
 
+      # publish carState for webrtc telemetry
+      publish_car_state(pm, sm.frame)
+
+      # publish carOutput
+      co_msg = messaging.new_message('carOutput')
+      co_msg.valid = True
+      pm.send('carOutput', co_msg)
+
       rk.keep_time()
 
   except KeyboardInterrupt:
     pass
   finally:
-    print("smolcard: stopping")
+    cloudlog.info("smolcard: stopping")
     board.close()
 
 

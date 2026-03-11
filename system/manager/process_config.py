@@ -37,6 +37,12 @@ def joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
 def not_joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not params.get_bool("JoystickDebugMode")
 
+def smolcar(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return started and params.get_bool("SmolcarEnabled")
+
+def not_smolcar(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return not params.get_bool("SmolcarEnabled")
+
 def long_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and params.get_bool("LongitudinalManeuverMode")
 
@@ -86,10 +92,11 @@ procs = [
   NativeProcess("_pandad", "selfdrive/pandad", ["./pandad"], always_run, enabled=False),
   PythonProcess("calibrationd", "selfdrive.locationd.calibrationd", only_onroad),
   PythonProcess("torqued", "selfdrive.locationd.torqued", only_onroad),
-  PythonProcess("controlsd", "selfdrive.controls.controlsd", and_(not_joystick, iscar)),
-  PythonProcess("joystickd", "tools.joystick.joystickd", or_(joystick, notcar)),
-  PythonProcess("selfdrived", "selfdrive.selfdrived.selfdrived", only_onroad),
-  PythonProcess("card", "selfdrive.car.card", only_onroad),
+  PythonProcess("controlsd", "selfdrive.controls.controlsd", and_(not_joystick, iscar, not_smolcar)),
+  PythonProcess("joystickd", "tools.joystick.joystickd", and_(or_(joystick, notcar), not_smolcar)),
+  PythonProcess("selfdrived", "selfdrive.selfdrived.selfdrived", and_(only_onroad, not_smolcar)),
+  PythonProcess("card", "selfdrive.car.card", and_(only_onroad, not_smolcar)),
+  PythonProcess("smolcard", "tools.smolcar.smolcard", smolcar),
   PythonProcess("deleter", "system.loggerd.deleter", always_run),
   PythonProcess("dmonitoringd", "selfdrive.monitoring.dmonitoringd", driverview, enabled=(WEBCAM or not PC)),
   PythonProcess("qcomgpsd", "system.qcomgpsd.qcomgpsd", qcomgps, enabled=TICI),
