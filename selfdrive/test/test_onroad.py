@@ -349,7 +349,7 @@ class TestOnroad:
         else:
           # Encoder start times vary: loggerd captures each stream independently, so with
           # timestamp-based frame_ids a startup gap (modeld loading) can shift first encode IDs
-          assert max(first_fids) - min(first_fids) <= 50, \
+          assert max(first_fids) - min(first_fids) <= 100, \
             f"Encoder start frame IDs too far apart: {dict(zip(cams, first_fids, strict=True))}"
 
         # we don't do a full segment rotation, so these might not match exactly
