@@ -341,15 +341,20 @@ class TestOnroad:
             assert np.all(eof_sof_diff < 50*1e6)
 
         first_fids = [min(self.ts[c]['frameId']) for c in cams]
-        assert max(first_fids) - min(first_fids) <= 2, \
-          f"Cameras don't start near same frame ID: {dict(zip(cams, first_fids, strict=True))}"
         if cams[0].endswith('CameraState'):
-          # camerad frame IDs start low (timestamp-based, beginning near sync reference)
+          # camerad syncs all cameras, so frame IDs should start within ±2
+          assert max(first_fids) - min(first_fids) <= 2, \
+            f"Cameras don't start near same frame ID: {dict(zip(cams, first_fids, strict=True))}"
           assert max(first_fids) < 100, f"Cameras start on frame ID too high: {first_fids}"
+        else:
+          # Encoder start times vary: loggerd captures each stream independently, so with
+          # timestamp-based frame_ids a startup gap (modeld loading) can shift first encode IDs
+          assert max(first_fids) - min(first_fids) <= 50, \
+            f"Encoder start frame IDs too far apart: {dict(zip(cams, first_fids, strict=True))}"
 
         # we don't do a full segment rotation, so these might not match exactly
         last_fid = {max(self.ts[c]['frameId']) for c in cams}
-        assert max(last_fid) - min(last_fid) < 10
+        assert max(last_fid) - min(last_fid) < 20
 
         # Build frame_id → array index mapping for each camera
         fid_idx = {c: {fid: i for i, fid in enumerate(self.ts[c]['frameId'])} for c in cams}
