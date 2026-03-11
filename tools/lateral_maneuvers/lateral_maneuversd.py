@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import math
 import numpy as np
 from dataclasses import dataclass
 
@@ -180,10 +179,15 @@ def main():
         alert_msg.alertDebug.alertText1 = f'Set speed to {maneuver.initial_speed * CV.MS_TO_MPH:0.0f} mph'
       else:
         ready_time = max(3. - maneuver._ready_cnt * DT_MDL, 0)
-        roll_deg = math.degrees(roll)
-        alert_msg.alertDebug.alertText1 = 'Go straight'
-        max_roll_deg = math.degrees(MAX_ROLL)
-        alert_msg.alertDebug.alertText2 = f'{ready_time:0.1f}s \ncurv={cur_curvature:.4f}<{MAX_CURV} \nroll={roll_deg:.1f}<{max_roll_deg:.1f}'
+        curv_ok = abs(cur_curvature) < MAX_CURV
+        roll_ok = abs(roll) < MAX_ROLL
+        if curv_ok and roll_ok:
+          alert_msg.alertDebug.alertText1 = f'Starting: {ready_time:.0f}s'
+          alert_msg.alertDebug.alertText2 = maneuver.description
+        else:
+          reason = 'road not straight' if not curv_ok else 'road not flat'
+          alert_msg.alertDebug.alertText1 = f'Waiting: {reason}'
+          alert_msg.alertDebug.alertText2 = maneuver.description
     else:
       alert_msg.alertDebug.alertText1 = 'Maneuvers Finished'
 
