@@ -28,7 +28,7 @@ from websocket import (ABNF, WebSocket, WebSocketException, WebSocketTimeoutExce
                        create_connection)
 
 import cereal.messaging as messaging
-from cereal import log
+from cereal import car, log
 from cereal.services import SERVICE_LIST
 from openpilot.common.api import Api, get_key_pair
 from openpilot.common.utils import CallbackReader, get_upload_stream
@@ -536,6 +536,14 @@ def getSshAuthorizedKeys() -> str:
 @dispatcher.add_method
 def getGithubUsername() -> str:
   return cast(str, Params().get("GithubUsername") or "")
+
+@dispatcher.add_method
+def getNotCar() -> bool:
+  CP = Params().get("CarParams")
+  if CP is not None:
+    return car.CarParams.from_bytes(CP).notCar
+  return False
+
 
 @dispatcher.add_method
 def getSimInfo():
