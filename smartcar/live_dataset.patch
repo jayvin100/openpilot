@@ -1,0 +1,69 @@
+diff --git a/mast3r_slam/dataloader.py b/mast3r_slam/dataloader.py
+index 35e6f9d..0a4db21 100644
+--- a/mast3r_slam/dataloader.py
++++ b/mast3r_slam/dataloader.py
+@@ -1,5 +1,6 @@
+ import pathlib
+ import re
++import time
+ import cv2
+ from natsort import natsorted
+ import numpy as np
+@@ -274,6 +275,47 @@ class RGBFiles(MonocularDataset):
+         self.timestamps = np.arange(0, len(self.rgb_files)).astype(self.dtype) / 30.0
+ 
+ 
++class LiveRGBFiles(MonocularDataset):
++    """Watches a directory for new PNG frames. Blocks until the next frame appears."""
++
++    def __init__(self, dataset_path, fps=10, timeout=60):
++        super().__init__()
++        self.use_calibration = False
++        self.save_results = False
++        self.dataset_path = pathlib.Path(dataset_path)
++        self.fps = fps
++        self.timeout = timeout
++
++    def __len__(self):
++        return 999999
++
++    def subsample(self, subsample):
++        pass
++
++    def get_timestamp(self, idx):
++        return idx / self.fps
++
++    def read_img(self, idx):
++        fname = self.dataset_path / f"{idx:06d}.png"
++        waited = 0.0
++        while not fname.exists():
++            time.sleep(0.05)
++            waited += 0.05
++            if waited > self.timeout:
++                raise StopIteration(f"Timed out waiting for {fname}")
++        # Retry reads — file may still be partially written
++        img = None
++        for _ in range(50):
++            img = cv2.imread(str(fname))
++            if img is not None:
++                break
++            time.sleep(0.05)
++        if img is None:
++            raise StopIteration(f"Failed to read {fname}")
++        self.timestamps.append(idx / self.fps)
++        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
++
++
+ class Intrinsics:
+     def __init__(self, img_size, W, H, K_orig, K, distortion, mapx, mapy):
+         self.img_size = img_size
+@@ -331,6 +373,9 @@ def load_dataset(dataset_path):
+         return RealsenseDataset()
+     if "webcam" in split_dataset_type:
+         return Webcam()
++    if "live:" in dataset_path:
++        live_path = dataset_path.split("live:", 1)[1]
++        return LiveRGBFiles(live_path)
+ 
+     ext = split_dataset_type[-1].split(".")[-1]
+     if ext in ["mp4", "avi", "MOV", "mov"]:
