@@ -148,7 +148,7 @@ class NavWidget(Widget, abc.ABC):
     if self._playing_dismiss_animation:
       new_y = self._rect.height + DISMISS_PUSH_OFFSET
 
-    new_y = round(self._y_pos_filter.update(new_y))
+    new_y = self._y_pos_filter.update(new_y)
     if abs(new_y) < 1 and abs(self._y_pos_filter.velocity.x) < 0.5:
       new_y = self._y_pos_filter.x = 0.0
       self._y_pos_filter.velocity.x = 0.0
@@ -196,7 +196,7 @@ class NavWidget(Widget, abc.ABC):
     else:
       self._nav_bar_y_filter.update(NAV_BAR_MARGIN)
 
-    self._nav_bar.set_position(bar_x, round(self._nav_bar_y_filter.x))
+    self._nav_bar.set_position(bar_x, self._nav_bar_y_filter.x)
     self._nav_bar.render()
 
     return ret
