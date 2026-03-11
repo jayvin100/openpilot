@@ -3,6 +3,7 @@
 Hiwonder STM32 motor controller board driver.
 Serial protocol: 0xAA 0x55 Function Length Data... CRC8
 """
+import fcntl
 import glob
 import struct
 import time
@@ -51,12 +52,31 @@ class Board:
   def __init__(self, device: str | None = None, baudrate: int = 1_000_000):
     if device is None:
       device = _find_device()
-    self.port = serial.Serial(None, baudrate, timeout=1)
+    self.device = device
+    self.baudrate = baudrate
+    self._open()
+
+  def _open(self) -> None:
+    self.port = serial.Serial(None, self.baudrate, timeout=1)
     self.port.rts = False
     self.port.dtr = False
-    self.port.setPort(device)
+    self.port.setPort(self.device)
     self.port.open()
+    # Exclusive lock — prevents a second process from corrupting the serial stream
+    try:
+      fcntl.flock(self.port.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+      self.port.close()
+      raise RuntimeError(f"{self.device} is already locked by another process")
     time.sleep(0.5)
+
+  def reconnect(self) -> None:
+    try:
+      self.port.close()
+    except Exception:
+      pass
+    time.sleep(0.5)
+    self._open()
 
   def _write(self, func: int, data: bytes | list[int]) -> None:
     buf = bytearray([0xAA, 0x55, func, len(data)])

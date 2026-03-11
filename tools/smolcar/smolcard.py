@@ -97,11 +97,19 @@ def main():
       # motors: positive throttle = forward
       # motors 1,2 on one side, 3,4 on the other (reversed)
       speed = -throttle * MAX_SPEED
-      board.set_motor_speed([(1, speed), (2, speed), (3, -speed), (4, -speed)])
+      try:
+        board.set_motor_speed([(1, speed), (2, speed), (3, -speed), (4, -speed)])
+      except Exception as e:
+        cloudlog.error("smolcard: serial write failed, reconnecting: %s", e)
+        board.reconnect()
+        cloudlog.info("smolcard: reconnected to %s", board.port.port)
 
       # steering: negative steer = right, positive = left
       pulse = SERVO_CENTER + int(steer * SERVO_RANGE)
-      board.set_steering(pulse, servo_id=STEERING_SERVO_ID)
+      try:
+        board.set_steering(pulse, servo_id=STEERING_SERVO_ID)
+      except Exception:
+        pass  # already reconnecting on motor write failure
 
       # publish carState for webrtc telemetry
       publish_car_state(pm, sm.frame)

@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstring>
 
 #include "system/loggerd/loggerd.h"
 #include "system/loggerd/encoder/jpeg_encoder.h"
@@ -12,6 +13,31 @@
 #endif
 
 ExitHandler do_exit;
+static bool rotate_180 = false;
+
+// Copy NV12 frame with 180 degree rotation into dst buffer
+static void nv12_rotate_180_copy(const uint8_t *src_y, uint8_t *dst_y,
+                                  const uint8_t *src_uv, uint8_t *dst_uv,
+                                  int stride, int width, int height) {
+  // Y plane: copy rows in reverse, each row mirrored
+  for (int r = 0; r < height; r++) {
+    const uint8_t *src_row = src_y + (height - 1 - r) * stride;
+    uint8_t *dst_row = dst_y + r * stride;
+    for (int c = 0; c < width; c++) {
+      dst_row[c] = src_row[width - 1 - c];
+    }
+  }
+  // UV plane: interleaved pairs, half height
+  int uv_height = height / 2;
+  for (int r = 0; r < uv_height; r++) {
+    const uint8_t *src_row = src_uv + (uv_height - 1 - r) * stride;
+    uint8_t *dst_row = dst_uv + r * stride;
+    for (int c = 0; c < width; c += 2) {
+      dst_row[c]     = src_row[width - 2 - c];
+      dst_row[c + 1] = src_row[width - 1 - c];
+    }
+  }
+}
 
 struct EncoderdState {
   int max_waiting = 0;
@@ -52,6 +78,7 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
   VisionIpcClient vipc_client = VisionIpcClient("camerad", cam_info.stream_type, false);
 
   std::unique_ptr<JpegEncoder> jpeg_encoder;
+  VisionBuf flip_buf;
 
   int cur_seg = 0;
   while (!do_exit) {
@@ -74,6 +101,13 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
       // Only one thumbnail can be generated per camera stream
       if (auto thumbnail_name = cam_info.encoder_infos[0].thumbnail_name) {
         jpeg_encoder = std::make_unique<JpegEncoder>(thumbnail_name, buf_info.width / 4, buf_info.height / 4);
+      }
+
+      // Allocate flip buffer for 180 degree rotation
+      if (rotate_180) {
+        flip_buf.allocate(buf_info.len);
+        flip_buf.init_yuv(buf_info.width, buf_info.height, buf_info.stride, buf_info.uv_offset);
+        LOGW("encoder %s: 180 degree rotation enabled", cam_info.thread_name);
       }
     }
 
@@ -108,9 +142,17 @@ void encoder_thread(EncoderdState *s, const LogCameraInfo &cam_info) {
         ++cur_seg;
       }
 
+      // rotate 180 if enabled (smolcar has upside-down camera)
+      VisionBuf *encode_buf = buf;
+      if (rotate_180 && flip_buf.addr) {
+        nv12_rotate_180_copy(buf->y, flip_buf.y, buf->uv, flip_buf.uv,
+                              buf->stride, buf->width, buf->height);
+        encode_buf = &flip_buf;
+      }
+
       // encode a frame
       for (int i = 0; i < encoders.size(); ++i) {
-        int out_id = encoders[i]->encode_frame(buf, &extra);
+        int out_id = encoders[i]->encode_frame(encode_buf, &extra);
 
         if (out_id == -1) {
           LOGE("Failed to encode frame. frame_id: %d", extra.frame_id);
@@ -162,6 +204,8 @@ int main(int argc, char* argv[]) {
   if (argc > 1) {
     std::string arg1(argv[1]);
     if (arg1 == "--stream") {
+      rotate_180 = Params().getBool("SmolcarEnabled");
+      if (rotate_180) LOGW("stream encoderd: 180 degree rotation enabled (SmolcarEnabled)");
       encoderd_thread(stream_cameras_logged);
     } else {
       LOGE("Argument '%s' is not supported", arg1.c_str());
