@@ -44,6 +44,7 @@ from openpilot.system.hardware.hw import Paths
 ATHENA_HOST = os.getenv('ATHENA_HOST', 'wss://athena.comma.ai')
 HANDLER_THREADS = int(os.getenv('HANDLER_THREADS', "4"))
 LOCAL_PORT_WHITELIST = {22, }  # SSH
+WEBRTCD_PORT = 5001
 
 LOG_ATTR_NAME = 'user.upload'
 LOG_ATTR_VALUE_MAX_UNIX_TIME = int.to_bytes(2147483647, 4, sys.byteorder)
@@ -555,6 +556,17 @@ def getNetworkMetered() -> bool:
 @dispatcher.add_method
 def getNetworks():
   return HARDWARE.get_networks()
+
+
+@dispatcher.add_method
+def startJoystickStream(sdp: str) -> dict:
+  from openpilot.system.webrtc.webrtcd import StreamRequestBody
+  Params().put_bool("JoystickDebugMode", True)
+  body = StreamRequestBody(sdp, ["driver"], ["testJoystick"], ["carState"])
+  resp = requests.post(f"http://localhost:{WEBRTCD_PORT}/stream",
+                       json=asdict(body), timeout=10)
+  resp.raise_for_status()
+  return resp.json()
 
 
 @dispatcher.add_method
