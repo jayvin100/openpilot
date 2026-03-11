@@ -537,11 +537,13 @@ def getSshAuthorizedKeys() -> str:
 def getGithubUsername() -> str:
   return cast(str, Params().get("GithubUsername") or "")
 
+
 @dispatcher.add_method
 def getNotCar() -> bool:
-  CP = Params().get("CarParams")
-  if CP is not None:
-    return car.CarParams.from_bytes(CP).notCar
+  cp_bytes = Params().get("CarParams")
+  if cp_bytes is not None:
+    with car.CarParams.from_bytes(cp_bytes) as CP:
+      return CP.notCar
   return False
 
 
