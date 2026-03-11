@@ -111,7 +111,7 @@ export function start(pc, dc) {
       const hasAudioInput = devices.find((device) => device.kind === "audioinput");
       var modifiedConstraints = {};
       modifiedConstraints.video = constraints.video;
-      modifiedConstraints.audio = hasAudioInput ? constraints.audio : false;
+      modifiedConstraints.audio = false;
 
       return Promise.resolve(modifiedConstraints);
     })

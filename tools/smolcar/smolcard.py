@@ -96,7 +96,7 @@ def main():
 
       # motors: positive throttle = forward
       # motors 1,2 on one side, 3,4 on the other (reversed)
-      speed = throttle * MAX_SPEED
+      speed = -throttle * MAX_SPEED
       board.set_motor_speed([(1, speed), (2, speed), (3, -speed), (4, -speed)])
 
       # steering: negative steer = right, positive = left
