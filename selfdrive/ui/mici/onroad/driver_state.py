@@ -61,7 +61,7 @@ class DriverStateRenderer(Widget):
     self._dm_cone = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_cone.png", cone_and_person_size, cone_and_person_size)
     center_size = round(36 / self.BASE_SIZE * self._rect.width)
     self._dm_center = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_center.png", center_size, center_size)
-    self._dm_background = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_background.png", self._rect.width, self._rect.height)
+    self._dm_background = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_background.png", int(self._rect.width), int(self._rect.height))
 
   def set_should_draw(self, should_draw: bool):
     self._should_draw = should_draw
