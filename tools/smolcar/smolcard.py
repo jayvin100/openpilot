@@ -30,7 +30,6 @@ def write_car_params(params: Params) -> None:
   """Write CarParams so the manager starts notCar processes (webrtcd, bodyteleop, bridge)."""
   CP = car.CarParams.new_message()
   CP.notCar = True
-  CP.carName = "smolcar"
   CP.carFingerprint = "HIWONDER_ACKERMANN"
   CP.openpilotLongitudinalControl = True
   CP.passive = False
