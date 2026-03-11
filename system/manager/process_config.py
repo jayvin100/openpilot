@@ -38,7 +38,8 @@ def not_joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not params.get_bool("JoystickDebugMode")
 
 def smolcar(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return started and params.get_bool("SmolcarEnabled")
+  # no ignition needed — smolcar has no panda/CAN
+  return params.get_bool("SmolcarEnabled")
 
 def not_smolcar(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not params.get_bool("SmolcarEnabled")
@@ -72,10 +73,10 @@ procs = [
 
   NativeProcess("loggerd", "system/loggerd", ["./loggerd"], logging),
   NativeProcess("encoderd", "system/loggerd", ["./encoderd"], only_onroad),
-  NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], notcar),
+  NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], or_(notcar, smolcar)),
   PythonProcess("logmessaged", "system.logmessaged", always_run),
 
-  NativeProcess("camerad", "system/camerad", ["./camerad"], driverview, enabled=not WEBCAM),
+  NativeProcess("camerad", "system/camerad", ["./camerad"], or_(driverview, smolcar), enabled=not WEBCAM),
   PythonProcess("webcamerad", "tools.webcam.camerad", driverview, enabled=WEBCAM),
   PythonProcess("proclogd", "system.proclogd", only_onroad, enabled=platform.system() != "Darwin"),
   PythonProcess("journald", "system.journald", only_onroad, platform.system() != "Darwin"),
@@ -116,9 +117,9 @@ procs = [
   PythonProcess("feedbackd", "selfdrive.ui.feedback.feedbackd", only_onroad),
 
   # debug procs
-  NativeProcess("bridge", "cereal/messaging", ["./bridge"], notcar),
-  PythonProcess("webrtcd", "system.webrtc.webrtcd", notcar),
-  PythonProcess("webjoystick", "tools.bodyteleop.web", notcar),
+  NativeProcess("bridge", "cereal/messaging", ["./bridge"], or_(notcar, smolcar)),
+  PythonProcess("webrtcd", "system.webrtc.webrtcd", or_(notcar, smolcar)),
+  PythonProcess("webjoystick", "tools.bodyteleop.web", or_(notcar, smolcar)),
   PythonProcess("joystick", "tools.joystick.joystick_control", and_(joystick, iscar)),
 ]
 
