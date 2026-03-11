@@ -39,10 +39,16 @@ def not_joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
 
 def smolcar(started: bool, params: Params, CP: car.CarParams) -> bool:
   # no ignition needed — smolcar has no panda/CAN
-  return params.get_bool("SmolcarEnabled")
+  try:
+    return params.get_bool("SmolcarEnabled")
+  except Exception:
+    return False
 
 def not_smolcar(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return not params.get_bool("SmolcarEnabled")
+  try:
+    return not params.get_bool("SmolcarEnabled")
+  except Exception:
+    return True
 
 def long_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and params.get_bool("LongitudinalManeuverMode")
