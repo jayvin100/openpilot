@@ -26,16 +26,18 @@ Camera.RGB: 0
 # IMU Parameters
 #--------------------------------------------------------------------------------------------
 # Transformation from camera to body-frame (IMU)
-# comma4: device/IMU frame x=forward, y=right, z=down
-#          camera frame (after 180° rotation in encoderd): x=left, y=up, z=forward
-# T_b_c maps camera→body: body_x(fwd)=cam_z, body_y(right)=-cam_x, body_z(down)=-cam_y
+# comma4 on smolcar: mounted nearly vertical, upside-down
+# Measured: gravity in +device_x (DOWN), forward accel in -device_z
+# Device/IMU axes in world: x≈DOWN, y≈RIGHT, z≈BACKWARD
+# Camera frame (after 180° rotation): x=right, y=down, z=forward
+# T_b_c: body_x(down)=cam_y, body_y(right)=cam_x, body_z(back)=-cam_z
 IMU.T_b_c1: !!opencv-matrix
    rows: 4
    cols: 4
    dt: f
-   data: [ 0.0, 0.0, 1.0, 0.0,
-          -1.0, 0.0, 0.0, 0.0,
-           0.0,-1.0, 0.0, 0.0,
+   data: [ 0.0, 1.0, 0.0, 0.0,
+           1.0, 0.0, 0.0, 0.0,
+           0.0, 0.0,-1.0, 0.0,
            0.0, 0.0, 0.0, 1.0]
 
 # LSM6DS3 IMU noise parameters
