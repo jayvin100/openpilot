@@ -35,7 +35,6 @@ IMU_PKT_SIZE = 1 + IMU_STRUCT.size  # 'I' + 56 bytes
 
 async def run(args, write_lock):
     pc = RTCPeerConnection()
-    t_last = time.time()
     frame_count = 0
     imu_count = 0
     pipe_broken = False
@@ -75,7 +74,7 @@ async def run(args, write_lock):
             v = msg["data"]["gyroUncalibrated"]["v"]
 
             if last_accel is not None:
-                ts = time.monotonic()
+                ts = time.perf_counter()
                 # Build complete packet, then append atomically under lock
                 pkt = b'I' + IMU_STRUCT.pack(ts, *last_accel, float(v[0]), float(v[1]), float(v[2]))
                 with write_lock:
@@ -87,7 +86,9 @@ async def run(args, write_lock):
                           file=sys.stderr, flush=True)
 
     async def recv_video(track):
-        nonlocal t_last, frame_count, pipe_broken
+        nonlocal frame_count, pipe_broken
+        raw_count = 0
+        skip = max(1, 20 // args.fps)  # 20fps input: skip=2 for 10fps, skip=4 for 5fps
         while not pipe_broken:
             try:
                 frame = await track.recv()
@@ -95,16 +96,14 @@ async def run(args, write_lock):
                 print(f"Track ended: {e}", file=sys.stderr, flush=True)
                 break
 
-            t_now = time.time()
-            dt = t_now - t_last
-            if dt < 1.0 / args.fps:
+            raw_count += 1
+            if raw_count % skip != 0:
                 continue
-            t_last = t_now
 
             img = frame.to_ndarray(format="bgr24")
             h, w = img.shape[:2]
             data = img.tobytes()
-            timestamp = time.monotonic()
+            timestamp = time.perf_counter()
 
             # Flush all pending IMU then write frame — all under lock to prevent
             # partial IMU packets from the data channel thread
@@ -126,7 +125,7 @@ async def run(args, write_lock):
             frame_count += 1
             if frame_count % 10 == 0:
                 imu_per_frame = imu_count / max(frame_count, 1)
-                print(f"[feeder] {frame_count} frames  {w}x{h}  dt={1000*dt:.0f}ms  imu_avg={imu_per_frame:.1f}/frame",
+                print(f"[feeder] {frame_count} frames  {w}x{h}  imu_avg={imu_per_frame:.1f}/frame",
                       file=sys.stderr, flush=True)
 
     pc.addTransceiver("video", direction="recvonly")
@@ -173,7 +172,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", default="192.168.61.62")
     parser.add_argument("--camera", default="wideRoad", choices=["road", "wideRoad", "driver"])
-    parser.add_argument("--fps", type=int, default=5)
+    parser.add_argument("--fps", type=int, default=10)
     args = parser.parse_args()
 
     write_lock = threading.Lock()

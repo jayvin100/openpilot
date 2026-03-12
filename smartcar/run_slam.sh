@@ -2,14 +2,14 @@
 # Run ORB-SLAM3 (mono-inertial) with WebRTC + IMU from comma4
 #
 # Usage:
-#   ./run_slam.sh [comma4_ip] [--fps 5] [--no-viz]
+#   ./run_slam.sh [comma4_ip] [--fps 10] [--no-viz]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ORBSLAM_DIR="$SCRIPT_DIR/ORB_SLAM3"
 COMMA_IP="${1:-192.168.61.62}"
-FPS=5
+FPS=10
 NO_VIZ=""
 
 # Parse args
