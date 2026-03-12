@@ -22,17 +22,18 @@ DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
 
 # Weights older (steadier) velocity samples more heavily on release.
 # Finger-lift samples are noisy; trusting earlier samples gives consistent fling velocity.
-# Reverse-engineered from iOS UIScrollView (tuned at 120Hz touch) by Flutter team:
-# https://github.com/flutter/flutter/pull/60501
-# 3 samples ≈ 25ms at 120Hz. Scale sample count if touch rate changes significantly.
+# Inspired by iOS UIScrollView (3 samples at 120Hz ≈ 25ms, Flutter PR #60501).
+# Extended to 6 samples for 140Hz touch (≈ 43ms) to cover dirty finger-lift noise.
+VELOCITY_WEIGHTS = (0.35, 0.25, 0.2, 0.1, 0.07, 0.03)
+
+
 def weighted_velocity(buffer: deque) -> float:
-  if len(buffer) >= 3:
-    return buffer[-3] * 0.6 + buffer[-2] * 0.35 + buffer[-1] * 0.05
-  elif len(buffer) == 2:
-    return buffer[-2] * 0.7 + buffer[-1] * 0.3
-  elif len(buffer) == 1:
-    return buffer[-1]
-  return 0.0
+  n = min(len(buffer), len(VELOCITY_WEIGHTS))
+  if n == 0:
+    return 0.0
+  weights = VELOCITY_WEIGHTS[-n:]
+  total_weight = sum(weights)
+  return sum(buffer[-(n - i)] * w for i, w in enumerate(weights)) / total_weight
 
 
 # from https://ariya.io/2011/10/flick-list-with-its-momentum-scrolling-and-deceleration
@@ -163,18 +164,19 @@ class GuiScrollPanel2:
 
         # If velocity decelerates very quickly, assume user doesn't intend to auto scroll
         high_decel = False
+        print(self._velocity_buffer)
         if len(self._velocity_buffer) > 2:
           # We limit max to first half since final few velocities can surpass first few
           abs_velocity_buffer = [(abs(v), i) for i, v in enumerate(self._velocity_buffer)]
           max_idx = max(abs_velocity_buffer[:len(abs_velocity_buffer) // 2])[1]
           min_idx = min(abs_velocity_buffer)[1]
-          if DEBUG:
-            print('min_idx:', min_idx, 'max_idx:', max_idx, 'velocity buffer:', self._velocity_buffer)
+          # if DEBUG:
+          #   print('min_idx:', min_idx, 'max_idx:', max_idx, 'velocity buffer:', self._velocity_buffer)
           if (abs(self._velocity_buffer[min_idx]) * REJECT_DECELERATION_FACTOR < abs(self._velocity_buffer[max_idx]) and
               max_idx < min_idx):
             if DEBUG:
               print('deceleration too high, going to STEADY')
-            high_decel = True
+            # high_decel = True
 
         self._velocity = weighted_velocity(self._velocity_buffer)
 

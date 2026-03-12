@@ -169,6 +169,9 @@ class MouseState:
       self._rk.keep_time()
 
   def _handle_mouse_event(self):
+    # TODO: read touch events from evdev directly to get real kernel timestamps
+    # instead of polling. Current time.monotonic() timestamps cause velocity
+    # oscillation due to polling jitter.
     for slot in range(MAX_TOUCH_SLOTS):
       mouse_pos = rl.get_touch_position(slot)
       x = mouse_pos.x / self._scale if self._scale != 1.0 else mouse_pos.x
