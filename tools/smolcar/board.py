@@ -6,6 +6,7 @@ Serial protocol: 0xAA 0x55 Function Length Data... CRC8
 import fcntl
 import glob
 import struct
+import threading
 import time
 
 import serial
@@ -57,7 +58,7 @@ class Board:
     self._open()
 
   def _open(self) -> None:
-    self.port = serial.Serial(None, self.baudrate, timeout=1)
+    self.port = serial.Serial(None, self.baudrate, timeout=0.1, write_timeout=0.1)
     self.port.rts = False
     self.port.dtr = False
     self.port.setPort(self.device)
@@ -69,8 +70,24 @@ class Board:
       self.port.close()
       raise RuntimeError(f"{self.device} is already locked by another process")
     time.sleep(0.5)
+    # Start background thread to continuously drain incoming data from the STM32.
+    # The STM32 sends battery/IMU/key data unsolicited; if nobody reads it, the
+    # USB CDC ACM buffers fill up and the STM32 stalls (stops processing commands).
+    self._drain_running = True
+    self._drain_thread = threading.Thread(target=self._drain_task, daemon=True)
+    self._drain_thread.start()
+
+  def _drain_task(self) -> None:
+    """Continuously read and discard incoming bytes from the STM32."""
+    while self._drain_running:
+      try:
+        # read() with timeout=0.1 blocks briefly then returns whatever is available
+        data = self.port.read(256)
+      except Exception:
+        time.sleep(0.1)
 
   def reconnect(self) -> None:
+    self._drain_running = False
     try:
       self.port.close()
     except Exception:
@@ -83,6 +100,7 @@ class Board:
     buf.extend(data)
     buf.append(_crc8(buf[2:]))
     self.port.write(buf)
+    self.port.flush()
 
   def set_motor_speed(self, speeds: list[tuple[int, float]]) -> None:
     """Set motor speeds. speeds is list of (motor_id, speed) where speed is in pulse/10ms."""
@@ -109,4 +127,5 @@ class Board:
 
   def close(self) -> None:
     self.stop()
+    self._drain_running = False
     self.port.close()

@@ -11,7 +11,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SLAM_DIR="$SCRIPT_DIR/MASt3R-SLAM"
-FRAMES_DIR="/tmp/smolcar_frames"
+FRAMES_DIR="/dev/shm/smolcar_frames"
 COMMA_IP="${1:-192.168.61.62}"
 EXTRA_ARGS="${@:2}"
 
@@ -28,14 +28,14 @@ STREAM_PID=$!
 
 # Wait for some frames to accumulate
 echo "Waiting for frames..."
-while [ $(ls "$FRAMES_DIR"/*.png 2>/dev/null | wc -l) -lt 5 ]; do
+while [ $(ls "$FRAMES_DIR"/*.npy 2>/dev/null | wc -l) -lt 5 ]; do
     sleep 1
 done
 echo "Got initial frames, starting SLAM..."
 
 # Run MASt3R-SLAM in live mode on the frames directory
 cd "$SLAM_DIR"
-python -u main.py --dataset "live:$FRAMES_DIR" --config config/base.yaml $EXTRA_ARGS
+python -u main.py --dataset "live:$FRAMES_DIR" --config config/live.yaml $EXTRA_ARGS
 
 # Cleanup
 kill $STREAM_PID 2>/dev/null

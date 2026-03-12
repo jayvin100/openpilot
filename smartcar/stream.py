@@ -34,11 +34,15 @@ SSH_OPTS = ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeo
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", required=True, help="comma4 IP address")
-    parser.add_argument("--out", default="/tmp/smolcar_frames", help="output directory")
+    parser.add_argument("--out", default="/dev/shm/smolcar_frames", help="output directory (use /dev/shm for RAM)")
     parser.add_argument("--camera", default="wideRoad", choices=list(SOCK_MAP.keys()))
     parser.add_argument("--fps", type=int, default=10, help="target FPS")
     args = parser.parse_args()
 
+    # Clean and recreate output directory
+    if os.path.exists(args.out):
+        for f in os.listdir(args.out):
+            os.remove(os.path.join(args.out, f))
     os.makedirs(args.out, exist_ok=True)
     service = SOCK_MAP[args.camera]
     target = f"comma@{args.ip}"
@@ -119,13 +123,14 @@ def main():
                 break
 
             frame = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 3)
-            fname = os.path.join(args.out, f"{frame_idx:06d}.png")
-            tmpname = os.path.join(args.out, f".tmp_{frame_idx:06d}.png")
-            cv2.imwrite(tmpname, frame)
+            fname = os.path.join(args.out, f"{frame_idx:06d}.npy")
+            tmpname = os.path.join(args.out, f".tmp_{frame_idx:06d}.npy")
+            np.save(tmpname, frame)
             os.rename(tmpname, fname)
+
             frame_idx += 1
 
-            if frame_idx % 30 == 0:
+            if frame_idx % 100 == 0:
                 print(f"  {frame_idx} frames captured", flush=True)
 
     except KeyboardInterrupt:
