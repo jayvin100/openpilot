@@ -33,6 +33,12 @@ IMU_STRUCT = struct.Struct('<7d')
 IMU_PKT_SIZE = 1 + IMU_STRUCT.size  # 'I' + 56 bytes
 
 
+def _write_blob(blob):
+    """Write binary blob to stdout. Runs in thread pool to avoid blocking the event loop."""
+    sys.stdout.buffer.write(blob)
+    sys.stdout.buffer.flush()
+
+
 async def run(args, write_lock):
     pc = RTCPeerConnection()
     frame_count = 0
@@ -45,6 +51,8 @@ async def run(args, write_lock):
     # Buffer for IMU packets — flushed to stdout on every frame
     # IMPORTANT: all access must be under write_lock (data channel callback runs on a different thread)
     imu_buf = bytearray()
+
+    loop = asyncio.get_event_loop()
 
     @pc.on("track")
     def on_track(track):
@@ -90,7 +98,9 @@ async def run(args, write_lock):
     async def recv_video(track):
         nonlocal frame_count, pipe_broken
         raw_count = 0
+        first_frame_time = None
         skip = max(1, 20 // args.fps)  # 20fps input: skip=2 for 10fps, skip=4 for 5fps
+        frame_dt = 1.0 / args.fps
         while not pipe_broken:
             try:
                 frame = await track.recv()
@@ -102,29 +112,44 @@ async def run(args, write_lock):
             if raw_count % skip != 0:
                 continue
 
+            # First frame: record anchor time and discard stale IMU from vocab load
+            if first_frame_time is None:
+                first_frame_time = time.perf_counter()
+                with write_lock:
+                    imu_buf.clear()
+                print(f"[feeder] first frame at t={first_frame_time:.3f}, cleared stale IMU",
+                      file=sys.stderr, flush=True)
+
+            # Compute timestamp from frame count — gives perfect dt spacing.
+            # Without this, pipe backpressure causes frames to bunch up with
+            # ~30ms gaps instead of the expected 100ms at 10fps.
+            timestamp = first_frame_time + frame_count * frame_dt
+
             img = frame.to_ndarray(format="bgr24")
             h, w = img.shape[:2]
             data = img.tobytes()
 
-            # Grab pending IMU under lock (fast), then write everything without the lock
-            # so the data channel thread isn't blocked during the ~30ms 3MB frame write
+            # Grab pending IMU under lock (fast), build the full output blob,
+            # then write it in a thread so we don't block the event loop / GIL
+            # while pushing 3MB through the 64KB pipe buffer.
+            with write_lock:
+                pending_imu = bytes(imu_buf) if imu_buf else b''
+                imu_buf.clear()
+
+            parts = []
+            if pending_imu:
+                parts.append(pending_imu)
+            # Bracketing IMU sample at frame timestamp for preintegration
+            if last_accel is not None and last_gyro is not None:
+                parts.append(b'I' + IMU_STRUCT.pack(timestamp, *last_accel, *last_gyro))
+            parts.append(b'F')
+            parts.append(struct.pack('<d', timestamp))
+            parts.append(struct.pack('<III', w, h, len(data)))
+            parts.append(data)
+            blob = b''.join(parts)
+
             try:
-                with write_lock:
-                    pending_imu = bytes(imu_buf) if imu_buf else b''
-                    imu_buf.clear()
-                # All stdout writes are only from this coroutine, no lock needed
-                if pending_imu:
-                    sys.stdout.buffer.write(pending_imu)
-                # Bracketing IMU sample at frame timestamp for preintegration
-                timestamp = time.perf_counter()
-                if last_accel is not None and last_gyro is not None:
-                    sys.stdout.buffer.write(b'I')
-                    sys.stdout.buffer.write(IMU_STRUCT.pack(timestamp, *last_accel, *last_gyro))
-                sys.stdout.buffer.write(b'F')
-                sys.stdout.buffer.write(struct.pack('<d', timestamp))
-                sys.stdout.buffer.write(struct.pack('<III', w, h, len(data)))
-                sys.stdout.buffer.write(data)
-                sys.stdout.buffer.flush()
+                await loop.run_in_executor(None, _write_blob, blob)
             except BrokenPipeError:
                 print("[feeder] mono_live pipe broken, exiting", file=sys.stderr, flush=True)
                 pipe_broken = True

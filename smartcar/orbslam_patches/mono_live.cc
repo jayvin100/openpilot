@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
     float imageScale = SLAM.GetImageScale();
 
     int frame_idx = 0;
+    double prev_timestamp = -1.0;
     std::vector<ORB_SLAM3::IMU::Point> vImuMeas;
 
     std::cerr << "mono_live: waiting for frames+IMU on stdin (mono-inertial)..." << std::endl;
@@ -123,9 +124,13 @@ int main(int argc, char** argv) {
                 case 4:  state_str = "LOST"; break;
             }
 
+            double frame_dt = (prev_timestamp >= 0) ? (timestamp - prev_timestamp) * 1000.0 : 0.0;
+            prev_timestamp = timestamp;
+
             std::cerr << "[" << frame_idx << "] " << state_str
                       << "  imu=" << n_imu
-                      << "  " << dt_ms << "ms" << std::endl;
+                      << "  proc=" << dt_ms << "ms"
+                      << "  dt=" << frame_dt << "ms" << std::endl;
 
             vImuMeas.clear();
             frame_idx++;
