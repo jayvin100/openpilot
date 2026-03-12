@@ -106,23 +106,25 @@ async def run(args, write_lock):
             h, w = img.shape[:2]
             data = img.tobytes()
 
-            # Flush all pending IMU, add one sample at frame time to bracket it, then write frame
+            # Grab pending IMU under lock (fast), then write everything without the lock
+            # so the data channel thread isn't blocked during the ~30ms 3MB frame write
             try:
                 with write_lock:
-                    if imu_buf:
-                        sys.stdout.buffer.write(bytes(imu_buf))
-                        imu_buf.clear()
-                    # Write one IMU sample at the frame timestamp so ORB-SLAM3's
-                    # preintegration covers the full interval to the frame
-                    timestamp = time.perf_counter()
-                    if last_accel is not None and last_gyro is not None:
-                        sys.stdout.buffer.write(b'I')
-                        sys.stdout.buffer.write(IMU_STRUCT.pack(timestamp, *last_accel, *last_gyro))
-                    sys.stdout.buffer.write(b'F')
-                    sys.stdout.buffer.write(struct.pack('<d', timestamp))
-                    sys.stdout.buffer.write(struct.pack('<III', w, h, len(data)))
-                    sys.stdout.buffer.write(data)
-                    sys.stdout.buffer.flush()
+                    pending_imu = bytes(imu_buf) if imu_buf else b''
+                    imu_buf.clear()
+                # All stdout writes are only from this coroutine, no lock needed
+                if pending_imu:
+                    sys.stdout.buffer.write(pending_imu)
+                # Bracketing IMU sample at frame timestamp for preintegration
+                timestamp = time.perf_counter()
+                if last_accel is not None and last_gyro is not None:
+                    sys.stdout.buffer.write(b'I')
+                    sys.stdout.buffer.write(IMU_STRUCT.pack(timestamp, *last_accel, *last_gyro))
+                sys.stdout.buffer.write(b'F')
+                sys.stdout.buffer.write(struct.pack('<d', timestamp))
+                sys.stdout.buffer.write(struct.pack('<III', w, h, len(data)))
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
             except BrokenPipeError:
                 print("[feeder] mono_live pipe broken, exiting", file=sys.stderr, flush=True)
                 pipe_broken = True
