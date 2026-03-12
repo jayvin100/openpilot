@@ -169,6 +169,7 @@ class GuiScrollPanel2:
         # - Use a time-since-last-event check (40ms timeout) for swipe-stop-lift detection
         # - Increase REJECT_DECELERATION_FACTOR to reduce false positives
         high_decel = False
+        print(self._velocity_buffer)
         if len(self._velocity_buffer) > 2:
           abs_velocity_buffer = [(abs(v), i) for i, v in enumerate(self._velocity_buffer)]
           max_idx = max(abs_velocity_buffer[:len(abs_velocity_buffer) // 2])[1]
@@ -178,6 +179,7 @@ class GuiScrollPanel2:
             high_decel = True
 
         self._velocity = weighted_velocity(self._velocity_buffer)
+        print(f'Weighted velocity: {self._velocity:.0f} px/s')
 
         # If final velocity is below some threshold, switch to steady state too
         low_speed = abs(self._velocity) <= MIN_VELOCITY_FOR_CLICKING * 1.5  # plus some margin
