@@ -184,6 +184,7 @@ class GuiScrollPanel2:
         # - Use evdev kernel timestamps to eliminate velocity oscillation at the source
         # - Use a time-since-last-event check (40ms timeout) for swipe-stop-lift detection
         high_decel = False
+        print(self._velocity_buffer)
         if len(self._velocity_buffer) > 2:
           # We limit max to first half since final few velocities can surpass first few
           abs_velocity_buffer = [(abs(v), i) for i, v in enumerate(self._velocity_buffer)]
