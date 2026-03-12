@@ -164,8 +164,6 @@ class MouseState:
     with self._lock:
       events = list(self._events)
       self._events.clear()
-    if events:
-      print(f"get_events: returning {len(events)} events")
     return events
 
   def start(self):
