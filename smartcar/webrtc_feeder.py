@@ -16,6 +16,7 @@ Usage:
 import argparse
 import asyncio
 import json
+import signal
 import struct
 import sys
 import threading
@@ -24,9 +25,12 @@ import time
 import aiohttp
 from aiortc import RTCPeerConnection, RTCSessionDescription
 
-# Pre-compute IMU message header
-IMU_HEADER = b'I'
+# Ignore SIGPIPE so we get BrokenPipeError instead of dying
+signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+
+# Pre-compute struct for IMU packet (header byte + 7 doubles)
 IMU_STRUCT = struct.Struct('<7d')
+IMU_PKT_SIZE = 1 + IMU_STRUCT.size  # 'I' + 56 bytes
 
 
 async def run(args, write_lock):
@@ -34,10 +38,12 @@ async def run(args, write_lock):
     t_last = time.time()
     frame_count = 0
     imu_count = 0
+    pipe_broken = False
 
     last_accel = None  # (ax, ay, az)
 
-    # Buffer for IMU packets — written to stdout in batches
+    # Buffer for IMU packets — flushed to stdout on every frame
+    # IMPORTANT: all access must be under write_lock (data channel callback runs on a different thread)
     imu_buf = bytearray()
 
     @pc.on("track")
@@ -52,42 +58,37 @@ async def run(args, write_lock):
     def on_dc_message(message):
         nonlocal imu_count, last_accel
         # Fast path: check message type prefix before full JSON parse
-        if b'"accelerometer"' in (message if isinstance(message, bytes) else message.encode()):
+        raw = message if isinstance(message, bytes) else message.encode()
+        if b'"accelerometer"' in raw:
             try:
-                msg = json.loads(message)
+                msg = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
                 return
             v = msg["data"]["acceleration"]["v"]
             last_accel = (float(v[0]), float(v[1]), float(v[2]))
 
-        elif b'"gyroscope"' in (message if isinstance(message, bytes) else message.encode()):
+        elif b'"gyroscope"' in raw:
             try:
-                msg = json.loads(message)
+                msg = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
                 return
             v = msg["data"]["gyroUncalibrated"]["v"]
 
             if last_accel is not None:
                 ts = time.monotonic()
-                imu_buf.extend(IMU_HEADER)
-                imu_buf.extend(IMU_STRUCT.pack(ts, *last_accel, float(v[0]), float(v[1]), float(v[2])))
+                # Build complete packet, then append atomically under lock
+                pkt = b'I' + IMU_STRUCT.pack(ts, *last_accel, float(v[0]), float(v[1]), float(v[2]))
+                with write_lock:
+                    imu_buf.extend(pkt)
 
                 imu_count += 1
-                # Flush every ~10 IMU packets (~100ms worth) instead of every packet
-                if imu_count % 10 == 0:
-                    with write_lock:
-                        sys.stdout.buffer.write(imu_buf)
-                        sys.stdout.buffer.flush()
-                    imu_buf.clear()
-
                 if imu_count % 500 == 0:
                     print(f"[feeder] {imu_count} IMU packets from data channel",
                           file=sys.stderr, flush=True)
-        # else: ignore carState and other messages without parsing
 
     async def recv_video(track):
-        nonlocal t_last, frame_count
-        while True:
+        nonlocal t_last, frame_count, pipe_broken
+        while not pipe_broken:
             try:
                 frame = await track.recv()
             except Exception as e:
@@ -105,20 +106,27 @@ async def run(args, write_lock):
             data = img.tobytes()
             timestamp = time.monotonic()
 
-            # Flush any pending IMU data, then write frame
-            with write_lock:
-                if imu_buf:
-                    sys.stdout.buffer.write(imu_buf)
-                    imu_buf.clear()
-                sys.stdout.buffer.write(b'F')
-                sys.stdout.buffer.write(struct.pack('<d', timestamp))
-                sys.stdout.buffer.write(struct.pack('<III', w, h, len(data)))
-                sys.stdout.buffer.write(data)
-                sys.stdout.buffer.flush()
+            # Flush all pending IMU then write frame — all under lock to prevent
+            # partial IMU packets from the data channel thread
+            try:
+                with write_lock:
+                    if imu_buf:
+                        sys.stdout.buffer.write(bytes(imu_buf))
+                        imu_buf.clear()
+                    sys.stdout.buffer.write(b'F')
+                    sys.stdout.buffer.write(struct.pack('<d', timestamp))
+                    sys.stdout.buffer.write(struct.pack('<III', w, h, len(data)))
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+            except BrokenPipeError:
+                print("[feeder] mono_live pipe broken, exiting", file=sys.stderr, flush=True)
+                pipe_broken = True
+                break
 
             frame_count += 1
             if frame_count % 10 == 0:
-                print(f"[feeder] {frame_count} frames  {w}x{h}  dt={1000*dt:.0f}ms  imu={imu_count}",
+                imu_per_frame = imu_count / max(frame_count, 1)
+                print(f"[feeder] {frame_count} frames  {w}x{h}  dt={1000*dt:.0f}ms  imu_avg={imu_per_frame:.1f}/frame",
                       file=sys.stderr, flush=True)
 
     pc.addTransceiver("video", direction="recvonly")
@@ -151,12 +159,14 @@ async def run(args, write_lock):
     print("WebRTC connected!", file=sys.stderr, flush=True)
 
     try:
-        while True:
+        while not pipe_broken:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
         await pc.close()
+        if pipe_broken:
+            sys.exit(1)
 
 
 def main():

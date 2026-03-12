@@ -85,9 +85,30 @@ int main(int argc, char** argv) {
                 cv::resize(im, im, cv::Size(im.cols * imageScale, im.rows * imageScale));
             }
 
+            // Skip frame if no IMU data — ORB-SLAM3 crashes on empty preintegration
+            size_t n_imu = vImuMeas.size();
+            if (n_imu == 0 && frame_idx > 0) {
+                std::cerr << "[" << frame_idx << "] SKIP  imu=0 (no IMU between frames)" << std::endl;
+                frame_idx++;
+                continue;
+            }
+
             // Track with IMU
             auto t1 = std::chrono::steady_clock::now();
-            SLAM.TrackMonocular(im, timestamp, vImuMeas);
+            try {
+                SLAM.TrackMonocular(im, timestamp, vImuMeas);
+            } catch (const std::exception& e) {
+                std::cerr << "[" << frame_idx << "] EXCEPTION: " << e.what()
+                          << "  imu=" << n_imu << std::endl;
+                vImuMeas.clear();
+                frame_idx++;
+                continue;
+            } catch (...) {
+                std::cerr << "[" << frame_idx << "] UNKNOWN EXCEPTION  imu=" << n_imu << std::endl;
+                vImuMeas.clear();
+                frame_idx++;
+                continue;
+            }
             auto t2 = std::chrono::steady_clock::now();
             double dt_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
 
@@ -103,7 +124,7 @@ int main(int argc, char** argv) {
             }
 
             std::cerr << "[" << frame_idx << "] " << state_str
-                      << "  imu=" << vImuMeas.size()
+                      << "  imu=" << n_imu
                       << "  " << dt_ms << "ms" << std::endl;
 
             vImuMeas.clear();
