@@ -22,7 +22,9 @@ DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
 
 # Weights older (steadier) velocity samples more heavily on release.
 # Finger-lift samples are noisy; trusting earlier samples gives consistent fling velocity.
-# Reverse-engineered from iOS UIScrollView by Flutter team: https://github.com/flutter/flutter/pull/60501
+# Reverse-engineered from iOS UIScrollView (tuned at 120Hz touch) by Flutter team:
+# https://github.com/flutter/flutter/pull/60501
+# 3 samples ≈ 25ms at 120Hz. Scale sample count if touch rate changes significantly.
 def weighted_velocity(buffer: deque) -> float:
   if len(buffer) >= 3:
     return buffer[-3] * 0.6 + buffer[-2] * 0.35 + buffer[-1] * 0.05
