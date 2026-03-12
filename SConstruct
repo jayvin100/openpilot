@@ -41,7 +41,6 @@ assert arch in [
 
 pkg_names = ['bzip2', 'capnproto', 'eigen', 'ffmpeg', 'libjpeg', 'libyuv', 'ncurses', 'zeromq', 'zstd']
 pkgs = [importlib.import_module(name) for name in pkg_names]
-py_include = importlib.import_module('python3_dev').INCLUDE_DIR
 
 env = Environment(
   ENV={
@@ -163,7 +162,7 @@ if os.environ.get('SCONS_PROGRESS'):
 
 # ********** Cython build environment **********
 envCython = env.Clone()
-envCython["CPPPATH"] += [py_include, np.get_include()]
+envCython["CPPPATH"] += [sysconfig.get_paths()['include'], np.get_include()]
 envCython["CCFLAGS"] += ["-Wno-#warnings", "-Wno-cpp", "-Wno-shadow", "-Wno-deprecated-declarations"]
 envCython["CCFLAGS"].remove("-Werror")
 
@@ -196,7 +195,6 @@ Export('common')
 env_swaglog = env.Clone()
 env_swaglog['CXXFLAGS'].append('-DSWAGLOG="\\"common/swaglog.h\\""')
 SConscript(['msgq_repo/SConscript'], exports={'env': env_swaglog})
-SConscript(['opendbc_repo/SConscript'], exports={'env': env_swaglog})
 
 SConscript(['cereal/SConscript'])
 

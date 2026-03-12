@@ -32,7 +32,6 @@ dependencies = [
   "ffmpeg @ git+https://github.com/commaai/dependencies.git@releases#subdirectory=ffmpeg",
   "libjpeg @ git+https://github.com/commaai/dependencies.git@releases#subdirectory=libjpeg",
   "libyuv @ git+https://github.com/commaai/dependencies.git@releases#subdirectory=libyuv",
-  "python3-dev @ git+https://github.com/commaai/dependencies.git@releases#subdirectory=python3-dev",
   "zstd @ git+https://github.com/commaai/dependencies.git@releases#subdirectory=zstd",
   "ncurses @ git+https://github.com/commaai/dependencies.git@releases#subdirectory=ncurses",
   "zeromq @ git+https://github.com/commaai/dependencies.git@releases#subdirectory=zeromq",
@@ -205,6 +204,7 @@ lint.flake8-implicit-str-concat.allow-multiline = false
 "pyray.is_mouse_button_pressed".msg = "This can miss events. Use Widget._handle_mouse_press"
 "pyray.is_mouse_button_released".msg = "This can miss events. Use Widget._handle_mouse_release"
 "pyray.draw_text".msg = "Use a function (such as rl.draw_font_ex) that takes font as an argument"
+"pyray.draw_texture".msg = "Use rl.draw_texture_ex for float position support"
 
 [tool.ruff.format]
 quote-style = "preserve"
@@ -248,3 +248,6 @@ unsupported-operator = "ignore"
 # Ignore not-subscriptable - false positives from dynamic types
 not-subscriptable = "ignore"
 # not-iterable errors are now fixed
+
+[tool.uv]
+python-preference = "only-managed"
