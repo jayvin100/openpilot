@@ -40,6 +40,7 @@ class GuiScrollPanel2:
     self._velocity = 0.0  # pixels per second
     self._velocity_buffer: deque[float] = deque(maxlen=12 if TICI else 6)
     self._enabled: bool | Callable[[], bool] = True
+    self._debug_filtered_velocity = 0.0
 
   def set_enabled(self, enabled: bool | Callable[[], bool]) -> None:
     self._enabled = enabled
@@ -49,9 +50,6 @@ class GuiScrollPanel2:
     return self._enabled() if callable(self._enabled) else self._enabled
 
   def update(self, bounds: rl.Rectangle, content_size: float) -> float:
-    if DEBUG:
-      print('Old state:', self._state)
-
     bounds_size = bounds.width if self._horizontal else bounds.height
 
     for mouse_event in gui_app.mouse_events:
@@ -60,11 +58,11 @@ class GuiScrollPanel2:
 
     self._update_state(bounds_size, content_size)
 
-    if DEBUG:
-      print('Velocity:', self._velocity)
-      print('Offset X:', self._offset.x, 'Y:', self._offset.y)
-      print('New state:', self._state)
-      print()
+    dt = rl.get_frame_time() or 1 / 60
+    alpha = dt / (0.1 + dt)
+    self._debug_filtered_velocity += alpha * (self._velocity - self._debug_filtered_velocity)
+    if DEBUG and self._state != ScrollState.STEADY:
+      print(f'Filtered velocity (0.1s RC): {self._debug_filtered_velocity:.0f} px/s')
     return self.get_offset()
 
   def _get_offset_bounds(self, bounds_size: float, content_size: float) -> tuple[float, float]:
@@ -114,9 +112,6 @@ class GuiScrollPanel2:
     max_offset, min_offset = self._get_offset_bounds(bounds_size, content_size)
     # simple exponential return if out of bounds
     out_of_bounds = self.get_offset() > max_offset or self.get_offset() < min_offset
-    if DEBUG:
-      print('Mouse event:', mouse_event)
-
     mouse_pos = self._get_mouse_pos(mouse_event)
 
     if not self.enabled:
