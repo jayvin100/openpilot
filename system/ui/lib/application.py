@@ -466,10 +466,12 @@ class GuiApplication:
         rl.unload_image(probe)
       image_obj = self._load_image_from_path(fspath.as_posix(), load_w, load_h, alpha_premultiply, keep_aspect_ratio, flip_x)
       texture_obj = self._load_texture_from_image(image_obj)
+
     # Set logical size so widget layout math stays at 1x coordinates
     if self._scale != 1.0 and width is not None and height is not None:
       texture_obj.width = width
       texture_obj.height = height
+
     self._textures[cache_key] = texture_obj
     return texture_obj
 
@@ -480,6 +482,11 @@ class GuiApplication:
 
     if alpha_premultiply:
       rl.image_alpha_premultiply(image)
+
+    # Scale up load size for sharper rendering, capped at source resolution
+    if self._scale != 1.0 and width is not None and height is not None:
+      width = min(int(width * self._scale), image.width)
+      height = min(int(height * self._scale), image.height)
 
     if width is not None and height is not None:
       same_dimensions = image.width == width and image.height == height
@@ -703,8 +710,7 @@ class GuiApplication:
     rl.draw_text_ex = _draw_text_ex_scaled
 
   def _patch_scissor_mode(self):
-    scale = self._scale
-    if scale == 1.0:
+    if self._scale == 1.0:
       return
 
     if not hasattr(rl, "_orig_begin_scissor_mode"):
@@ -712,8 +718,8 @@ class GuiApplication:
 
     def _begin_scissor_mode_scaled(x, y, width, height):
       return rl._orig_begin_scissor_mode(
-        int(x * scale), int(y * scale),
-        int(math.ceil(width * scale)), int(math.ceil(height * scale)))
+        int(x * self._scale), int(y * self._scale),
+        int(math.ceil(width * self._scale)), int(math.ceil(height * self._scale)))
 
     rl.begin_scissor_mode = _begin_scissor_mode_scaled
 
