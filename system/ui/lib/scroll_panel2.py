@@ -76,6 +76,9 @@ class GuiScrollPanel2:
     return self._enabled() if callable(self._enabled) else self._enabled
 
   def update(self, bounds: rl.Rectangle, content_size: float) -> float:
+    if DEBUG:
+      print('Old state:', self._state)
+
     bounds_size = bounds.width if self._horizontal else bounds.height
 
     for mouse_event in gui_app.mouse_events:
@@ -83,6 +86,12 @@ class GuiScrollPanel2:
       self._previous_mouse_event = mouse_event
 
     self._update_state(bounds_size, content_size)
+
+    if DEBUG:
+      print('Velocity:', self._velocity)
+      print('Offset X:', self._offset.x, 'Y:', self._offset.y)
+      print('New state:', self._state)
+      print()
     return self.get_offset()
 
   def _get_offset_bounds(self, bounds_size: float, content_size: float) -> tuple[float, float]:
@@ -132,6 +141,9 @@ class GuiScrollPanel2:
     max_offset, min_offset = self._get_offset_bounds(bounds_size, content_size)
     # simple exponential return if out of bounds
     out_of_bounds = self.get_offset() > max_offset or self.get_offset() < min_offset
+    if DEBUG:
+      print('Mouse event:', mouse_event)
+
     mouse_pos = self._get_mouse_pos(mouse_event)
 
     if not self.enabled:
@@ -163,19 +175,26 @@ class GuiScrollPanel2:
 
     elif self._state == ScrollState.MANUAL_SCROLL:
       if mouse_event.left_released:
+        # Touch rejection: when releasing finger after swiping and stopping, panel
+        # reports a few erroneous touch events with high velocity, try to ignore.
+
+        # If velocity decelerates very quickly, assume user doesn't intend to auto scroll
         # TODO: this heuristic false-positives on fast swipes because 140Hz touch
         # velocity oscillates (not real deceleration). Better approaches:
         # - Use evdev kernel timestamps to eliminate velocity oscillation at the source
         # - Use a time-since-last-event check (40ms timeout) for swipe-stop-lift detection
-        # - Increase REJECT_DECELERATION_FACTOR to reduce false positives
         high_decel = False
-        print(self._velocity_buffer)
         if len(self._velocity_buffer) > 2:
+          # We limit max to first half since final few velocities can surpass first few
           abs_velocity_buffer = [(abs(v), i) for i, v in enumerate(self._velocity_buffer)]
           max_idx = max(abs_velocity_buffer[:len(abs_velocity_buffer) // 2])[1]
           min_idx = min(abs_velocity_buffer)[1]
+          if DEBUG:
+            print('min_idx:', min_idx, 'max_idx:', max_idx, 'velocity buffer:', self._velocity_buffer)
           if (abs(self._velocity_buffer[min_idx]) * REJECT_DECELERATION_FACTOR < abs(self._velocity_buffer[max_idx]) and
               max_idx < min_idx):
+            if DEBUG:
+              print('deceleration too high, going to STEADY')
             high_decel = True
 
         self._velocity = weighted_velocity(self._velocity_buffer)
