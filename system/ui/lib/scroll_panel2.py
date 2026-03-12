@@ -26,7 +26,9 @@ DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
 # https://github.com/flutter/flutter/pull/60501
 # 3 samples ≈ 25ms at 120Hz (iOS) / ~21ms at 140Hz (comma). Scale if touch rate changes.
 def weighted_velocity(buffer: deque) -> float:
-  if len(buffer) >= 3:
+  if len(buffer) >= 4:
+    return buffer[-4] * 0.45 + buffer[-3] * 0.3 + buffer[-2] * 0.2 + buffer[-1] * 0.05
+  elif len(buffer) == 3:
     return buffer[-3] * 0.6 + buffer[-2] * 0.35 + buffer[-1] * 0.05
   elif len(buffer) == 2:
     return buffer[-2] * 0.7 + buffer[-1] * 0.3

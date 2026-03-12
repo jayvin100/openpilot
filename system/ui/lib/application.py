@@ -140,8 +140,6 @@ class MouseEvent(NamedTuple):
 EVDEV_TOUCH_PATH = "/dev/input/by-path/platform-894000.i2c-event"
 EVDEV_EVENT_FORMAT = "llHHi"  # sec, usec, type, code, value
 EVDEV_EVENT_SIZE = struct.calcsize(EVDEV_EVENT_FORMAT)
-SCREEN_WIDTH = 2160
-
 # MT protocol event codes
 EV_ABS = 3
 EV_SYN = 0
@@ -166,6 +164,8 @@ class MouseState:
     with self._lock:
       events = list(self._events)
       self._events.clear()
+    if events:
+      print(f"get_events: returning {len(events)} events")
     return events
 
   def start(self):
@@ -182,8 +182,8 @@ class MouseState:
   def _run_thread(self):
     try:
       self._run_evdev()
-    except FileNotFoundError:
-      cloudlog.warning("evdev touch device not found, falling back to raylib polling")
+    except (FileNotFoundError, PermissionError) as e:
+      cloudlog.warning(f"evdev touch device unavailable ({e}), falling back to raylib polling")
       self._run_raylib_poll()
 
   def _run_raylib_poll(self):
@@ -215,7 +215,10 @@ class MouseState:
         if not ready:
           continue
 
-        data = f.read(4096)
+        try:
+          data = f.read(4096)
+        except BlockingIOError:
+          continue
         if not data:
           continue
 
@@ -236,12 +239,12 @@ class MouseState:
                 slot_down[current_slot] = True
               slot_changed[current_slot] = True
             elif code == ABS_MT_POSITION_X:
-              # Touch X -> screen Y
+              # Touch panel X -> screen Y
               slot_y[current_slot] = float(value)
               slot_changed[current_slot] = True
             elif code == ABS_MT_POSITION_Y:
-              # Touch Y -> screen X (inverted)
-              slot_x[current_slot] = float(SCREEN_WIDTH - value)
+              # Touch panel Y -> screen X (inverted)
+              slot_x[current_slot] = float(gui_app._scaled_width - value)
               slot_changed[current_slot] = True
 
           elif etype == EV_SYN and code == 0:
@@ -252,8 +255,8 @@ class MouseState:
               if not slot_changed[s]:
                 continue
 
-              x = slot_x[s] / self._scale if self._scale != 1.0 else slot_x[s]
-              y = slot_y[s] / self._scale if self._scale != 1.0 else slot_y[s]
+              x = slot_x[s]
+              y = slot_y[s]
 
               ev = MouseEvent(
                 MousePos(x, y),
