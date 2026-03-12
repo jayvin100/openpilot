@@ -20,20 +20,31 @@ MAX_SPEED = 10000.0  # px/s
 DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
 
 
-# Weights older (steadier) velocity samples more heavily on release.
-# Finger-lift samples are noisy; trusting earlier samples gives consistent fling velocity.
-# Inspired by iOS UIScrollView (3 samples at 120Hz ≈ 25ms, Flutter PR #60501).
-# Extended to 6 samples for 140Hz touch (≈ 43ms) to cover dirty finger-lift noise.
-VELOCITY_WEIGHTS = (0.35, 0.25, 0.2, 0.1, 0.07, 0.03)
-
-
+# Velocity estimation on release:
+# 1. Average adjacent pairs to cancel 140Hz polling jitter (H/L oscillation)
+# 2. Apply iOS-style weighted average (older = heavier) on the pairs
+# Inspired by iOS UIScrollView, reverse-engineered by Flutter team:
+# https://github.com/flutter/flutter/pull/60501
 def weighted_velocity(buffer: deque) -> float:
-  n = min(len(buffer), len(VELOCITY_WEIGHTS))
-  if n == 0:
+  if len(buffer) == 0:
     return 0.0
-  weights = VELOCITY_WEIGHTS[-n:]
-  total_weight = sum(weights)
-  return sum(buffer[-(n - i)] * w for i, w in enumerate(weights)) / total_weight
+
+  # Average adjacent pairs to cancel oscillation from polling jitter
+  samples = list(buffer)
+  pairs = []
+  i = 0
+  while i < len(samples) - 1:
+    pairs.append((samples[i] + samples[i + 1]) / 2)
+    i += 2
+  if i < len(samples):
+    pairs.append(samples[i])
+
+  # iOS-style weighting: oldest 60%, middle 35%, newest 5%
+  if len(pairs) >= 3:
+    return pairs[-3] * 0.6 + pairs[-2] * 0.35 + pairs[-1] * 0.05
+  elif len(pairs) == 2:
+    return pairs[-2] * 0.7 + pairs[-1] * 0.3
+  return pairs[-1]
 
 
 # from https://ariya.io/2011/10/flick-list-with-its-momentum-scrolling-and-deceleration
@@ -152,23 +163,18 @@ class GuiScrollPanel2:
 
     elif self._state == ScrollState.MANUAL_SCROLL:
       if mouse_event.left_released:
-        # Touch rejection: when releasing finger after swiping and stopping, panel
-        # reports a few erroneous touch events with high velocity, try to ignore.
-
-        # If velocity decelerates very quickly, assume user doesn't intend to auto scroll
+        # TODO: this heuristic false-positives on fast swipes because 140Hz touch
+        # velocity oscillates (not real deceleration). Better approaches:
+        # - Use evdev kernel timestamps to eliminate velocity oscillation at the source
+        # - Use a time-since-last-event check (40ms timeout) for swipe-stop-lift detection
+        # - Increase REJECT_DECELERATION_FACTOR to reduce false positives
         high_decel = False
-        print(self._velocity_buffer)
         if len(self._velocity_buffer) > 2:
-          # We limit max to first half since final few velocities can surpass first few
           abs_velocity_buffer = [(abs(v), i) for i, v in enumerate(self._velocity_buffer)]
           max_idx = max(abs_velocity_buffer[:len(abs_velocity_buffer) // 2])[1]
           min_idx = min(abs_velocity_buffer)[1]
-          # if DEBUG:
-          #   print('min_idx:', min_idx, 'max_idx:', max_idx, 'velocity buffer:', self._velocity_buffer)
           if (abs(self._velocity_buffer[min_idx]) * REJECT_DECELERATION_FACTOR < abs(self._velocity_buffer[max_idx]) and
               max_idx < min_idx):
-            if DEBUG:
-              print('deceleration too high, going to STEADY')
             high_decel = True
 
         self._velocity = weighted_velocity(self._velocity_buffer)
