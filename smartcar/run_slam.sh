@@ -1,43 +1,44 @@
 #!/bin/bash
-# Run MASt3R-SLAM on live frames from the comma4
+# Run MASt3R-SLAM with integrated WebRTC streaming from comma4
 #
 # Usage:
-#   ./run_slam.sh <comma4_ip> [--no-viz]
-#
-# This starts the frame streamer in the background, waits for enough frames,
-# then launches MASt3R-SLAM on the captured frames.
+#   ./run_slam.sh [comma4_ip] [--fps 5] [--no-viz]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SLAM_DIR="$SCRIPT_DIR/MASt3R-SLAM"
-FRAMES_DIR="/dev/shm/smolcar_frames"
 COMMA_IP="${1:-192.168.61.62}"
-EXTRA_ARGS="${@:2}"
+FPS=5
+
+# Parse args
+shift 2>/dev/null || true
+EXTRA_ARGS=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --fps) FPS="$2"; shift 2 ;;
+        *) EXTRA_ARGS="$EXTRA_ARGS $1"; shift ;;
+    esac
+done
+
+# Kill any old SLAM / streaming processes
+echo "=== Cleaning up old processes ==="
+pkill -f 'webrtc_stream.py' 2>/dev/null || true
+pkill -f 'MASt3R-SLAM/main.py' 2>/dev/null || true
+# Kill other instances of this script (but not ourselves)
+pkill -f 'run_slam.sh' --signal KILL --older-than 1s 2>/dev/null || true
+sleep 1
+
+# Kill leftover GPU processes (not tritonserver)
+for pid in $(nvidia-smi --query-compute-apps=pid,name --format=csv,noheader 2>/dev/null | grep -v tritonserver | awk -F',' '{print $1}'); do
+    echo "Killing stale GPU process $pid"
+    kill -9 "$pid" 2>/dev/null || true
+done
+sleep 1
 
 # Activate venv
 source "$SLAM_DIR/.venv/bin/activate"
 
-# Clean old frames
-rm -rf "$FRAMES_DIR"
-mkdir -p "$FRAMES_DIR"
-
-echo "=== Starting frame capture from comma4 at $COMMA_IP ==="
-python -u "$SCRIPT_DIR/stream.py" --ip "$COMMA_IP" --out "$FRAMES_DIR" --fps 10 &
-STREAM_PID=$!
-
-# Wait for some frames to accumulate
-echo "Waiting for frames..."
-while [ $(ls "$FRAMES_DIR"/*.npy 2>/dev/null | wc -l) -lt 5 ]; do
-    sleep 1
-done
-echo "Got initial frames, starting SLAM..."
-
-# Run MASt3R-SLAM in live mode on the frames directory
+echo "=== Starting SLAM with WebRTC from $COMMA_IP (${FPS}fps) ==="
 cd "$SLAM_DIR"
-python -u main.py --dataset "live:$FRAMES_DIR" --config config/live.yaml $EXTRA_ARGS
-
-# Cleanup
-kill $STREAM_PID 2>/dev/null
-wait $STREAM_PID 2>/dev/null
-echo "Done."
+exec python -u main.py --dataset "webrtc:${COMMA_IP}:wideRoad:${FPS}" --config config/live.yaml $EXTRA_ARGS

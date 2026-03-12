@@ -80,11 +80,6 @@ def main():
   rk = Ratekeeper(100, print_delay_threshold=None)
 
   SERIAL_RATE = 5  # send serial commands every N loops (100Hz / 5 = 20Hz)
-  # Reconnect every 10s to prevent silent USB CDC stalls.
-  # The kernel CDC ACM driver buffers writes and returns success even when
-  # the STM32 stops consuming data, so writes never throw — we must
-  # proactively cycle the connection.
-  RECONNECT_EVERY = 1000  # loops (~10s at 100Hz)
 
   try:
     while True:
@@ -101,15 +96,6 @@ def main():
         axes = sm['testJoystick'].axes
         throttle = max(-1.0, min(1.0, axes[0]))
         steer = max(-1.0, min(1.0, axes[1]))
-
-      # Proactive reconnect: stop motors first, then cycle the serial port
-      if sm.frame > 0 and sm.frame % RECONNECT_EVERY == 0:
-        try:
-          board.stop()  # zero motors + center steering before disconnect
-          board.reconnect()
-          cloudlog.info("smolcard: proactive reconnect to %s", board.port.port)
-        except Exception as e:
-          cloudlog.error("smolcard: proactive reconnect failed: %s", e)
 
       # throttle serial commands to 20Hz to avoid overwhelming the STM32
       if sm.frame % SERIAL_RATE == 0:
