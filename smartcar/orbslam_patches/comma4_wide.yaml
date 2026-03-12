@@ -1,0 +1,69 @@
+%YAML:1.0
+
+File.version: "1.0"
+
+#--------------------------------------------------------------------------------------------
+# Camera Parameters (comma4 wide road camera — pinhole approximation)
+#--------------------------------------------------------------------------------------------
+Camera.type: "PinHole"
+
+Camera1.fx: 425.25
+Camera1.fy: 425.25
+Camera1.cx: 672.0
+Camera1.cy: 380.0
+
+Camera1.k1: 0.0
+Camera1.k2: 0.0
+Camera1.p1: 0.0
+Camera1.p2: 0.0
+
+Camera.width: 1344
+Camera.height: 760
+Camera.fps: 5
+Camera.RGB: 0
+
+#--------------------------------------------------------------------------------------------
+# IMU Parameters
+#--------------------------------------------------------------------------------------------
+# Transformation from camera to body-frame (IMU)
+# comma4: device/IMU frame x=forward, y=right, z=down
+#          camera frame (after 180° rotation in encoderd): x=left, y=up, z=forward
+# T_b_c maps camera→body: body_x(fwd)=cam_z, body_y(right)=-cam_x, body_z(down)=-cam_y
+IMU.T_b_c1: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [ 0.0, 0.0, 1.0, 0.0,
+          -1.0, 0.0, 0.0, 0.0,
+           0.0,-1.0, 0.0, 0.0,
+           0.0, 0.0, 0.0, 1.0]
+
+# LSM6DS3 IMU noise parameters
+IMU.NoiseGyro: 1.0e-3
+IMU.NoiseAcc: 1.0e-2
+IMU.GyroWalk: 1.0e-4
+IMU.AccWalk: 1.0e-3
+IMU.Frequency: 104.0
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+ORBextractor.nFeatures: 2000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -3.5
+Viewer.ViewpointF: 500.0
