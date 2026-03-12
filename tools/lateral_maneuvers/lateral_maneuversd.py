@@ -11,8 +11,8 @@ from openpilot.selfdrive.controls.lib.drive_helpers import MIN_SPEED
 
 # thresholds for starting maneuvers
 MAX_SPEED_DEV = 1.0 # deviation in m/s
-MAX_CURV = 0.0005 # 2 km radius
-MAX_ROLL = 0.03 # 1.71°
+MAX_CURV = 0.002 # 500 m radius
+MAX_ROLL = 0.06 # 3.42°
 
 @dataclass
 class Action:
@@ -95,40 +95,40 @@ def _sine_action(amplitude, period, duration):
 
 MANEUVERS = [
   Maneuver(
-    "step right 50mph",
+    "step right 20mph",
     [Action([0.5], [1.0]), Action([-0.5], [1.5])],
     repeat=2,
-    initial_speed=50. * CV.MPH_TO_MS,
+    initial_speed=20. * CV.MPH_TO_MS,
   ),
   Maneuver(
-    "step left 50mph",
+    "step left 20mph",
     [Action([-0.5], [1.0]), Action([0.5], [1.5])],
     repeat=2,
-    initial_speed=50. * CV.MPH_TO_MS,
+    initial_speed=20. * CV.MPH_TO_MS,
   ),
   Maneuver(
-    "sine 0.5Hz 50mph",
+    "sine 0.5Hz 20mph",
     [_sine_action(1.0, 2.0, 2.0), Action([0.0], [0.5])],
     repeat=2,
-    initial_speed=50. * CV.MPH_TO_MS,
+    initial_speed=20. * CV.MPH_TO_MS,
   ),
   Maneuver(
-    "step right 70mph",
+    "step right 30mph",
     [Action([0.5], [1.0]), Action([-0.5], [1.5])],
     repeat=2,
-    initial_speed=70. * CV.MPH_TO_MS,
+    initial_speed=30. * CV.MPH_TO_MS,
   ),
   Maneuver(
-    "step left 70mph",
+    "step left 30mph",
     [Action([-0.5], [1.0]), Action([0.5], [1.5])],
     repeat=2,
-    initial_speed=70. * CV.MPH_TO_MS,
+    initial_speed=30. * CV.MPH_TO_MS,
   ),
   Maneuver(
-    "sine 0.5Hz 70mph",
+    "sine 0.5Hz 30mph",
     [_sine_action(1.0, 2.0, 2.0), Action([0.0], [0.5])],
     repeat=2,
-    initial_speed=70. * CV.MPH_TO_MS,
+    initial_speed=30. * CV.MPH_TO_MS,
   ),
 ]
 
