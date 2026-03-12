@@ -80,6 +80,8 @@ def main():
   rk = Ratekeeper(100, print_delay_threshold=None)
 
   SERIAL_RATE = 5  # send serial commands every N loops (100Hz / 5 = 20Hz)
+  serial_errors = 0
+  MAX_SERIAL_ERRORS = 10  # only reconnect after this many consecutive failures
 
   try:
     while True:
@@ -104,20 +106,24 @@ def main():
         speed = -throttle * MAX_SPEED
         try:
           board.set_motor_speed([(1, speed), (2, speed), (3, -speed), (4, -speed)])
+          serial_errors = 0
         except Exception as e:
-          cloudlog.error("smolcard: serial write failed, reconnecting: %s", e)
-          try:
-            board.reconnect()
-            cloudlog.info("smolcard: reconnected to %s", board.port.port)
-          except Exception as e2:
-            cloudlog.error("smolcard: reconnect failed: %s", e2)
+          serial_errors += 1
+          if serial_errors >= MAX_SERIAL_ERRORS:
+            cloudlog.error("smolcard: %d serial errors, reconnecting: %s", serial_errors, e)
+            try:
+              board.reconnect()
+              serial_errors = 0
+              cloudlog.info("smolcard: reconnected to %s", board.port.port)
+            except Exception as e2:
+              cloudlog.error("smolcard: reconnect failed: %s", e2)
 
         # steering: negative steer = right, positive = left
         pulse = SERVO_CENTER + int(steer * SERVO_RANGE)
         try:
           board.set_steering(pulse, servo_id=STEERING_SERVO_ID)
         except Exception:
-          pass  # already reconnecting on motor write failure
+          pass  # motor write handles reconnection
 
       # publish carState for webrtc telemetry
       publish_car_state(pm, sm.frame, battery_voltage=board.get_battery_voltage())

@@ -61,7 +61,7 @@ class Board:
     self._open()
 
   def _open(self) -> None:
-    self.port = serial.Serial(None, self.baudrate, timeout=0.1, write_timeout=0.1)
+    self.port = serial.Serial(None, self.baudrate, timeout=0.5, write_timeout=0.5)
     self.port.rts = False
     self.port.dtr = False
     self.port.setPort(self.device)
