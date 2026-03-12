@@ -16,6 +16,8 @@ except ImportError:
 
 W = TypeVar('W', bound='Widget')
 
+PRESS_DRAG_THRESHOLD = 20  # px, cancel press if touch moves this far from initial press
+
 DEBUG = False
 
 
@@ -37,6 +39,7 @@ class Widget(abc.ABC):
     self.__is_pressed = [False] * MAX_TOUCH_SLOTS
     # if current mouse/touch down started within the widget's rectangle
     self.__tracking_is_pressed = [False] * MAX_TOUCH_SLOTS
+    self.__press_start_pos: list[MousePos | None] = [None] * MAX_TOUCH_SLOTS
     self._touch_valid_callback: Callable[[], bool] | None = None
     self._click_delay: float | None = None  # seconds to hold is_pressed after release
     self._click_release_time: float | None = None
@@ -153,6 +156,7 @@ class Widget(abc.ABC):
           self._handle_mouse_press(mouse_event.pos)
           self.__is_pressed[mouse_event.slot] = True
           self.__tracking_is_pressed[mouse_event.slot] = True
+          self.__press_start_pos[mouse_event.slot] = mouse_event.pos
           self._handle_mouse_event(mouse_event)
 
       # Callback such as scroll panel signifies user is scrolling
@@ -167,10 +171,19 @@ class Widget(abc.ABC):
         self.__is_pressed[mouse_event.slot] = False
         self.__tracking_is_pressed[mouse_event.slot] = False
 
-      # Mouse/touch is still within our rect
-      elif mouse_in_rect:
-        if self.__tracking_is_pressed[mouse_event.slot]:
+      # Cancel press if touch moved too far from initial press (not a tap)
+      elif self.__tracking_is_pressed[mouse_event.slot] and self.__press_start_pos[mouse_event.slot]:
+        start = self.__press_start_pos[mouse_event.slot]
+        dx = mouse_event.pos.x - start.x
+        dy = mouse_event.pos.y - start.y
+        if dx * dx + dy * dy > PRESS_DRAG_THRESHOLD ** 2:
+          self.__is_pressed[mouse_event.slot] = False
+          self.__tracking_is_pressed[mouse_event.slot] = False
+        elif mouse_in_rect:
           self.__is_pressed[mouse_event.slot] = True
+          self._handle_mouse_event(mouse_event)
+        else:
+          self.__is_pressed[mouse_event.slot] = False
           self._handle_mouse_event(mouse_event)
 
       # Mouse/touch left our rect but may come back into focus later
