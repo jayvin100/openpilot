@@ -77,7 +77,7 @@ class GuiScrollPanel2:
     alpha = dt / (0.1 + dt)
     self._debug_filtered_velocity += alpha * (self._velocity - self._debug_filtered_velocity)
     if DEBUG and self._state != ScrollState.STEADY:
-      print(f'Filtered velocity (0.1s RC): {self._debug_filtered_velocity:.0f} px/s')
+      print(f'Velocity: {self._velocity:.0f}  Filtered (0.1s RC): {self._debug_filtered_velocity:.0f} px/s')
     return self.get_offset()
 
   def _get_offset_bounds(self, bounds_size: float, content_size: float) -> tuple[float, float]:
