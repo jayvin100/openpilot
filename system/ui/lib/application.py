@@ -216,6 +216,8 @@ class GuiApplication:
     self._ffmpeg_thread: threading.Thread | None = None
     self._ffmpeg_stop_event: threading.Event | None = None
     self._textures: dict[str, rl.Texture] = {}
+    self._texture_load_time: float = 0.0
+    self._texture_load_count: int = 0
     self._target_fps: int = _DEFAULT_FPS
     self._last_fps_log_time: float = time.monotonic()
     self._frame = 0
@@ -262,6 +264,9 @@ class GuiApplication:
 
   def init_window(self, title: str, fps: int = _DEFAULT_FPS):
     with self._startup_profile_context():
+      _t = time.monotonic
+      _t0 = _t()
+
       def _close(sig, frame):
         self.close()
         sys.exit(0)
@@ -273,14 +278,18 @@ class GuiApplication:
         flags |= rl.ConfigFlags.FLAG_VSYNC_HINT
       rl.set_config_flags(flags)
 
+      _ts = _t()
       rl.init_window(self._scaled_width, self._scaled_height, title)
+      print(f"STARTUP: rl.init_window        {(_t()-_ts)*1000:7.1f}ms")
 
       needs_render_texture = self._scale != 1.0 or BURN_IN_MODE or RECORD
       if self._scale != 1.0:
         rl.set_mouse_scale(1 / self._scale, 1 / self._scale)
       if needs_render_texture:
+        _ts = _t()
         self._render_texture = rl.load_render_texture(self._scaled_width, self._scaled_height)
         rl.set_texture_filter(self._render_texture.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
+        print(f"STARTUP: render_texture         {(_t()-_ts)*1000:7.1f}ms")
 
       if RECORD:
         output_fps = fps * RECORD_SPEED
@@ -317,15 +326,26 @@ class GuiApplication:
       rl.set_target_fps(0 if OFFSCREEN else fps)
 
       self._target_fps = fps
+
+      _ts = _t()
       self._set_styles()
+      print(f"STARTUP: set_styles            {(_t()-_ts)*1000:7.1f}ms")
+
+      _ts = _t()
       self._load_fonts()
+      print(f"STARTUP: load_fonts (total)    {(_t()-_ts)*1000:7.1f}ms")
+
+      _ts = _t()
       self._patch_text_functions()
       self._patch_scissor_mode()
       if BURN_IN_MODE and self._burn_in_shader is None:
         self._burn_in_shader = rl.load_shader_from_memory(BURN_IN_VERTEX_SHADER, BURN_IN_FRAGMENT_SHADER)
+      print(f"STARTUP: patches/shader        {(_t()-_ts)*1000:7.1f}ms")
 
       if not PC:
         self._mouse.start()
+
+      print(f"STARTUP: init_window TOTAL     {(_t()-_t0)*1000:7.1f}ms")
 
   @contextmanager
   def _startup_profile_context(self):
@@ -453,9 +473,12 @@ class GuiApplication:
     if cache_key in self._textures:
       return self._textures[cache_key]
 
+    _ts = time.monotonic()
     with as_file(ASSETS_DIR.joinpath(asset_path)) as fspath:
       image_obj = self._load_image_from_path(fspath.as_posix(), width, height, alpha_premultiply, keep_aspect_ratio, flip_x)
       texture_obj = self._load_texture_from_image(image_obj)
+    self._texture_load_time += time.monotonic() - _ts
+    self._texture_load_count += 1
 
     # Set logical size so widget layout math stays at 1x coordinates
     if self._scale != 1.0 and width is not None and height is not None:
@@ -468,6 +491,9 @@ class GuiApplication:
   def _load_image_from_path(self, image_path: str, width: int | None = None, height: int | None = None,
                             alpha_premultiply: bool = False, keep_aspect_ratio: bool = True, flip_x: bool = False) -> rl.Image:
     """Load and resize an image, storing it for later automatic unloading."""
+    if image_path.endswith('.svg'):
+      return self._load_svg_image(image_path, width, height, flip_x)
+
     image = rl.load_image(image_path)
 
     if alpha_premultiply:
@@ -475,8 +501,11 @@ class GuiApplication:
 
     # Scale up load size for sharper rendering, capped at source resolution
     if self._scale != 1.0 and width is not None and height is not None:
-      width = min(int(width * self._scale), image.width)
-      height = min(int(height * self._scale), image.height)
+      want_w, want_h = int(width * self._scale), int(height * self._scale)
+      if image.width < want_w or image.height < want_h:
+        print(f"SCALE: {image_path.split('assets/')[-1]} source {image.width}x{image.height} < needed {want_w}x{want_h} (logical {width}x{height})")
+      width = min(want_w, image.width)
+      height = min(want_h, image.height)
 
     if width is not None and height is not None:
       same_dimensions = image.width == width and image.height == height
@@ -504,6 +533,20 @@ class GuiApplication:
     if flip_x:
       rl.image_flip_horizontal(image)
 
+    return image
+
+  def _load_svg_image(self, svg_path: str, width: int | None, height: int | None, flip_x: bool = False) -> rl.Image:
+    """Rasterize an SVG at the target resolution (scaled for sharp rendering)."""
+    from resvg_py import svg_to_bytes
+
+    render_w = int(width * self._scale) if width else None
+    render_h = int(height * self._scale) if height else None
+    png_data = svg_to_bytes(svg_path=svg_path, width=render_w, height=render_h)
+
+    # Load PNG bytes into raylib image
+    image = rl.load_image_from_memory(".png", png_data, len(png_data))
+    if flip_x:
+      rl.image_flip_horizontal(image)
     return image
 
   def _load_texture_from_image(self, image: rl.Image) -> rl.Texture:
@@ -671,13 +714,18 @@ class GuiApplication:
     return self._height
 
   def _load_fonts(self):
+    import time
     for font_weight_file in FontWeight:
       with as_file(FONT_DIR) as fspath:
         fnt_path = fspath / font_weight_file
+        t0 = time.monotonic()
         font = rl.load_font(fnt_path.as_posix())
+        t1 = time.monotonic()
         if font_weight_file != FontWeight.UNIFONT:
           rl.gen_texture_mipmaps(font.texture)
           rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
+        t2 = time.monotonic()
+        print(f"FONT: {font_weight_file:30s}  load: {(t1-t0)*1000:6.1f}ms  mipmap+filter: {(t2-t1)*1000:6.1f}ms  atlas: {font.texture.width}x{font.texture.height}")
         self._fonts[font_weight_file] = font
     rl.gui_set_font(self._fonts[FontWeight.NORMAL])
 
