@@ -20,31 +20,19 @@ MAX_SPEED = 10000.0  # px/s
 DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
 
 
-# Velocity estimation on release:
-# 1. Average adjacent pairs to cancel 140Hz polling jitter (H/L oscillation)
-# 2. Apply iOS-style weighted average (older = heavier) on the pairs
-# Inspired by iOS UIScrollView, reverse-engineered by Flutter team:
+# Weights older (steadier) velocity samples more heavily on release.
+# Finger-lift samples are noisy; trusting earlier samples gives consistent fling velocity.
+# Reverse-engineered from iOS UIScrollView (tuned at 120Hz touch) by Flutter team:
 # https://github.com/flutter/flutter/pull/60501
+# 3 samples ≈ 25ms at 120Hz (iOS) / ~21ms at 140Hz (comma). Scale if touch rate changes.
 def weighted_velocity(buffer: deque) -> float:
-  if len(buffer) == 0:
-    return 0.0
-
-  # Average adjacent pairs to cancel oscillation from polling jitter
-  samples = list(buffer)
-  pairs = []
-  i = 0
-  while i < len(samples) - 1:
-    pairs.append((samples[i] + samples[i + 1]) / 2)
-    i += 2
-  if i < len(samples):
-    pairs.append(samples[i])
-
-  # iOS-style weighting: oldest 60%, middle 35%, newest 5%
-  if len(pairs) >= 3:
-    return pairs[-3] * 0.6 + pairs[-2] * 0.35 + pairs[-1] * 0.05
-  elif len(pairs) == 2:
-    return pairs[-2] * 0.7 + pairs[-1] * 0.3
-  return pairs[-1]
+  if len(buffer) >= 3:
+    return buffer[-3] * 0.6 + buffer[-2] * 0.35 + buffer[-1] * 0.05
+  elif len(buffer) == 2:
+    return buffer[-2] * 0.7 + buffer[-1] * 0.3
+  elif len(buffer) == 1:
+    return buffer[-1]
+  return 0.0
 
 
 # from https://ariya.io/2011/10/flick-list-with-its-momentum-scrolling-and-deceleration
