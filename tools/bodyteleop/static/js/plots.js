@@ -50,4 +50,4 @@ function getChartConfig(pts, color, title, ymax=100) {
 const ctxPing = document.getElementById('chart-ping');
 const ctxBattery = document.getElementById('chart-battery');
 export const chartPing = new Chart(ctxPing, getChartConfig(pingPoints, 'rgba(192, 57, 43, 0.7)', 'Controls Ping Time (ms)', 250));
-export const chartBattery = new Chart(ctxBattery, getChartConfig(batteryPoints, 'rgba(41, 128, 185, 0.7)', 'Battery %', 100));
+export const chartBattery = new Chart(ctxBattery, getChartConfig(batteryPoints, 'rgba(41, 128, 185, 0.7)', 'Battery (V)', 10));

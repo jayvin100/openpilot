@@ -40,12 +40,13 @@ def write_car_params(params: Params) -> None:
   params.put_nonblocking("CarParamsPersistent", cp_bytes)
 
 
-def publish_car_state(pm: messaging.PubMaster, frame: int, battery: float = 0.0) -> None:
+def publish_car_state(pm: messaging.PubMaster, frame: int, battery_voltage: float = 0.0) -> None:
   """Publish carState so webrtcd can send telemetry back to the browser."""
   cs_msg = messaging.new_message('carState')
   cs_msg.valid = True
   CS = cs_msg.carState
-  CS.fuelGauge = battery
+  # fuelGauge is 0.0-1.0 in openpilot; we store raw voltage and let the web UI display it
+  CS.fuelGauge = battery_voltage
   CS.vEgo = 0.0
   CS.canValid = True
   pm.send('carState', cs_msg)
@@ -133,7 +134,7 @@ def main():
           pass  # already reconnecting on motor write failure
 
       # publish carState for webrtc telemetry
-      publish_car_state(pm, sm.frame)
+      publish_car_state(pm, sm.frame, battery_voltage=board.get_battery_voltage())
 
       # publish carOutput
       co_msg = messaging.new_message('carOutput')

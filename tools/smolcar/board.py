@@ -30,9 +30,11 @@ CRC8_TABLE = [
   116, 42, 200, 150, 21, 75, 169, 247, 182, 232, 10, 84, 215, 137, 107, 53,
 ]
 
+FUNC_SYS = 0
 FUNC_BUZZER = 2
 FUNC_MOTOR = 3
 FUNC_PWM_SERVO = 4
+FUNC_COUNT = 11  # number of valid function IDs
 
 
 def _crc8(data: bytes) -> int:
@@ -55,6 +57,7 @@ class Board:
       device = _find_device()
     self.device = device
     self.baudrate = baudrate
+    self._battery_mv = 0  # last battery reading in millivolts
     self._open()
 
   def _open(self) -> None:
@@ -78,13 +81,50 @@ class Board:
     self._drain_thread.start()
 
   def _drain_task(self) -> None:
-    """Continuously read and discard incoming bytes from the STM32."""
+    """Continuously read incoming bytes from the STM32 and parse battery reports."""
+    # State machine matching the Hiwonder protocol: 0xAA 0x55 func len data... crc8
+    ST_START1, ST_START2, ST_FUNC, ST_LEN, ST_DATA, ST_CRC = range(6)
+    state = ST_START1
+    frame_func = 0
+    frame_len = 0
+    frame_data = bytearray()
+
     while self._drain_running:
       try:
-        # read() with timeout=0.1 blocks briefly then returns whatever is available
-        data = self.port.read(256)
+        raw = self.port.read(256)
       except Exception:
         time.sleep(0.1)
+        continue
+      for b in raw:
+        if state == ST_START1:
+          if b == 0xAA:
+            state = ST_START2
+        elif state == ST_START2:
+          state = ST_FUNC if b == 0x55 else ST_START1
+        elif state == ST_FUNC:
+          if b < FUNC_COUNT:
+            frame_func = b
+            state = ST_LEN
+          else:
+            state = ST_START1
+        elif state == ST_LEN:
+          frame_len = b
+          frame_data = bytearray()
+          state = ST_DATA if frame_len > 0 else ST_CRC
+        elif state == ST_DATA:
+          frame_data.append(b)
+          if len(frame_data) >= frame_len:
+            state = ST_CRC
+        elif state == ST_CRC:
+          # Verify CRC over [func, len, data...]
+          check_buf = bytes([frame_func, frame_len]) + bytes(frame_data)
+          if _crc8(check_buf) == b:
+            self._handle_packet(frame_func, frame_data)
+          state = ST_START1
+
+  def _handle_packet(self, func: int, data: bytearray) -> None:
+    if func == FUNC_SYS and len(data) >= 3 and data[0] == 0x04:
+      self._battery_mv = struct.unpack('<H', data[1:3])[0]
 
   def reconnect(self) -> None:
     self._drain_running = False
@@ -119,6 +159,10 @@ class Board:
 
   def set_buzzer(self, freq: int = 1900, on_time: float = 0.05, off_time: float = 0.01, repeat: int = 1) -> None:
     self._write(FUNC_BUZZER, struct.pack("<HHHH", freq, int(on_time * 1000), int(off_time * 1000), repeat))
+
+  def get_battery_voltage(self) -> float:
+    """Return last battery voltage in volts (0.0 if not yet received)."""
+    return self._battery_mv / 1000.0
 
   def stop(self) -> None:
     """Stop all motors and center steering."""

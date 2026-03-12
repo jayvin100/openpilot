@@ -174,9 +174,10 @@ export function start(pc, dc) {
     const text = textDecoder.decode(evt.data);
     const msg = JSON.parse(text);
     if (carStaterIndex % 100 == 0 && msg.type === 'carState') {
-      const batteryLevel = Math.round(msg.data.fuelGauge * 100);
-      $("#battery").text(batteryLevel + "%");
-      batteryPoints.push({'x': new Date().getTime(), 'y': batteryLevel});
+      const voltage = msg.data.fuelGauge;
+      const batteryLevel = voltage > 0 ? voltage.toFixed(1) + "V" : "-";
+      $("#battery").text(batteryLevel);
+      batteryPoints.push({'x': new Date().getTime(), 'y': voltage});
       if (batteryPoints.length > 1000) {
         batteryPoints.shift();
       }
