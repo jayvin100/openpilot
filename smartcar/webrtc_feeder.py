@@ -98,7 +98,7 @@ async def run(args, write_lock):
     async def recv_video(track):
         nonlocal frame_count, pipe_broken
         raw_count = 0
-        first_frame_time = None
+        prev_timestamp = None
         skip = max(1, 20 // args.fps)  # 20fps input: skip=2 for 10fps, skip=4 for 5fps
         frame_dt = 1.0 / args.fps
         while not pipe_broken:
@@ -112,29 +112,32 @@ async def run(args, write_lock):
             if raw_count % skip != 0:
                 continue
 
-            # First frame: record anchor time and discard stale IMU from vocab load
-            if first_frame_time is None:
-                first_frame_time = time.perf_counter()
+            # First frame: discard stale IMU from vocab load
+            if frame_count == 0:
                 with write_lock:
                     imu_buf.clear()
-                print(f"[feeder] first frame at t={first_frame_time:.3f}, cleared stale IMU",
-                      file=sys.stderr, flush=True)
+                print(f"[feeder] first frame, cleared stale IMU", file=sys.stderr, flush=True)
 
-            # Compute timestamp from frame count — gives perfect dt spacing.
-            # Without this, pipe backpressure causes frames to bunch up with
-            # ~30ms gaps instead of the expected 100ms at 10fps.
-            timestamp = first_frame_time + frame_count * frame_dt
+            # Enforce minimum dt between frames so IMU accumulates properly.
+            # Without this, pipe backpressure causes frames to bunch up.
+            if prev_timestamp is not None:
+                elapsed = time.perf_counter() - prev_timestamp
+                if elapsed < frame_dt:
+                    await asyncio.sleep(frame_dt - elapsed)
 
             img = frame.to_ndarray(format="bgr24")
             h, w = img.shape[:2]
             data = img.tobytes()
 
-            # Grab pending IMU under lock (fast), build the full output blob,
+            # Grab pending IMU under lock (fast), build the output blob,
             # then write it in a thread so we don't block the event loop / GIL
             # while pushing 3MB through the 64KB pipe buffer.
             with write_lock:
                 pending_imu = bytes(imu_buf) if imu_buf else b''
                 imu_buf.clear()
+
+            # Real perf_counter timestamp — same clock domain as IMU.
+            timestamp = time.perf_counter()
 
             parts = []
             if pending_imu:
@@ -155,6 +158,7 @@ async def run(args, write_lock):
                 pipe_broken = True
                 break
 
+            prev_timestamp = timestamp
             frame_count += 1
             if frame_count % 10 == 0:
                 imu_per_frame = imu_count / max(frame_count, 1)

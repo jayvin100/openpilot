@@ -8,6 +8,7 @@
  * IMU measurements are accumulated between frames and passed to TrackMonocular.
  */
 #include <iostream>
+#include <iomanip>
 #include <vector>
 #include <chrono>
 #include <unistd.h>
@@ -127,10 +128,19 @@ int main(int argc, char** argv) {
             double frame_dt = (prev_timestamp >= 0) ? (timestamp - prev_timestamp) * 1000.0 : 0.0;
             prev_timestamp = timestamp;
 
+            // Show IMU timestamp range vs frame timestamp for debugging
+            double imu_first = (n_imu > 0) ? vImuMeas.front().t : 0;
+            double imu_last = (n_imu > 0) ? vImuMeas.back().t : 0;
+
             std::cerr << "[" << frame_idx << "] " << state_str
                       << "  imu=" << n_imu
                       << "  proc=" << dt_ms << "ms"
-                      << "  dt=" << frame_dt << "ms" << std::endl;
+                      << "  dt=" << frame_dt << "ms";
+            if (frame_idx < 20 || frame_idx % 50 == 0) {
+                std::cerr << "  frame_t=" << std::fixed << std::setprecision(3) << timestamp
+                          << "  imu=[" << imu_first << ".." << imu_last << "]";
+            }
+            std::cerr << std::endl;
 
             vImuMeas.clear();
             frame_idx++;
