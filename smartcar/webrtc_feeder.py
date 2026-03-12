@@ -40,6 +40,7 @@ async def run(args, write_lock):
     pipe_broken = False
 
     last_accel = None  # (ax, ay, az)
+    last_gyro = None   # (gx, gy, gz)
 
     # Buffer for IMU packets — flushed to stdout on every frame
     # IMPORTANT: all access must be under write_lock (data channel callback runs on a different thread)
@@ -55,7 +56,7 @@ async def run(args, write_lock):
 
     @dc.on("message")
     def on_dc_message(message):
-        nonlocal imu_count, last_accel
+        nonlocal imu_count, last_accel, last_gyro
         # Fast path: check message type prefix before full JSON parse
         raw = message if isinstance(message, bytes) else message.encode()
         if b'"accelerometer"' in raw:
@@ -72,11 +73,12 @@ async def run(args, write_lock):
             except (json.JSONDecodeError, TypeError):
                 return
             v = msg["data"]["gyroUncalibrated"]["v"]
+            last_gyro = (float(v[0]), float(v[1]), float(v[2]))
 
             if last_accel is not None:
                 ts = time.perf_counter()
                 # Build complete packet, then append atomically under lock
-                pkt = b'I' + IMU_STRUCT.pack(ts, *last_accel, float(v[0]), float(v[1]), float(v[2]))
+                pkt = b'I' + IMU_STRUCT.pack(ts, *last_accel, *last_gyro)
                 with write_lock:
                     imu_buf.extend(pkt)
 
@@ -103,15 +105,19 @@ async def run(args, write_lock):
             img = frame.to_ndarray(format="bgr24")
             h, w = img.shape[:2]
             data = img.tobytes()
-            timestamp = time.perf_counter()
 
-            # Flush all pending IMU then write frame — all under lock to prevent
-            # partial IMU packets from the data channel thread
+            # Flush all pending IMU, add one sample at frame time to bracket it, then write frame
             try:
                 with write_lock:
                     if imu_buf:
                         sys.stdout.buffer.write(bytes(imu_buf))
                         imu_buf.clear()
+                    # Write one IMU sample at the frame timestamp so ORB-SLAM3's
+                    # preintegration covers the full interval to the frame
+                    timestamp = time.perf_counter()
+                    if last_accel is not None and last_gyro is not None:
+                        sys.stdout.buffer.write(b'I')
+                        sys.stdout.buffer.write(IMU_STRUCT.pack(timestamp, *last_accel, *last_gyro))
                     sys.stdout.buffer.write(b'F')
                     sys.stdout.buffer.write(struct.pack('<d', timestamp))
                     sys.stdout.buffer.write(struct.pack('<III', w, h, len(data)))
