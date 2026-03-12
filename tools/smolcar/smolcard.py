@@ -20,7 +20,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.tools.smolcar.board import Board
 
 # Ackermann config
-MAX_SPEED = 8.0          # max motor speed (pulse count per 10ms)
+MAX_SPEED = 1.0          # max motor speed (pulse count per 10ms)
 SERVO_CENTER = 1500      # steering servo center pulse
 SERVO_RANGE = 444        # max deflection from center (~40 degrees)
 STEERING_SERVO_ID = 3    # PWM servo channel for steering
