@@ -11,7 +11,7 @@ from openpilot.selfdrive.ui.mici.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.mici.onroad.model_renderer import ModelRenderer
 from openpilot.selfdrive.ui.mici.onroad.confidence_ball import ConfidenceBall
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
-from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent
+from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent, SCALE
 from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import BounceFilter
@@ -233,7 +233,7 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer.render(self._content_rect)
 
     # Draw fake rounded border
-    rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, 10, 50, rl.BLACK)
+    rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, max(10, int(10 * SCALE)), 50, rl.BLACK)
 
     # End clipping region
     rl.end_scissor_mode()
