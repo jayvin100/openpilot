@@ -21,7 +21,7 @@ gui_app.init_window = _init_window_on_monitor0
 
 
 def send_messages():
-  pm = messaging.PubMaster(['deviceState', 'pandaStates', 'carParams', 'carState'])
+  pm = messaging.PubMaster(['deviceState', 'pandaStates', 'carParams', 'carState', 'selfdriveState'])
 
   car_params_msg = messaging.new_message('carParams')
   car_params_msg.carParams.brand = "body"
@@ -38,11 +38,15 @@ def send_messages():
   car_state_msg.carState.charging = True
   car_state_msg.carState.fuelGauge = 0.80
 
+  selfdrive_state_msg = messaging.new_message('selfdriveState')
+  selfdrive_state_msg.selfdriveState.enabled = True
+
   while True:
     pm.send('carParams', car_params_msg)
     pm.send('deviceState', device_state_msg)
     pm.send('pandaStates', panda_msg)
     pm.send('carState', car_state_msg)
+    pm.send('selfdriveState', selfdrive_state_msg)
     time.sleep(0.01)
 
 
@@ -51,6 +55,17 @@ def main():
   params = Params()
   CP = car.CarParams.new_message(notCar=True, brand="body", wheelbase=1, steerRatio=10)
   params.put("CarParamsPersistent", CP.to_bytes())
+  params.put_bool("JoystickDebugMode", True)
+  params.put_bool("IsOffroad", True)
+
+  # Wait for joystick_control to start before going "onroad"
+  sm = messaging.SubMaster(['testJoystick'])
+  print("Waiting for joystick_control to start (run: python tools/joystick/joystick_control.py --keyboard) ...")
+  while sm.recv_frame['testJoystick'] == 0:
+    params.put_bool("IsOffroad", True)
+    sm.update(100)
+  print("Joystick connected, starting body view.")
+  params.remove("IsOffroad")
 
   # Start message sender in background
   t = threading.Thread(target=send_messages, daemon=True)

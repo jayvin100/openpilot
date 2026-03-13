@@ -1,4 +1,3 @@
-import math
 import time
 
 import pyray as rl
@@ -10,10 +9,6 @@ GRID_COLS = 16
 GRID_ROWS = 8
 RADIUS = 50
 
-# Gaze tracking — horizontal pixel offset driven by steering input
-GAZE_MAX_OFFSET = 30.0     # max pixel shift in either direction
-GAZE_SMOOTHING_TAU = 0.15  # exponential smoothing time constant (seconds)
-STEER_SENSITIVITY = 0.6    # pixels of offset per degree of steering angle
 IDLE_TIMEOUT = 30.0        # seconds of no joystick input before playing INQUISITIVE
 IDLE_STEER_THRESH = 0.5    # degrees — below this counts as no input
 IDLE_SPEED_THRESH = 0.01   # m/s — below this counts as no input
@@ -120,7 +115,7 @@ class FaceAnimator:
     return self._animation.frames[0]
 
 
-def draw_dot_grid(rect: rl.Rectangle, dots: list[tuple[int, int]], color: rl.Color = None, gaze_offset: float = 0.0):
+def draw_dot_grid(rect: rl.Rectangle, dots: list[tuple[int, int]], color: rl.Color = None):
   if color is None:
     color = rl.WHITE
 
@@ -133,7 +128,7 @@ def draw_dot_grid(rect: rl.Rectangle, dots: list[tuple[int, int]], color: rl.Col
   offset_y = rect.y + (rect.height - grid_h) / 2
 
   for row, col in dots:
-    x = int(offset_x + col * spacing + gaze_offset)
+    x = int(offset_x + col * spacing)
     y = int(offset_y + row * spacing)
     rl.draw_circle(x, y, RADIUS, color)
 
@@ -143,7 +138,8 @@ class BodyLayout(Widget):
     super().__init__()
     self._setup_widget = type('', (), {'set_open_settings_callback': lambda self, cb: None})()
     self._animator = FaceAnimator(ASLEEP)
-    self._gaze_offset = 0.0
+    self._turning_left = False
+    self._turning_right = False
     self._last_input_time = time.monotonic()
     self._was_active = False
 
@@ -176,17 +172,23 @@ class BodyLayout(Widget):
     if not sm.updated['carState']:
       return
 
-    steer = sm['carState'].steeringAngleDeg
-    target = max(-GAZE_MAX_OFFSET, min(GAZE_MAX_OFFSET, steer * STEER_SENSITIVITY))
-    dt = rl.get_frame_time()
-    if dt > 0:
-      alpha = 1.0 - math.exp(-dt / GAZE_SMOOTHING_TAU)
-      self._gaze_offset += (target - self._gaze_offset) * alpha
+    steer = sm['testJoystick'].axes[1] if len(sm['testJoystick'].axes) > 1 else 0
+    self._turning_left = steer <= -0.05
+    self._turning_right = steer >= 0.05
 
   def _handle_mouse_release(self, mouse_pos):
     super()._handle_mouse_release(mouse_pos)
-    self._animator.set_animation(SLEEPY)
+    if not self._was_active:
+      self._animator.set_animation(SLEEPY)
 
   def _render(self, rect: rl.Rectangle):
     rl.clear_background(rl.BLACK)
-    draw_dot_grid(rect, self._animator.get_dots(), gaze_offset=self._gaze_offset)
+    dots = self._animator.get_dots()
+    animation = self._animator._animation
+    if self._turning_left and animation.left_turn_remove:
+      remove_set = set(animation.left_turn_remove)
+      dots = [d for d in dots if d not in remove_set]
+    elif self._turning_right and animation.right_turn_remove:
+      remove_set = set(animation.right_turn_remove)
+      dots = [d for d in dots if d not in remove_set]
+    draw_dot_grid(rect, dots)
