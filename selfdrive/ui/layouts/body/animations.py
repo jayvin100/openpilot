@@ -86,6 +86,7 @@ EYE_RIGHT_LOOK = [
 BROW_HIGH = [(1, 0), (0, 1), (0, 2)]
 BROW_LOWERED = [(2, 0), (1, 1), (1, 2)]
 BROW_STRAIGHT = [(2, 0), (2, 1), (2, 2)]
+NO_BROW = []
 
 # Mouths (centered, not mirrored)
 MOUTH_SMILE = [(6, 6), (7, 7), (7, 8), (6, 9)]
@@ -105,16 +106,16 @@ NORMAL = Animation(
 
 ASLEEP = Animation(
   frames=[
-    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), BROW_STRAIGHT, _mirror(BROW_STRAIGHT), MOUTH_NORMAL),
+    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), NO_BROW, NO_BROW, MOUTH_NORMAL),
   ],
   # frame_duration=0.25,
 )
 
 SLEEPY = Animation(
   frames=[
-    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), BROW_STRAIGHT, _mirror(BROW_STRAIGHT), MOUTH_NORMAL),
-    _make_frame(EYE_CLOSED, _mirror(EYE_HALF), BROW_STRAIGHT, _mirror(BROW_LOWERED), MOUTH_NORMAL),
-    _make_frame(EYE_CLOSED, _mirror(EYE_OPEN), BROW_STRAIGHT, _mirror(BROW_HIGH), MOUTH_NORMAL)
+    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), NO_BROW, _mirror(BROW_STRAIGHT), MOUTH_NORMAL),
+    _make_frame(EYE_CLOSED, _mirror(EYE_HALF), NO_BROW, _mirror(BROW_LOWERED), MOUTH_NORMAL),
+    _make_frame(EYE_CLOSED, _mirror(EYE_OPEN), NO_BROW, _mirror(BROW_HIGH), MOUTH_NORMAL)
   ],
   frame_duration=0.25,
   mode=AnimationMode.ONCE_FORWARD_BACKWARD,
