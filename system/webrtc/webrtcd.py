@@ -204,11 +204,22 @@ class StreamRequestBody:
   bridge_services_in: list[str] = field(default_factory=list)
   bridge_services_out: list[str] = field(default_factory=list)
 
-
 def _add_cors_headers(request: 'web.Request', response: 'web.Response'):
   response.headers["Access-Control-Allow-Origin"] = "*"
   response.headers["Access-Control-Allow-Headers"] = "Content-Type"
   response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+
+
+@web.middleware
+async def cors_middleware(request: 'web.Request', handler):
+  try:
+    response = await handler(request)
+  except web.HTTPException as ex:
+    _add_cors_headers(request, ex)
+    raise
+  _add_cors_headers(request, response)
+  return response
+
 
 async def stream_options(request: 'web.Request'):
   response = web.Response()
