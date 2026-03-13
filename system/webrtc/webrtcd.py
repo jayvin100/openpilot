@@ -205,26 +205,10 @@ class StreamRequestBody:
   bridge_services_out: list[str] = field(default_factory=list)
 
 
-PRIVATE_NETWORKS = (
-  ipaddress.ip_network("192.168.0.0/16"),
-)
-
-
-def _is_private_origin(origin: str) -> bool:
-  try:
-    host = urlparse(origin).hostname
-    return any(ipaddress.ip_address(host) in net for net in PRIVATE_NETWORKS)
-  except (ValueError, TypeError):
-    return False
-
-
 def _add_cors_headers(request: 'web.Request', response: 'web.Response'):
-  origin = request.headers.get("Origin", "")
-  if _is_private_origin(origin):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-
+  response.headers["Access-Control-Allow-Origin"] = "*"
+  response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+  response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
 
 async def stream_options(request: 'web.Request'):
   response = web.Response()
@@ -233,19 +217,24 @@ async def stream_options(request: 'web.Request'):
 
 
 async def get_stream(request: 'web.Request'):
-  stream_dict, debug_mode = request.app['streams'], request.app['debug']
-  raw_body = await request.json()
-  body = StreamRequestBody(**raw_body)
+  logger = logging.getLogger("webrtcd")
+  try:
+    stream_dict, debug_mode = request.app['streams'], request.app['debug']
+    raw_body = await request.json()
+    body = StreamRequestBody(**raw_body)
 
-  session = StreamSession(body.sdp, body.cameras, body.bridge_services_in, body.bridge_services_out, debug_mode)
-  answer = await session.get_answer()
-  session.start()
+    session = StreamSession(body.sdp, body.cameras, body.bridge_services_in, body.bridge_services_out, debug_mode)
+    answer = await session.get_answer()
+    session.start()
 
-  stream_dict[session.identifier] = session
+    stream_dict[session.identifier] = session
 
-  response = web.json_response({"sdp": answer.sdp, "type": answer.type})
-  _add_cors_headers(request, response)
-  return response
+    response = web.json_response({"sdp": answer.sdp, "type": answer.type})
+    _add_cors_headers(request, response)
+    return response
+  except Exception:
+    logger.exception("Error in /stream handler")
+    raise
 
 
 async def get_schema(request: 'web.Request'):
@@ -282,7 +271,7 @@ def webrtcd_thread(host: str, port: int, debug: bool):
   logging.getLogger("WebRTCStream").setLevel(logging_level)
   logging.getLogger("webrtcd").setLevel(logging_level)
 
-  app = web.Application()
+  app = web.Application(middlewares=[cors_middleware])
 
   app['streams'] = dict()
   app['debug'] = debug
