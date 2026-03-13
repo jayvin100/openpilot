@@ -164,10 +164,7 @@ class BodyLayout(Widget):
       else:
         self._animator.set_animation(NORMAL)
     else:
-      if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
-        self._animator.set_animation(SLEEPY)
-      else:
-        self._animator.set_animation(ASLEEP)
+      self._animator.set_animation(ASLEEP)
 
     if not sm.updated['carState']:
       return
@@ -178,6 +175,10 @@ class BodyLayout(Widget):
     if dt > 0:
       alpha = 1.0 - math.exp(-dt / GAZE_SMOOTHING_TAU)
       self._gaze_offset += (target - self._gaze_offset) * alpha
+
+  def _handle_mouse_release(self, mouse_pos):
+    super()._handle_mouse_release(mouse_pos)
+    self._animator.set_animation(SLEEPY)
 
   def _render(self, rect: rl.Rectangle):
     rl.clear_background(rl.BLACK)

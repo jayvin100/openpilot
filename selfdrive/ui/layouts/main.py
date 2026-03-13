@@ -61,9 +61,10 @@ class MainLayout(Widget):
     self._layouts[MainState.HOME]._setup_widget.set_open_settings_callback(lambda: self.open_settings(PanelType.FIREHOSE))
     self._layouts[MainState.HOME].set_settings_callback(lambda: self.open_settings(PanelType.TOGGLES))
     self._layouts[MainState.SETTINGS].set_callbacks(on_close=self._set_mode_for_state)
-    self._layouts[MainState.ONROAD].set_click_callback(self._on_onroad_clicked)
     if self._is_body:
       self._layouts[MainState.HOME].set_click_callback(self._on_onroad_clicked)
+      self._layouts[MainState.ONROAD].set_click_callback(self._on_onroad_clicked)
+
     device.add_interactive_timeout_callback(self._set_mode_for_state)
 
   def _update_layout_rects(self):

@@ -104,6 +104,8 @@ class BodySidebar(Widget):
 
   def _update_state(self):
     sm = ui_state.sm
+    self._update_battery_status()
+
     if not sm.updated['deviceState']:
       return
 
@@ -113,7 +115,6 @@ class BodySidebar(Widget):
     self._update_temperature_status(device_state)
     self._update_connection_status(device_state)
     self._update_panda_status()
-    self._update_battery_status()
 
   def _update_network_status(self, device_state):
     self._net_type = NETWORK_TYPES.get(device_state.networkType.raw, tr_noop("Unknown"))
