@@ -151,8 +151,8 @@ class MiciHomeLayout(Widget):
     self._did_long_press = False
 
   def _get_version_text(self) -> tuple[str, str, str, str] | None:
-    version = ui_state.params.get("Version")
-    branch = ui_state.params.get("GitBranch")
+    version = "0.11"# ui_state.params.get("Version")
+    branch = "release-mici"  # ui_state.params.get("GitBranch")
     commit = ui_state.params.get("GitCommit")
 
     if not all((version, branch, commit)):
@@ -165,6 +165,8 @@ class MiciHomeLayout(Widget):
       date_str = datetime.datetime.fromtimestamp(unix_ts).strftime("%b %d")
     except (ValueError, IndexError, TypeError, AttributeError):
       date_str = ""
+
+    date_str = "Mar 12"
 
     return version, branch, commit[:7], date_str
 

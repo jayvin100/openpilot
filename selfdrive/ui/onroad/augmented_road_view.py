@@ -50,7 +50,7 @@ class AugmentedRoadView(CameraView):
     self.driver_state_renderer = DriverStateRenderer()
 
     # debug
-    self._pm = messaging.PubMaster(['uiDebug'])
+    # self._pm = messaging.PubMaster(['uiDebug'])
 
   def _render(self, rect):
     # Only render when system is started to avoid invalid data access
@@ -101,7 +101,7 @@ class AugmentedRoadView(CameraView):
     # publish uiDebug
     msg = messaging.new_message('uiDebug')
     msg.uiDebug.drawTimeMillis = (time.monotonic() - start_draw) * 1000
-    self._pm.send('uiDebug', msg)
+    # self._pm.send('uiDebug', msg)
 
   def _handle_mouse_press(self, _):
     if not self._hud_renderer.user_interacting() and self._click_callback is not None:

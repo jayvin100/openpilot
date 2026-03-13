@@ -15,7 +15,7 @@ AUTO_SCROLL_TC_SNAP = 0.025
 AUTO_SCROLL_TC = 0.18
 BOUNCE_RETURN_RATE = 10.0
 REJECT_DECELERATION_FACTOR = 3
-MAX_SPEED = 10000.0  # px/s
+MAX_SPEED = 3000.0  # px/s
 
 DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
 
@@ -188,6 +188,8 @@ class GuiScrollPanel2:
             high_decel = True
 
         self._velocity = weighted_velocity(self._velocity_buffer)
+        print(self._velocity_buffer)
+        print(self._velocity)
 
         # If final velocity is below some threshold, switch to steady state too
         low_speed = abs(self._velocity) <= MIN_VELOCITY_FOR_CLICKING * 1.5  # plus some margin

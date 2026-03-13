@@ -278,7 +278,8 @@ class GuiApplication:
 
       rl.init_window(self._scaled_width, self._scaled_height, title)
 
-      needs_render_texture = self._scale != 1.0 or BURN_IN_MODE or RECORD
+      # needs_render_texture = self._scale != 1.0 or BURN_IN_MODE or RECORD
+      needs_render_texture = BURN_IN_MODE
       if self._scale != 1.0:
         rl.set_mouse_scale(1 / self._scale, 1 / self._scale)
       if needs_render_texture:
@@ -658,7 +659,7 @@ class GuiApplication:
         rl.end_drawing()
 
         if RECORD:
-          image = rl.load_image_from_texture(self._render_texture.texture)
+          image = rl.load_image_from_screen()
           data_size = image.width * image.height * 4
           data = bytes(rl.ffi.buffer(image.data, data_size))
           self._ffmpeg_queue.put(data)  # Async write via background thread
