@@ -145,6 +145,7 @@ class CameraView(Widget):
       # Create a 1x1 pixel placeholder texture for EGL image binding
       temp_image = rl.gen_image_color(1, 1, rl.BLACK)
       self.egl_texture = rl.load_texture_from_image(temp_image)
+      rl.set_texture_filter(self.egl_texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
       rl.unload_image(temp_image)
 
     ui_state.add_offroad_transition_callback(self._offroad_transition)
@@ -295,6 +296,7 @@ class CameraView(Widget):
 
     # Bind the EGL image to our texture
     bind_egl_image_to_texture(self.egl_texture.id, egl_image)
+    rl.set_texture_filter(self.egl_texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
 
     # Render with shader
     rl.begin_shader_mode(self.shader)
@@ -391,8 +393,10 @@ class CameraView(Widget):
       if not TICI:
         self.texture_y = rl.load_texture_from_image(rl.Image(None, int(self.client.stride),
           int(self.client.height), 1, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_GRAYSCALE))
+        rl.set_texture_filter(self.texture_y, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
         self.texture_uv = rl.load_texture_from_image(rl.Image(None, int(self.client.stride // 2),
           int(self.client.height // 2), 1, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA))
+        rl.set_texture_filter(self.texture_uv, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
 
   def _clear_textures(self):
     if self.texture_y and self.texture_y.id:
