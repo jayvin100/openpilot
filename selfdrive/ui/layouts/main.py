@@ -3,6 +3,8 @@ from enum import IntEnum
 import cereal.messaging as messaging
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.sidebar import Sidebar, SIDEBAR_WIDTH
+from openpilot.selfdrive.ui.layouts.body.body import BodyAnim, BodyLayout
+from openpilot.selfdrive.ui.layouts.body.body_sidebar import BodySidebar, BODY_SIDEBAR_HEIGHT
 from openpilot.selfdrive.ui.layouts.home import HomeLayout
 from openpilot.selfdrive.ui.layouts.settings.settings import SettingsLayout, PanelType
 from openpilot.selfdrive.ui.onroad.augmented_road_view import AugmentedRoadView
@@ -23,12 +25,17 @@ class MainLayout(Widget):
 
     self._pm = messaging.PubMaster(['bookmarkButton'])
 
-    self._sidebar = Sidebar()
+    self._is_body = self._check_not_car()
+    self._sidebar = BodySidebar() if self._is_body else Sidebar()
     self._current_mode = MainState.HOME
     self._prev_onroad = False
 
     # Initialize layouts
-    self._layouts = {MainState.HOME: HomeLayout(), MainState.SETTINGS: SettingsLayout(), MainState.ONROAD: AugmentedRoadView()}
+    if self._is_body:
+      self._layouts = {MainState.HOME: BodyLayout(BodyAnim.SLEEP), MainState.SETTINGS: SettingsLayout(), MainState.ONROAD: BodyLayout(BodyAnim.AWAKE)}
+      self._sidebar.set_visible(False)
+    else:
+      self._layouts = {MainState.HOME: HomeLayout(), MainState.SETTINGS: SettingsLayout(), MainState.ONROAD: AugmentedRoadView()}
 
     self._sidebar_rect = rl.Rectangle(0, 0, 0, 0)
     self._content_rect = rl.Rectangle(0, 0, 0, 0)
@@ -58,10 +65,17 @@ class MainLayout(Widget):
     device.add_interactive_timeout_callback(self._set_mode_for_state)
 
   def _update_layout_rects(self):
-    self._sidebar_rect = rl.Rectangle(self._rect.x, self._rect.y, SIDEBAR_WIDTH, self._rect.height)
+    if self._is_body:
+      self._sidebar_rect = rl.Rectangle(self._rect.x, self._rect.y, self._rect.width, BODY_SIDEBAR_HEIGHT)
+      y_offset = BODY_SIDEBAR_HEIGHT if self._sidebar.is_visible else 0
+      self._content_rect = rl.Rectangle(self._rect.x, self._rect.y + y_offset, self._rect.width, self._rect.height - y_offset)
+    else:
+      self._sidebar_rect = rl.Rectangle(self._rect.x, self._rect.y, SIDEBAR_WIDTH, self._rect.height)
+      x_offset = SIDEBAR_WIDTH if self._sidebar.is_visible else 0
+      self._content_rect = rl.Rectangle(self._rect.y + x_offset, self._rect.y, self._rect.width - x_offset, self._rect.height)
 
-    x_offset = SIDEBAR_WIDTH if self._sidebar.is_visible else 0
-    self._content_rect = rl.Rectangle(self._rect.y + x_offset, self._rect.y, self._rect.width - x_offset, self._rect.height)
+  def _check_not_car(self):
+    return ui_state.CP is not None and ui_state.CP.notCar
 
   def _handle_onroad_transition(self):
     if ui_state.started != self._prev_onroad:
@@ -77,7 +91,9 @@ class MainLayout(Widget):
       self._set_current_layout(MainState.ONROAD)
     else:
       self._set_current_layout(MainState.HOME)
-      self._sidebar.set_visible(True)
+      # Body sidebar always starts closed; regular sidebar starts open
+      if not self._is_body:
+        self._sidebar.set_visible(True)
 
   def _set_current_layout(self, layout: MainState):
     if layout != self._current_mode:
@@ -102,9 +118,14 @@ class MainLayout(Widget):
     self._sidebar.set_visible(not self._sidebar.is_visible)
 
   def _render_main_content(self):
-    # Render sidebar
-    if self._sidebar.is_visible:
-      self._sidebar.render(self._sidebar_rect)
-
-    content_rect = self._content_rect if self._sidebar.is_visible else self._rect
-    self._layouts[self._current_mode].render(content_rect)
+    if self._is_body:
+      # Render body content first so sidebar draws on top (body clears background)
+      content_rect = self._content_rect if self._sidebar.is_visible else self._rect
+      self._layouts[self._current_mode].render(content_rect)
+      if self._sidebar.is_visible:
+        self._sidebar.render(self._sidebar_rect)
+    else:
+      if self._sidebar.is_visible:
+        self._sidebar.render(self._sidebar_rect)
+      content_rect = self._content_rect if self._sidebar.is_visible else self._rect
+      self._layouts[self._current_mode].render(content_rect)
