@@ -1,11 +1,13 @@
 # Lateral Maneuvers Testing Tool
 
+**Disclaimer: Do not use this tool on public roads.**
+
 Test your vehicle's lateral control tuning with this tool. The tool will test the vehicle's ability to follow a few lateral maneuvers and includes a tool to generate a report from the route.
 
 ## Instructions
 
 1. Check out a development branch such as `master` on your comma device.
-2. Locate a long, straight, flat road with minimal traffic and clear adjacent lanes. The full maneuver suite runs at 50 and 70 mph and can take several miles. Depending on the steering performance, the car can drift out of the lane during the maneuvers.
+2. The full maneuver suite runs at 20 and 30 mph.
 3. Enable "Lateral Maneuver Mode" in Settings > Developer on the device while offroad. Alternatively, set the parameter manually:
 
    ```sh
@@ -14,7 +16,7 @@ Test your vehicle's lateral control tuning with this tool. The tool will test th
 
 4. Turn your vehicle back on. You will see "Lateral Maneuver Mode".
 
-5. Ensure adjacent lanes are clear, as openpilot will command lateral acceleration steps in this mode. Once you are ready, set up ACC manually to the target speed shown on screen and let openpilot stabilize. After 3 seconds of steady straight driving, the maneuver will begin automatically. openpilot lateral control stays engaged between maneuvers normally while waiting for the next maneuver's readiness conditions. The maneuver will be aborted and repeated if speed is out of range, steering is touched or openpilot disengages.
+5. Ensure the area ahead is clear, as openpilot will command lateral acceleration steps in this mode. Once you are ready, set ACC manually to the target speed shown on screen and let openpilot stabilize lateral. After 1 seconds of steady straight driving, the maneuver will begin automatically. Openpilot lateral control stays engaged between maneuvers normally while waiting for the next maneuver's readiness conditions. The maneuver will be aborted and repeated if speed is out of range, steering is touched or openpilot disengages.
 
 6. When the testing is complete, you'll see an alert that says "Maneuvers Finished." Complete the route by pulling over and turning off the vehicle.
 
@@ -28,10 +30,10 @@ Test your vehicle's lateral control tuning with this tool. The tool will test th
     $ python tools/lateral_maneuvers/generate_report.py 98395b7c5b27882e/000001cc--5a73bde686
 
     processing report for KIA_EV6
-    plotting maneuver: step right 50mph, runs: 3
-    plotting maneuver: step left 50mph, runs: 3
-    plotting maneuver: sine 0.5Hz 50mph, runs: 2
-    plotting maneuver: step right 70mph, runs: 3
+    plotting maneuver: step right 20mph, runs: 3
+    plotting maneuver: step left 20mph, runs: 3
+    plotting maneuver: sine 0.5Hz 20mph, runs: 3
+    plotting maneuver: step right 30mph, runs: 3
 
     Opening report: /home/batman/openpilot/tools/lateral_maneuvers/lateral_reports/KIA_EV6_98395b7c5b27882e_000001cc--5a73bde686.html
     ```
