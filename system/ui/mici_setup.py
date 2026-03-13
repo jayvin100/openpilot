@@ -12,7 +12,7 @@ from collections.abc import Callable
 import pyray as rl
 
 from cereal import log
-from openpilot.common.filter_simple import BounceFilter
+from openpilot.common.filter_simple import BounceFilter, FirstOrderFilter
 from openpilot.system.hardware import HARDWARE, TICI
 from openpilot.common.realtime import config_realtime_process, set_core_affinity
 from openpilot.common.swaglog import cloudlog
@@ -264,6 +264,7 @@ class GreyBigButton(BigButton):
     self.set_touch_valid_callback(lambda: False)
 
     self._rect.width = 476
+    self._opacity_filter = FirstOrderFilter(1.0, 0.15, 1 / gui_app.target_fps)
 
     self._label.set_font_size(36)
     self._label.set_font_weight(FontWeight.BOLD)
@@ -276,6 +277,12 @@ class GreyBigButton(BigButton):
                                            rl.GuiTextAlignmentVertical.TEXT_ALIGN_BOTTOM)
     self._sub_label.set_line_height(0.95)
 
+  def set_opacity(self, opacity: float, smooth: bool = True):
+    if smooth:
+      self._opacity_filter.update(opacity)
+    else:
+      self._opacity_filter.x = opacity
+
   @property
   def LABEL_VERTICAL_PADDING(self):
     return BigButton.LABEL_VERTICAL_PADDING if self._label.text else 18
@@ -286,8 +293,33 @@ class GreyBigButton(BigButton):
   def _get_label_font_size(self):
     return 36
 
+  def _draw_content(self, btn_y: float):
+    a = self._opacity_filter.x
+    # Labels (colors already set in _render)
+    label_x = self._rect.x + self.LABEL_HORIZONTAL_PADDING
+    label_rect = rl.Rectangle(label_x, btn_y + self.LABEL_VERTICAL_PADDING, self._width_hint(),
+                              self._rect.height - self.LABEL_VERTICAL_PADDING * 2)
+    self._label.render(label_rect)
+
+    if self.value:
+      label_y = btn_y + self.LABEL_VERTICAL_PADDING + self._label.get_content_height(self._width_hint())
+      sub_label_height = btn_y + self._rect.height - self.LABEL_VERTICAL_PADDING - label_y
+      sub_label_rect = rl.Rectangle(label_x, label_y, self._width_hint(), sub_label_height)
+      self._sub_label.render(sub_label_rect)
+
+    if self._txt_icon:
+      x = self._rect.x + self._rect.width - 30 - self._txt_icon.width / 2
+      y = btn_y + 30 + self._txt_icon.height / 2
+      source_rec = rl.Rectangle(0, 0, self._txt_icon.width, self._txt_icon.height)
+      dest_rec = rl.Rectangle(x, y, self._txt_icon.width, self._txt_icon.height)
+      origin = rl.Vector2(self._txt_icon.width / 2, self._txt_icon.height / 2)
+      rl.draw_texture_pro(self._txt_icon, source_rec, dest_rec, origin, 0, rl.Color(255, 255, 255, int(255 * 0.9 * a)))
+
   def _render(self, _):
-    rl.draw_rectangle_rounded(self._rect, 0.4, 10, rl.Color(255, 255, 255, int(255 * 0.15)))
+    a = self._opacity_filter.x
+    rl.draw_rectangle_rounded(self._rect, 0.4, 10, rl.Color(255, 255, 255, int(255 * 0.15 * a)))
+    self._label.set_color(rl.Color(255, 255, 255, int(255 * 0.9 * a)))
+    self._sub_label.set_text_color(rl.Color(255, 255, 255, int(255 * 0.9 * a)))
     self._draw_content(self._rect.y)
 
 

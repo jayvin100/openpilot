@@ -7,6 +7,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.button import SmallCircleIconButton
+from openpilot.system.ui.lib.scroll_panel2 import ScrollState
 from openpilot.system.ui.widgets.scroller import NavScroller, Scroller
 from openpilot.system.ui.widgets.nav_widget import NavWidget
 from openpilot.system.ui.mici_setup import GreyBigButton, BigPillButton
@@ -240,21 +241,73 @@ class TrainingGuideRecordFront(NavScroller):
 
 
 class TrainingGuideAttentionNotice(Scroller):
+  INITIAL_VISIBLE = 2
+
   def __init__(self, continue_callback: Callable[[], None]):
     super().__init__()
 
     continue_button = BigPillButton("next")
     continue_button.set_click_callback(continue_callback)
 
-    self._scroller.add_widgets([
+    self._reveal_cards: list[GreyBigButton] = [
       GreyBigButton("what is openpilot?", "scroll to continue",
                     gui_app.texture("icons_mici/setup/green_info.png", 64, 64)),
       GreyBigButton("", "1. openpilot is a driver assistance system."),
       GreyBigButton("", "2. You must pay attention at all times."),
       GreyBigButton("", "3. You must be ready to take over at any time."),
       GreyBigButton("", "4. You are fully responsible for driving the car."),
-      continue_button,
-    ])
+    ]
+    self._continue_button = continue_button
+    self._next_reveal_idx = self.INITIAL_VISIBLE
+    self._revealing = False  # True while a card is fading in
+
+    # Hide cards beyond initial visible count (and the button)
+    for card in self._reveal_cards[self.INITIAL_VISIBLE:]:
+      card.set_visible(False)
+      card.set_opacity(0.0, smooth=False)
+    continue_button.set_visible(False)
+
+    self._scroller.add_widgets(self._reveal_cards + [continue_button])
+
+  def _update_state(self):
+    super()._update_state()
+    if self._next_reveal_idx > len(self._reveal_cards):
+      return
+
+    scroller = self._scroller
+    max_scroll = scroller._content_size - self._rect.width
+
+    # Wait until scroll has fully settled at the end before revealing next card
+    at_end = max_scroll > 0 and -scroller._scroll_offset >= max_scroll - 5
+    settled = scroller.scroll_panel.state == ScrollState.STEADY
+
+    # Wait for current card to finish fading in before allowing next reveal
+    if self._revealing:
+      current_card = self._reveal_cards[self._next_reveal_idx - 1] if self._next_reveal_idx <= len(self._reveal_cards) else None
+      if current_card and current_card._opacity_filter.x > 0.95:
+        self._revealing = False
+      else:
+        # Keep animating opacity while revealing
+        for card in self._reveal_cards[self.INITIAL_VISIBLE:]:
+          if card.is_visible:
+            card.set_opacity(1.0, smooth=True)
+        return
+
+    if at_end and settled:
+      if self._next_reveal_idx < len(self._reveal_cards):
+        card = self._reveal_cards[self._next_reveal_idx]
+        card.set_visible(True)
+        card.set_opacity(0.0, smooth=False)
+        self._next_reveal_idx += 1
+        self._revealing = True
+      elif self._next_reveal_idx == len(self._reveal_cards):
+        self._continue_button.set_visible(True)
+        self._next_reveal_idx += 1
+
+    # Animate opacity for all visible revealed cards
+    for card in self._reveal_cards[self.INITIAL_VISIBLE:]:
+      if card.is_visible:
+        card.set_opacity(1.0, smooth=True)
 
 
 class TrainingGuide(NavWidget):
