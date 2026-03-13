@@ -1,85 +1,83 @@
-import os
 import time
+
 import pyray as rl
-from enum import Enum
-from openpilot.common.basedir import BASEDIR
 from openpilot.system.ui.widgets import Widget
+from .animations import Animation, NORMAL
 
-BODY_ASSETS = os.path.join(BASEDIR, "selfdrive/assets/body")
-FRAME_DELAY = 0.1  # seconds between frames
-CYCLE_INTERVAL = 10.0  # seconds between animation cycles
+GRID_COLS = 16
+GRID_ROWS = 8
+RADIUS = 50
 
-class BodyAnim(Enum):
-  AWAKE = "awake.gif"
-  SLEEP = "sleep.gif"
+ALL_DOTS = [(col, row) for row in range(GRID_ROWS) for col in range(GRID_COLS)]
+
+def draw_dot_grid(rect: rl.Rectangle, animation: Animation, color: rl.Color = None):
+  if color is None:
+    color = rl.WHITE
+
+  now = time.monotonic()
+  num_frames = len(animation.frames)
+
+  if num_frames == 1:
+    frame_index = 0
+  else:
+    forward_duration = num_frames * animation.frame_duration
+    no_backward = animation.hold_end < 0
+
+    if no_backward:
+      cycle_duration = forward_duration
+    else:
+      backward_frames = max(num_frames - 2, 0)
+      backward_duration = backward_frames * animation.frame_duration
+      cycle_duration = forward_duration + animation.hold_end + backward_duration
+
+    if animation.animation_frequency > 0:
+      elapsed = now % animation.animation_frequency
+    else:
+      elapsed = now % cycle_duration
+
+    if elapsed < forward_duration:
+      # Playing forward
+      frame_index = min(int(elapsed / animation.frame_duration), num_frames - 1)
+    elif no_backward:
+      # No backward, hold last frame
+      frame_index = num_frames - 1
+    elif elapsed < forward_duration + animation.hold_end:
+      # Holding last frame
+      frame_index = num_frames - 1
+    elif elapsed < forward_duration + animation.hold_end + backward_duration:
+      # Playing backward (excluding first and last frame)
+      backward_elapsed = elapsed - forward_duration - animation.hold_end
+      backward_index = min(int(backward_elapsed / animation.frame_duration), backward_frames - 1)
+      frame_index = num_frames - 2 - backward_index
+    else:
+      # Hold first frame for remainder
+      frame_index = 0
+
+  dots = animation.frames[frame_index]
+
+  spacing = (rect.height) / (GRID_ROWS)
+
+  # Total size of the grid from first to last dot center
+  grid_w = (GRID_COLS - 1) * spacing
+  grid_h = (GRID_ROWS - 1) * spacing
+
+  # Center horizontally, keep vertical centering
+  offset_x = rect.x + (rect.width - grid_w) / 2
+  offset_y = rect.y + (rect.height - grid_h) / 2
+
+  for row, col in dots:
+    x = int(offset_x + col * spacing)
+    y = int(offset_y + row * spacing)
+    rl.draw_circle(x, y, RADIUS, color)
 
 class BodyLayout(Widget):
-  def __init__(self, anim: BodyAnim):
+  def __init__(self):
     super().__init__()
     self._setup_widget = type('', (), {'set_open_settings_callback': lambda self, cb: None})()
-    self._frame_count = 0
-    self._current_frame = 0
-    self._last_frame_time = 0.0
-    self._next_cycle_time = 0.0
-    self._animating = True
-    self._texture = None
-    self._image = None
-    self._frame_size = 0
-
-    self._load_gif(os.path.join(BODY_ASSETS, anim.value))
 
   def set_settings_callback(self, callback):
     pass
 
-
-  def _load_gif(self, gif_path: str):
-    frames_ptr = rl.ffi.new('int *')
-    self._image = rl.load_image_anim(gif_path, frames_ptr)
-    self._frame_count = frames_ptr[0]
-
-    # Each frame: width * height * 4 bytes (RGBA)
-    self._frame_size = self._image.width * self._image.height * 4
-
-    self._texture = rl.load_texture_from_image(self._image)
-    rl.set_texture_filter(self._texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
-    self._last_frame_time = time.monotonic()
-
   def _render(self, rect: rl.Rectangle):
     rl.clear_background(rl.BLACK)
-
-    now = time.monotonic()
-
-    # Start a new animation cycle every CYCLE_INTERVAL
-    if not self._animating and now >= self._next_cycle_time:
-      self._animating = True
-      self._current_frame = 0
-      self._last_frame_time = now
-      # Update texture to first frame
-      rl.update_texture(self._texture, self._image.data)
-
-    # Advance frames while animating
-    if self._animating and now - self._last_frame_time >= FRAME_DELAY:
-      self._current_frame += 1
-      self._last_frame_time = now
-
-      if self._current_frame >= self._frame_count:
-        # Animation complete, wait for next cycle
-        self._current_frame = 0
-        self._animating = False
-        self._next_cycle_time = now + CYCLE_INTERVAL
-        rl.update_texture(self._texture, self._image.data)
-      else:
-        offset = self._current_frame * self._frame_size
-        frame_data = rl.ffi.cast("unsigned char *", self._image.data) + offset
-        rl.update_texture(self._texture, frame_data)
-
-    # Draw centered and scaled to fit
-    scale = min(rect.width / self._texture.width, rect.height / self._texture.height)
-    draw_w = self._texture.width * scale
-    draw_h = self._texture.height * scale
-    x = rect.x + (rect.width - draw_w) / 2
-    y = rect.y + (rect.height - draw_h) / 2
-
-    source = rl.Rectangle(0, 0, self._texture.width, self._texture.height)
-    dest = rl.Rectangle(x, y, draw_w, draw_h)
-    rl.draw_texture_pro(self._texture, source, dest, rl.Vector2(0, 0), 0, rl.WHITE)
+    draw_dot_grid(rect, NORMAL)

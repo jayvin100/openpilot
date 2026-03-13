@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from cereal import log
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.selfdrive.ui.layouts.body.body_pairing import BodyPairingScreen
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, FONT_SCALE
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -87,7 +88,7 @@ class BodySidebar(Widget):
     self._open_settings_callback = open_settings
 
   def _render(self, rect: rl.Rectangle):
-    rl.draw_rectangle_rec(rect, rl.Color(30, 30, 30, 0))
+    rl.draw_rectangle_rec(rect, rl.BLACK)
 
     self._draw_settings_button(rect)
     self._draw_network_indicator(rect)
@@ -144,11 +145,16 @@ class BodySidebar(Widget):
         self._on_settings_click()
       return
 
-    # Flag button (top-right)
-    flag_rect = rl.Rectangle(self._rect.x + self._rect.width - 100, self._rect.y + 30, 60, 60)
-    if rl.check_collision_point_rec(mouse_pos, flag_rect) and ui_state.started:
-      if self._on_flag_click:
-        self._on_flag_click()
+    # Pair button
+    text = tr(tr_noop("PAIR"))
+    text_size = measure_text_cached(self._font_extra_bold, text, FONT_SIZE)
+    btn_w = int(text_size.x + 60)
+    btn_h = 117
+    btn_x = int(self._rect.x + self._rect.width - btn_w - 30)
+    btn_y = int(self._rect.y + 30)
+    pair_rect = rl.Rectangle(btn_x, btn_y, btn_w, btn_h)
+    if rl.check_collision_point_rec(mouse_pos, pair_rect):
+      gui_app.push_widget(BodyPairingScreen())
       return
 
     # Mic indicator
@@ -182,7 +188,7 @@ class BodySidebar(Widget):
     pair_pressed = mouse_down and rl.check_collision_point_rec(mouse_pos, pair_rect)
     bg_color = Colors.BUTTON_PRESSED if pair_pressed else Colors.BUTTON_NORMAL
 
-    rl.draw_rectangle_rounded(pair_rect, 0.3, 10, bg_color)
+    rl.draw_rectangle_rounded(pair_rect, 0.5, 10, bg_color)
     text_pos = rl.Vector2(btn_x + (btn_w - text_size.x) / 2, btn_y + (btn_h - text_size.y) / 2)
     rl.draw_text_ex(self._font_extra_bold, text, text_pos, FONT_SIZE, 0, rl.BLACK)
 

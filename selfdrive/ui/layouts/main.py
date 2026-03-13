@@ -3,7 +3,7 @@ from enum import IntEnum
 import cereal.messaging as messaging
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.sidebar import Sidebar, SIDEBAR_WIDTH
-from openpilot.selfdrive.ui.layouts.body.body import BodyAnim, BodyLayout
+from openpilot.selfdrive.ui.layouts.body.body import BodyLayout
 from openpilot.selfdrive.ui.layouts.body.body_sidebar import BodySidebar, BODY_SIDEBAR_HEIGHT
 from openpilot.selfdrive.ui.layouts.home import HomeLayout
 from openpilot.selfdrive.ui.layouts.settings.settings import SettingsLayout, PanelType
@@ -32,7 +32,7 @@ class MainLayout(Widget):
 
     # Initialize layouts
     if self._is_body:
-      self._layouts = {MainState.HOME: BodyLayout(BodyAnim.SLEEP), MainState.SETTINGS: SettingsLayout(), MainState.ONROAD: BodyLayout(BodyAnim.AWAKE)}
+      self._layouts = {MainState.HOME: BodyLayout(), MainState.SETTINGS: SettingsLayout(), MainState.ONROAD: BodyLayout()}
       self._sidebar.set_visible(False)
     else:
       self._layouts = {MainState.HOME: HomeLayout(), MainState.SETTINGS: SettingsLayout(), MainState.ONROAD: AugmentedRoadView()}
@@ -118,10 +118,14 @@ class MainLayout(Widget):
     self._sidebar.set_visible(not self._sidebar.is_visible)
 
   def _render_main_content(self):
-    if self._is_body:
-      # Render body content first so sidebar draws on top (body clears background)
-      content_rect = self._content_rect if self._sidebar.is_visible else self._rect
-      self._layouts[self._current_mode].render(content_rect)
+    if self._is_body: # overlay sidebar but recompute boundaries for proper click events
+      if self._sidebar.is_visible:
+        self._layouts[self._current_mode].set_parent_rect(
+          rl.Rectangle(self._rect.x, self._rect.y + BODY_SIDEBAR_HEIGHT,
+                       self._rect.width, self._rect.height - BODY_SIDEBAR_HEIGHT))
+      else:
+        self._layouts[self._current_mode].set_parent_rect(None)
+      self._layouts[self._current_mode].render(self._rect)
       if self._sidebar.is_visible:
         self._sidebar.render(self._sidebar_rect)
     else:
