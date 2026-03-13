@@ -10,9 +10,10 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.lib.drive_helpers import MIN_SPEED
 
 # thresholds for starting maneuvers
-MAX_SPEED_DEV = 1.0 # deviation in m/s
+MAX_SPEED_DEV = 0.5 # deviation in m/s
 MAX_CURV = 0.002 # 500 m radius
 MAX_ROLL = 0.06 # 3.42°
+TIMER = 1.5 # sec stable conditions before starting maneuver
 
 @dataclass
 class Action:
@@ -43,7 +44,7 @@ class Maneuver:
     ready = abs(v_ego - self.initial_speed) < MAX_SPEED_DEV and lat_active and abs(curvature) < MAX_CURV and abs(roll) < MAX_ROLL
     self._ready_cnt = (self._ready_cnt + 1) if ready else 0
 
-    if self._ready_cnt > (3. / DT_MDL):
+    if self._ready_cnt > (TIMER / DT_MDL):
       if not self._active:
         self._baseline_curvature = curvature
       self._active = True
@@ -160,8 +161,8 @@ def main():
     cur_curvature = sm['controlsState'].curvature
 
     if maneuver is not None:
-      # reset maneuver on steering override
-      if sm['carState'].steeringPressed:
+      # reset maneuver on steering override or out of range speed
+      if sm['carState'].steeringPressed or (maneuver.active and abs(v_ego - maneuver.initial_speed) > MAX_SPEED_DEV):
         maneuver.reset()
 
       roll = sm['carControl'].orientationNED[0] if len(sm['carControl'].orientationNED) == 3 else 0.0
@@ -175,10 +176,10 @@ def main():
         else:
           alert_msg.alertDebug.alertText1 = f'Active {accel:+.1f}m/s² {max(action_remaining, 0):.1f}s'
         alert_msg.alertDebug.alertText2 = maneuver.description
-      elif not (abs(v_ego - maneuver.initial_speed) < 1.0 and sm['carControl'].latActive):
+      elif not (abs(v_ego - maneuver.initial_speed) < MAX_SPEED_DEV and sm['carControl'].latActive):
         alert_msg.alertDebug.alertText1 = f'Set speed to {maneuver.initial_speed * CV.MS_TO_MPH:0.0f} mph'
       else:
-        ready_time = max(3. - maneuver._ready_cnt * DT_MDL, 0)
+        ready_time = max(TIMER - maneuver._ready_cnt * DT_MDL, 0)
         curv_ok = abs(cur_curvature) < MAX_CURV
         roll_ok = abs(roll) < MAX_ROLL
         if curv_ok and roll_ok:

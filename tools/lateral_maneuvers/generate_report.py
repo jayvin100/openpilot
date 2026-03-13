@@ -91,8 +91,8 @@ def report(platform, route, _description, CP, ID, maneuvers):
       else:
         action_targets = [(0, lat_accel(lateralPlan[0].desiredCurvature, carState[0].vEgo) - baseline_accel)]
         for i in range(1, min(len(lateralPlan), len(carState))):
-          desired = lat_accel(lateralPlan[i].desiredCurvature, carState[i].vEgo) - baseline_accel
-          if abs(desired - action_targets[-1][1]) > 0.2:
+          if abs(lateralPlan[i].desiredCurvature - lateralPlan[i - 1].desiredCurvature) > 0.001:
+            desired = lat_accel(lateralPlan[i].desiredCurvature, carState[i].vEgo) - baseline_accel
             action_targets.append((i, desired))
 
         for j, (start_i, act_target) in enumerate(action_targets):
@@ -223,10 +223,5 @@ if __name__ == '__main__':
 
     if active_prev:
       maneuvers[-1][1][-1].append(msg)
-
-  # filter out aborted runs (steering override)
-  for i, (desc, runs) in enumerate(maneuvers):
-    maneuvers[i] = (desc, [r for r in runs if not any(m.carState.steeringPressed for m in r if m.which() == 'carState')])
-  maneuvers = [(desc, runs) for desc, runs in maneuvers if runs]
 
   report(platform, args.route, args.description, CP, ID, maneuvers)
