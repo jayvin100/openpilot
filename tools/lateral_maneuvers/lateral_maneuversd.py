@@ -10,9 +10,9 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.lib.drive_helpers import MIN_SPEED
 
 # thresholds for starting maneuvers
-MAX_SPEED_DEV = 0.5 # deviation in m/s
+MAX_SPEED_DEV = 0.7 # deviation in m/s
 MAX_CURV = 0.002 # 500 m radius
-MAX_ROLL = 0.06 # 3.42°
+MAX_ROLL = 0.08 # 4.56°
 TIMER = 1.5 # sec stable conditions before starting maneuver
 
 @dataclass
