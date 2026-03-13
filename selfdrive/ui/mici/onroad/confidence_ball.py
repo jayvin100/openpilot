@@ -3,22 +3,22 @@ import pyray as rl
 from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.application import gui_app, SCALE
 from openpilot.common.filter_simple import FirstOrderFilter
 
 
 def draw_circle_gradient(center_x: float, center_y: float, radius: int,
                          top: rl.Color, bottom: rl.Color) -> None:
-  # Draw a square with the gradient
-  rl.draw_rectangle_gradient_v(int(center_x - radius), int(center_y - radius),
-                               radius * 2, radius * 2,
-                               top, bottom)
+  # Draw a square with the gradient (pad by 1px to prevent edge artifacts)
+  rl.draw_rectangle_gradient_ex(
+    rl.Rectangle(center_x - radius - 1, center_y - radius - 1, radius * 2 + 2, radius * 2 + 2),
+    top, top, bottom, bottom)
 
   # Paint over square with a ring
-  outer_radius = math.ceil(radius * math.sqrt(2)) + 1
-  rl.draw_ring(rl.Vector2(int(center_x), int(center_y)), radius, outer_radius,
+  outer_radius = math.ceil(radius * math.sqrt(2)) + 2
+  rl.draw_ring(rl.Vector2(center_x, center_y), radius, outer_radius,
                0.0, 360.0,
-               20, rl.BLACK)
+               int(20 * SCALE), rl.BLACK)
 
 
 class ConfidenceBall(Widget):

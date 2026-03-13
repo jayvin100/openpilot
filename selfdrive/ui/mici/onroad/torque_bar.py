@@ -8,7 +8,7 @@ import pyray as rl
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY
 from openpilot.selfdrive.ui.mici.onroad import blend_colors
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
-from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.application import gui_app, SCALE
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -25,10 +25,11 @@ def quantized_lru_cache(maxsize=128):
     @wraps(func)
     def wrapper(cx, cy, r_mid, thickness, a0_deg, a1_deg, **kwargs):
       # Quantize inputs: balanced for smoothness vs cache effectiveness
+      q = int(10 * SCALE)  # finer quantization at higher scale
       key = (round(cx), round(cy), round(r_mid),
-             round(thickness),           # 1px precision for smoother height transitions
-             round(a0_deg * 10) / 10,    # 0.1° precision for smoother angle transitions
-             round(a1_deg * 10) / 10,
+             round(thickness),                 # 1px precision for smoother height transitions
+             round(a0_deg * q) / q,            # 0.1° at 1x, 0.05° at 2x, etc.
+             round(a1_deg * q) / q,
              tuple(sorted(kwargs.items())))
 
       if key in cache:
@@ -44,7 +45,7 @@ def quantized_lru_cache(maxsize=128):
   return decorator
 
 
-@quantized_lru_cache(maxsize=256)
+@quantized_lru_cache(maxsize=512)
 def arc_bar_pts(cx: float, cy: float,
                 r_mid: float, thickness: float,
                 a0_deg: float, a1_deg: float,
