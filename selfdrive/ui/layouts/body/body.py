@@ -14,7 +14,7 @@ RADIUS = 50
 GAZE_MAX_OFFSET = 30.0     # max pixel shift in either direction
 GAZE_SMOOTHING_TAU = 0.15  # exponential smoothing time constant (seconds)
 STEER_SENSITIVITY = 0.6    # pixels of offset per degree of steering angle
-IDLE_TIMEOUT = 15.0        # seconds of no joystick input before playing INQUISITIVE
+IDLE_TIMEOUT = 30.0        # seconds of no joystick input before playing INQUISITIVE
 IDLE_STEER_THRESH = 0.5    # degrees — below this counts as no input
 IDLE_SPEED_THRESH = 0.01   # m/s — below this counts as no input
 
@@ -145,6 +145,7 @@ class BodyLayout(Widget):
     self._animator = FaceAnimator(ASLEEP)
     self._gaze_offset = 0.0
     self._last_input_time = time.monotonic()
+    self._was_active = False
 
   def set_settings_callback(self, callback):
     pass
@@ -153,7 +154,12 @@ class BodyLayout(Widget):
     sm = ui_state.sm
 
     joystick_mode = ui_state.params.get_bool("JoystickDebugMode")
-    if joystick_mode and sm['selfdriveState'].enabled:
+    active = joystick_mode and sm['selfdriveState'].enabled
+    if active:
+      if not self._was_active:
+        self._last_input_time = time.monotonic()
+        self._was_active = True
+
       cs = sm['carState']
       has_input = abs(cs.steeringAngleDeg) > IDLE_STEER_THRESH or abs(cs.vEgo) > IDLE_SPEED_THRESH
       if has_input:
@@ -164,6 +170,7 @@ class BodyLayout(Widget):
       else:
         self._animator.set_animation(NORMAL)
     else:
+      self._was_active = False
       self._animator.set_animation(ASLEEP)
 
     if not sm.updated['carState']:
