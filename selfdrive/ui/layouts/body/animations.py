@@ -112,19 +112,19 @@ NORMAL = Animation(
     _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), BROW_LOWERED, _mirror(BROW_LOWERED), MOUTH_SMILE),
   ],
   left_turn_remove=[
-    (3, 1), (3, 2),
-    (4, 1), (4, 2),
-  ] + _mirror_no_flip([
     (3, 3), (3, 4),
     (4, 3), (4, 4),
+  ] + _mirror_no_flip([
+    (3, 1), (3, 2),
+    (4, 1), (4, 2),
   ]),
   right_turn_remove=[
-    (3, 3), (3, 4),
-    (4, 3), (4, 4),
-  ] + _mirror_no_flip([
     (3, 1), (3, 2),
     (4, 1), (4, 2),
-  ]),
+  ] + _mirror_no_flip([
+    (3, 3), (3, 4),
+    (4, 3), (4, 4),
+  ])
 )
 
 ASLEEP = Animation(
