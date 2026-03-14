@@ -33,12 +33,15 @@ public:
 
 class StreamCameraView : public CameraWidget {
   Q_OBJECT
+  Q_PROPERTY(float overlayOpacity READ overlayOpacity WRITE setOverlayOpacity)
 
 public:
   StreamCameraView(std::string stream_name, VisionStreamType stream_type, QWidget *parent = nullptr);
   void paintGL() override;
   void showPausedOverlay() { fade_animation->start(); }
   void parseQLog(std::shared_ptr<LogReader> qlog);
+  float overlayOpacity() const { return overlay_opacity; }
+  void setOverlayOpacity(float value) { overlay_opacity = value; update(); }
 
 private:
   QPixmap generateThumbnail(QPixmap thumbnail, double seconds);
@@ -48,6 +51,7 @@ private:
   void drawTime(QPainter &p, const QRect &rect, double seconds);
 
   QPropertyAnimation *fade_animation;
+  float overlay_opacity = 0.2f;
   std::map<uint64_t, QPixmap> big_thumbnails;
   std::map<uint64_t, QPixmap> thumbnails;
   double thumbnail_dispaly_time = -1;

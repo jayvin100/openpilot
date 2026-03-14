@@ -1,0 +1,70 @@
+/.directory
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+*.snap
+
+/build*
+/*.user
+
+site/images/
+/PlotJugglerInstaller
+
+# Temp folders for local binary creation
+obj-x86_64-linux-gnu
+debian
+
+# Clion (JetBrains IDE related files and directories)
+.idea
+cmake-build-*
+
+# VSCode
+.vscode
+
+installer/io.plotjuggler.application/data
+*.pyc
+*.swp
+
+# OS X
+.DS_Store
+
+# Cmake files
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Testing
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
+
+# Clangd
+.cache

@@ -81,20 +81,10 @@
  <!-- - - - - - - - - - - - - - - -->
  <!-- - - - - - - - - - - - - - - -->
  <Plugins>
-  <plugin ID="DataLoad CSV">
-   <default delimiter="0" time_axis=""/>
-  </plugin>
   <plugin ID="DataLoad Rlog"/>
-  <plugin ID="DataLoad ULog"/>
   <plugin ID="Cereal Subscriber"/>
-  <plugin ID="UDP Server"/>
-  <plugin ID="ZMQ Subscriber"/>
-  <plugin ID="Fast Fourier Transform"/>
-  <plugin ID="Quaternion to RPY"/>
-  <plugin ID="CSV Exporter"/>
  </Plugins>
  <!-- - - - - - - - - - - - - - - -->
  <!-- - - - - - - - - - - - - - - -->
  <!-- - - - - - - - - - - - - - - -->
 </root>
-

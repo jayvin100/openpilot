@@ -376,7 +376,7 @@ void StreamCameraView::paintGL() {
   }
 
   if (can->isPaused()) {
-    p.setPen(QColor(200, 200, 200, static_cast<int>(255 * fade_animation->currentValue().toFloat())));
+    p.setPen(QColor(200, 200, 200, static_cast<int>(255 * overlay_opacity)));
     p.setFont(QFont(font().family(), 16, QFont::Bold));
     p.drawText(rect(), Qt::AlignCenter, tr("PAUSED"));
   }

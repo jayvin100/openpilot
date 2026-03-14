@@ -35,4 +35,16 @@ fi
 cd "$ROOT"
 scons -j"$(nproc)" tools/cabana/_cabana
 
+if [[ "$(uname)" == "Linux" && -z "${QT_QPA_PLATFORM:-}" && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+  echo "cabana requires a GUI display, but neither DISPLAY nor WAYLAND_DISPLAY is set." >&2
+  echo "Run it from a desktop session, or set up X/Wayland forwarding before starting cabana." >&2
+  exit 1
+fi
+
+if [[ "$(uname)" == "Darwin" ]]; then
+  export DYLD_LIBRARY_PATH="$DIR:${DYLD_LIBRARY_PATH:-}"
+else
+  export LD_LIBRARY_PATH="$DIR:${LD_LIBRARY_PATH:-}"
+fi
+
 exec "$DIR/_cabana" "$@"

@@ -1,15 +1,50 @@
-our goal is to replace PlotJuggler by merging the functionality we use into cabana
-* there's a copy of PlotJuggler in .context/
-* we want to match PlotJuggler's functionality that is used in the layouts/ folder: rlog parsing, plotting, custom functions
-* let's use Qwt for plotting like PJ
-* i want to be able to open my sotred layouts, though you can port them to a differnt format if you like
-* both are Qt apps, so we should start by directly porting the PJ code into cabana, then trimming it down to what we need and making it match our repo style
-* for the ui, we should just have a PJ mode in cabana now that replace two of the three main columns in the ui with the message list from plotjuggler and the plot area. i want to keep the third column from cabana for the video
-  * most of PJ's space is taken up by plots, which is import for the PJ mode. that whole middle area should be plots in our new version
-  * we need drag & drop
+# Cabana PlotJuggler Plan
 
+## Current Focus
+- Keep `cabana --pj` visually close to standalone PlotJuggler for the openpilot layouts we actually use.
+- Preserve Cabana's video dock while avoiding extra Cabana chrome inside PJ mode.
+- Keep the imported PJ subtree easy to validate from a headless CI-style shell.
 
-validation:
-* builds
-* runs without crashing
-* use screenshots to ensure its visually good
+## Validation Flow
+1. Build the binary:
+```bash
+scons -j1 tools/cabana/_cabana
+```
+
+2. Run a headless smoke test with the demo route and a representative layout:
+```bash
+xvfb-run -a timeout 25s tools/cabana/cabana --pj --demo \
+  --pj-layout tools/plotjuggler/layouts/locationd_debug.xml
+```
+
+3. Capture a full-window screenshot and exit cleanly after the grab:
+```bash
+xvfb-run -a bash -lc '
+  export CABANA_PJ_SCREENSHOT=/tmp/cabana_pj.png
+  export CABANA_PJ_SCREENSHOT_EXIT=1
+  export CABANA_PJ_SCREENSHOT_DELAY_MS=22000
+  tools/cabana/cabana --pj --demo \
+    --pj-layout tools/plotjuggler/layouts/locationd_debug.xml
+'
+```
+
+4. Compare the captured image against the standalone PJ reference screenshot:
+```bash
+xdg-open /tmp/cabana_pj.png
+xdg-open /tmp/pj_old_verify.png
+```
+
+5. If window embedding regresses, inspect the X tree while the app is live:
+```bash
+xvfb-run -a bash -lc '
+  export CABANA_PJ_SCREENSHOT=/tmp/cabana_pj_probe.png
+  export CABANA_PJ_SCREENSHOT_EXIT=1
+  export CABANA_PJ_SCREENSHOT_DELAY_MS=5000
+  tools/cabana/cabana --pj --demo \
+    --pj-layout tools/plotjuggler/layouts/locationd_debug.xml &
+  pid=$!
+  sleep 3
+  xwininfo -root -tree
+  wait "$pid"
+'
+```

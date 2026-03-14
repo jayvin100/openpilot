@@ -18,7 +18,8 @@ class ReplayStream : public AbstractStream {
 public:
   ReplayStream(QObject *parent);
   void start() override { replay->start(); }
-  bool loadRoute(const std::string &route, const std::string &data_dir, uint32_t replay_flags = REPLAY_FLAG_NONE, bool auto_source = false);
+  bool loadRoute(const std::string &route, const std::string &data_dir, uint32_t replay_flags = REPLAY_FLAG_NONE, bool auto_source = false,
+                 bool all_services = false);
   bool eventFilter(const Event *event);
   void seekTo(double ts) override { replay->seekTo(std::max(double(0), ts), false); }
   bool liveStreaming() const override { return false; }

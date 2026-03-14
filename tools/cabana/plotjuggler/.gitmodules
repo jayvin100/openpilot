@@ -1,0 +1,3 @@
+[submodule "3rdparty/openpilot"]
+	path = 3rdparty/openpilot
+	url = https://github.com/commaai/openpilot
