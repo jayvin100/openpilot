@@ -573,15 +573,14 @@ def startJoystickStream(sdp: str) -> dict:
   from openpilot.system.webrtc.webrtcd import StreamRequestBody
   Params().put_bool("JoystickDebugMode", True)
   body = StreamRequestBody(sdp, ["driver", "wideRoad", "road"], ["testJoystick"], ["carState"])
-  resp = requests.post(f"http://localhost:{WEBRTCD_PORT}/stream",
+  try:
+    resp = requests.post(f"http://localhost:{WEBRTCD_PORT}/stream",
                        json=asdict(body), timeout=10)
-  if not resp.ok:
-    try:
-      error_body = resp.json()
-      raise Exception(error_body.get("message", f"webrtcd returned {resp.status_code}"))
-    except ValueError:
-      resp.raise_for_status()
-  return resp.json()
+    return resp.json()
+  except requests.ConnectTimeout:
+    raise Exception("webrtc took too long to respond. is it on?")
+  except requests.ConnectionError:
+    raise Exception("webrtc is not running. turn on comma body ignition.")
 
 
 @dispatcher.add_method
