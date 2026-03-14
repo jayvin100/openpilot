@@ -331,9 +331,15 @@ lua_root = plotjuggler_root / '3rdparty/lua-5.4.3/src'
 lua_cpp = [path for path in walk_files(lua_root, {'.c'}) if path.name not in {'lua.c', 'luac.c'}]
 
 base_root = plotjuggler_root / 'plotjuggler_base'
-base_cpp = walk_files(base_root / 'src', {'.cpp'})
+base_cpp = [
+  path for path in walk_files(base_root / 'src', {'.cpp'})
+  if path.name not in {'datastreamer_base.cpp'}
+]
 base_headers = walk_files(base_root / 'src', {'.h'})
-base_headers += walk_files(base_root / 'include/PlotJuggler', {'.h'}, recursive=True)
+base_headers += [
+  path for path in walk_files(base_root / 'include/PlotJuggler', {'.h'}, recursive=True)
+  if path.name not in {'dataloader_base.h', 'datastreamer_base.h', 'statepublisher_base.h'}
+]
 base_headers += walk_files(base_root / 'include/PlotJuggler', {'.hpp'}, recursive=True)
 
 app_root = plotjuggler_root / 'plotjuggler_app'
@@ -369,6 +375,10 @@ plotjuggler_app_core = build_static_library(
   app_headers,
   qrc_files=[app_root / 'resource.qrc'],
   cppdefines=pj_version_defs)
+plotjuggler_toolbox_lua_editor = build_static_library(
+  'plotjuggler_toolbox_lua_editor',
+  [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.cpp'],
+  [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.h'])
 
 cabana_plotjuggler = build_shared_library(
   'cabana_plotjuggler',
@@ -376,6 +386,7 @@ cabana_plotjuggler = build_shared_library(
   [plotjuggler_root / 'cabana_plotjuggler_widget.h'],
   [
     plotjuggler_app_core,
+    plotjuggler_toolbox_lua_editor,
     plotjuggler_openpilot_common,
     qt_advanced_docking,
     qcodeeditor,
@@ -385,26 +396,6 @@ cabana_plotjuggler = build_shared_library(
   ] + pj_common_link_libs + pj_platform_libs,
   cppdefines=pj_version_defs,
   linkflags=['-Wl,-Bsymbolic-functions'] if arch != "Darwin" else [])
-
-data_load_rlog = build_shared_library(
-  'DataLoadRlog',
-  [plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog/dataload_rlog.cpp'],
-  [plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog/dataload_rlog.hpp'],
-  [plotjuggler_openpilot_common, plotjuggler_base, plotjuggler_qwt, lua_static] +
-  pj_common_link_libs + ['bz2'])
-
-data_stream_cereal = build_shared_library(
-  'DataStreamCereal',
-  [plotjuggler_root / 'plotjuggler_plugins/DataStreamCereal/datastream_cereal.cpp'],
-  [plotjuggler_root / 'plotjuggler_plugins/DataStreamCereal/datastream_cereal.h'],
-  [plotjuggler_openpilot_common, plotjuggler_base, plotjuggler_qwt, lua_static, cereal, common,
-   messaging] + pj_common_link_libs + ['ssl', 'crypto', 'pthread'])
-
-toolbox_lua_editor = build_shared_library(
-  'ToolboxLuaEditor',
-  [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.cpp'],
-  [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.h'],
-  [plotjuggler_base, plotjuggler_qwt, lua_static, qcodeeditor])
 
 cabana_libs = [cereal, messaging, visionipc, replay_lib, 'avformat', 'avcodec', 'swresample',
                'avutil', 'x264', 'z', 'bz2', 'zstd', 'yuv', '-lusb-1.0'] + base_libs
@@ -434,7 +425,6 @@ cabana_lib = cabana_env.Library("cabana_lib", cabana_srcs, LIBS=cabana_libs,
 cabana_program = cabana_env.Program('_cabana', ['cabana.cc', cabana_lib, assets],
                                     LIBS=cabana_libs + [cabana_plotjuggler],
                                     FRAMEWORKS=base_frameworks)
-cabana_env.Depends(cabana_program, [data_load_rlog, data_stream_cereal, toolbox_lua_editor])
 
 if GetOption('extras'):
   cabana_env.Program('tests/test_cabana', ['tests/test_runner.cc', 'tests/test_cabana.cc', cabana_lib],

@@ -797,7 +797,6 @@ QWidget#leftMainWindowFrame
 }
 
 QWidget#widgetLabelLoad,
-QWidget#widgetLabelStreaming,
 QWidget#widgetLabelTimeseries
 {
     background-color: #2a2a2a;
@@ -805,14 +804,12 @@ QWidget#widgetLabelTimeseries
 }
 
 QWidget#widgetLabelLoad QLabel,
-QWidget#widgetLabelStreaming QLabel,
 QWidget#widgetLabelTimeseries QLabel
 {
     color: #FFFFFF;
 }
 
-QPushButton#buttonHideFileFrame,
-QPushButton#buttonHideStreamingFrame {
+QPushButton#buttonHideFileFrame {
     color: #FFFFFF;
     background-color: transparent;
 }

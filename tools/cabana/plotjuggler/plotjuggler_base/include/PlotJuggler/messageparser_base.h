@@ -15,7 +15,6 @@
 #include <map>
 #include <set>
 #include "PlotJuggler/plotdata.h"
-#include "PlotJuggler/pj_plugin.h"
 
 namespace PJ
 {
@@ -129,30 +128,4 @@ private:
 
 using MessageParserPtr = std::shared_ptr<MessageParser>;
 
-//------------- This is the actual plugin interface --------------
-class ParserFactoryPlugin : public PlotJugglerPlugin
-{
-public:
-  using Ptr = std::shared_ptr<ParserFactoryPlugin>;
-
-  // provide an identifier of the provided encoding.
-  // example "ros1", "ros2", "json", "protobuf", etc.
-  virtual const char* encoding() const = 0;
-
-  // create an instance of MessageParser, already configured to
-  // decode a specific schema.
-  virtual MessageParserPtr createParser(const std::string& topic_name,
-                                        const std::string& type_name,
-                                        const std::string& schema,
-                                        PlotDataMapRef& data) = 0;
-};
-
-using ParserFactories = std::map<QString, std::shared_ptr<ParserFactoryPlugin>>;
-
-
 }  // namespace PJ
-
-QT_BEGIN_NAMESPACE
-#define ParserFactoryPlugin_iid "facontidavide.PlotJuggler3.ParserFactoryPlugin"
-Q_DECLARE_INTERFACE(PJ::ParserFactoryPlugin, ParserFactoryPlugin_iid)
-QT_END_NAMESPACE

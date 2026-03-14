@@ -1,7 +1,6 @@
 #ifndef LUA_EDITOR_H
 #define LUA_EDITOR_H
 
-#include <QtPlugin>
 #include <QListWidgetItem>
 #include <map>
 #include "PlotJuggler/toolbox_base.h"
@@ -21,8 +20,6 @@ class LuaEditor;
 class ToolboxLuaEditor : public PJ::ToolboxPlugin
 {
   Q_OBJECT
-  Q_PLUGIN_METADATA(IID "facontidavide.PlotJuggler3.Toolbox")
-  Q_INTERFACES(PJ::ToolboxPlugin)
 
 public:
   ToolboxLuaEditor();

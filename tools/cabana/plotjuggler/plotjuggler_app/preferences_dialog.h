@@ -25,12 +25,6 @@ public:
 private slots:
   void on_buttonBox_accepted();
 
-  void on_pushButtonAdd_clicked();
-
-  void on_pushButtonRemove_clicked();
-
-  void on_listWidgetCustom_itemSelectionChanged();
-
 private:
   Ui::PreferencesDialog* ui;
 };

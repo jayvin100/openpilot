@@ -11,37 +11,36 @@
 #include <deque>
 #include <functional>
 
-#include <QCommandLineParser>
 #include <QElapsedTimer>
 #include <QMainWindow>
-#include <QPushButton>
-#include <QSignalMapper>
-#include <QShortcut>
 #include <QMovie>
+#include <QPushButton>
+#include <QShortcut>
 
 #include "plotwidget.h"
 #include "plot_docker.h"
 #include "curvelist_panel.h"
 #include "tabbedplotwidget.h"
-#include "realslider.h"
-#include "utils.h"
-#include "PlotJuggler/dataloader_base.h"
-#include "PlotJuggler/statepublisher_base.h"
-#include "PlotJuggler/toolbox_base.h"
-#include "PlotJuggler/datastreamer_base.h"
 #include "PlotJuggler/util/delayed_callback.hpp"
+#include "PlotJuggler/toolbox_base.h"
+#include "realslider.h"
 #include "transforms/custom_function.h"
 #include "transforms/function_editor.h"
+#include "utils.h"
 
 #include "ui_mainwindow.h"
+
+struct MainWindowConfig
+{
+  QString window_title;
+};
 
 class MainWindow : public QMainWindow
 {
   Q_OBJECT
 
 public:
-  explicit MainWindow(const QCommandLineParser& commandline_parser,
-                      QWidget* parent = nullptr);
+  explicit MainWindow(const MainWindowConfig& config = {}, QWidget* parent = nullptr);
 
   ~MainWindow();
 
@@ -53,12 +52,6 @@ public:
   void setExternalPlaybackPaused(bool paused);
 
   bool loadLayoutFromFile(QString filename);
-  bool loadDataFromFiles(QStringList filenames);
-  std::unordered_set<std::string> loadDataFromFile(const FileLoadInfo& info);
-
-  void stopStreamingPlugin();
-  void startStreamingPlugin(QString streamer_name);
-  void enableStreamingNotificationsButton(bool enabled);
 
 public slots:
 
@@ -67,16 +60,6 @@ public slots:
   void onUndoableChange();
   void onUndoInvoked();
   void onRedoInvoked();
-
-  // Actions in UI
-  void on_streamingToggled();
-
-  void on_buttonStreamingPause_toggled(bool paused);
-  void on_buttonStreamingNotifications_clicked(bool checked = false);
-
-  void on_streamingSpinBox_valueChanged(int value);
-
-  void on_comboStreaming_currentIndexChanged(const QString& current_text);
 
   void on_splitterMoved(int, int);
 
@@ -118,7 +101,6 @@ private:
   QShortcut _undo_shortcut;
   QShortcut _redo_shortcut;
   QShortcut _fullscreen_shortcut;
-  QShortcut _streaming_shortcut;
   QShortcut _playback_shotcut;
 
   bool _minimized;
@@ -128,33 +110,14 @@ private:
   PlotDataMapRef _mapped_plot_data;
 
   TransformsMap _transform_functions;
-
-  std::map<QString, DataLoaderPtr> _data_loader;
-  std::map<QString, StatePublisherPtr> _state_publisher;
-  std::map<QString, DataStreamerPtr> _data_streamer;
   std::map<QString, ToolboxPluginPtr> _toolboxes;
-
-  QString _default_streamer;
-
-  ParserFactories _parser_factories;
-
-  std::shared_ptr<DataStreamer> _active_streamer_plugin;
 
   std::deque<QDomDocument> _undo_states;
   std::deque<QDomDocument> _redo_states;
   QElapsedTimer _undo_timer;
   bool _disable_undo_logging;
 
-  bool _test_option;
-
-  bool _autostart_publishers;
-
   double _tracker_time;
-
-  QStringList _enabled_plugins;
-  QStringList _disabled_plugins;
-
-  std::vector<FileLoadInfo> _loaded_datafiles;
   CurveTracker::Parameter _tracker_param;
 
   std::map<CurveTracker::Parameter, QIcon> _tracker_button_icons;
@@ -182,13 +145,14 @@ private:
   LabelStatus _labels_status;
   bool _embedded_mode;
 
-  QMenu* _recent_data_files;
+  QMenu* _tools_menu = nullptr;
   QMenu* _recent_layout_files;
 
   QString _current_theme = "light";
 
   void initializeActions();
-  QStringList initializePlugins(QString subdir_name);
+  void initializeEmbeddedToolboxes();
+  void addToolbox(ToolboxPluginPtr toolbox);
 
   void forEachWidget(std::function<void(PlotWidget*, PlotDocker*, int)> op);
   void forEachWidget(std::function<void(PlotWidget*)> op);
@@ -202,8 +166,6 @@ private:
 
   void importPlotDataMap(PlotDataMapRef& new_data, bool remove_old);
 
-  bool isStreamingActive() const;
-
   void closeEvent(QCloseEvent* event);
 
   void loadPluginState(const QDomElement& root);
@@ -213,15 +175,12 @@ private:
 
   void deleteAllData();
 
-  void updateRecentDataMenu(QStringList new_filenames);
   void updateRecentLayoutMenu(QStringList new_filenames);
 
   void updatedDisplayTime();
 
   void updateTimeSlider();
   void updateTimeOffset();
-
-  void buildDummyData();
 
   void loadStyleSheet(QString file_path);
   void applyTheme(const QString& theme);
@@ -236,15 +195,12 @@ private:
 
 public slots:
 
-  void on_actionClearRecentData_triggered(bool checked = false);
   void on_actionClearRecentLayout_triggered(bool checked = false);
 
   void on_actionDeleteAllData_triggered(bool checked = false);
   void on_actionClearBuffer_triggered(bool checked = false);
 
   void on_deleteSerieFromGroup(std::string group_name);
-
-  void on_streamingNotificationsChanged(int active_notifications_count);
 
   void onActionFullscreenTriggered();
 
@@ -257,8 +213,6 @@ public slots:
   void on_pushButtonTimeTracker_pressed();
   void on_pushButtonRemoveTimeOffset_toggled(bool checked);
 
-  void on_buttonStreamingStart_clicked(bool checked = false);
-
 private slots:
   void on_stylesheetChanged(QString style_name);
   void on_actionPreferences_triggered(bool checked = false);
@@ -267,19 +221,14 @@ private slots:
   void on_pushButtonLegend_clicked(bool checked = false);
   void on_pushButtonZoomOut_clicked(bool checked = false);
 
-  void on_buttonStreamingOptions_clicked(bool checked = false);
   void on_buttonHideFileFrame_clicked(bool checked = false);
-  void on_buttonHideStreamingFrame_clicked(bool checked = false);
 
-  void on_buttonRecentData_clicked(bool checked = false);
   void on_buttonRecentLayout_clicked(bool checked = false);
   void on_pushButtonLoadLayout_clicked(bool checked = false);
   void on_pushButtonSaveLayout_clicked(bool checked = false);
-  void on_pushButtonLoadDatafile_clicked(bool checked = false);
 
 private:
   QStringList readAllCurvesFromXML(QDomElement root_node);
-  void loadAllPlugins(QStringList command_line_plugin_folders);
 };
 
 class PopupMenu : public QMenu

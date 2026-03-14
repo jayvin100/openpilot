@@ -1,6 +1,5 @@
 #include "cabana_plotjuggler_widget.h"
 
-#include <QCommandLineParser>
 #include <QFutureWatcher>
 #include <QSizePolicy>
 #include <QTimer>
@@ -43,20 +42,6 @@ void initPlotJugglerTransforms() {
   PJ::TransformFactory::registerTransform<IntegralTransform>();
   PJ::TransformFactory::registerTransform<AbsoluteTransform>();
   initialized = true;
-}
-
-void initPlotJugglerParser(QCommandLineParser *parser) {
-  parser->addOption(QCommandLineOption(QStringList{"t", "test"}, "Generate test curves at startup"));
-  parser->addOption(QCommandLineOption(QStringList{"d", "datafile"}, "Load a data file", "file_path"));
-  parser->addOption(QCommandLineOption(QStringList{"l", "layout"}, "Load a layout", "file_path"));
-  parser->addOption(QCommandLineOption(QStringList{"p", "publish"}, "Autostart publishers"));
-  parser->addOption(QCommandLineOption(QStringList{"plugin_folders"}, "Extra plugin folders", "directory_paths"));
-  parser->addOption(QCommandLineOption(QStringList{"buffer_size"}, "Streaming buffer size", "seconds"));
-  parser->addOption(QCommandLineOption(QStringList{"enabled_plugins"}, "Enabled plugins", "name_list"));
-  parser->addOption(QCommandLineOption(QStringList{"disabled_plugins"}, "Disabled plugins", "name_list"));
-  parser->addOption(QCommandLineOption(QStringList{"start_streamer"}, "Start a streaming plugin", "file_name"));
-  parser->addOption(QCommandLineOption(QStringList{"window_title"}, "Window title", "window_title"));
-  parser->parse(QStringList{QStringLiteral("cabana-plotjuggler")});
 }
 
 struct SegmentTask {
@@ -108,9 +93,7 @@ public:
     initPlotJugglerResources();
     initPlotJugglerTransforms();
     qApp->setProperty("PlotJugglerEmbedded", true);
-    QCommandLineParser parser;
-    initPlotJugglerParser(&parser);
-    pj_window = new MainWindow(parser, parent);
+    pj_window = new MainWindow({}, parent);
     pj_window->setParent(parent, Qt::Widget);
     pj_window->setWindowFlag(Qt::Widget, true);
     pj_window->setWindowFlag(Qt::Window, false);
