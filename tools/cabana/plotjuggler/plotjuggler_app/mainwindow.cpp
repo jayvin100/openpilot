@@ -54,8 +54,6 @@
 #include "multifile_prefix.h"
 
 #include "preferences_dialog.h"
-#include "nlohmann_parsers.h"
-#include "colormap_editor.h"
 
 #ifdef COMPILED_WITH_CATKIN
 
@@ -214,8 +212,6 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
 
   initializeActions();
 
-  LoadColorMapFromSettings();
-
   //------------ Load plugins -------------
   auto plugin_extra_folders =
       commandline_parser.value("plugin_folders").split(";", Qt::SkipEmptyParts);
@@ -340,19 +336,6 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
     theme = "light";
   }
   loadStyleSheet(tr(":/resources/stylesheet_%1.qss").arg(theme));
-
-  // builtin messageParsers
-  auto json_parser = std::make_shared<JSON_ParserFactory>();
-  _parser_factories.insert({ json_parser->encoding(), json_parser });
-
-  auto cbor_parser = std::make_shared<CBOR_ParserFactory>();
-  _parser_factories.insert({ cbor_parser->encoding(), cbor_parser });
-
-  auto bson_parser = std::make_shared<BSON_ParserFactory>();
-  _parser_factories.insert({ bson_parser->encoding(), bson_parser });
-
-  auto msgpack = std::make_shared<MessagePack_ParserFactory>();
-  _parser_factories.insert({ msgpack->encoding(), msgpack });
 
   if (!_default_streamer.isEmpty())
   {
@@ -2188,18 +2171,6 @@ bool MainWindow::loadLayoutFromFile(QString filename)
     _curvelist_widget->refreshColumns();
   }
 
-  auto colormaps = root.firstChildElement("colorMaps");
-
-  if (!colormaps.isNull())
-  {
-    for (auto colormap = colormaps.firstChildElement("colorMap");
-         colormap.isNull() == false; colormap = colormap.nextSiblingElement("colorMap"))
-    {
-      QString name = colormap.attribute("name");
-      ColorMapLibrary()[name]->setScrip(colormap.text());
-    }
-  }
-
   QByteArray snippets_saved_xml =
       settings.value("AddCustomPlotDialog.savedXML", QByteArray()).toByteArray();
 
@@ -3022,7 +2993,7 @@ void MainWindow::on_pushButtonSaveLayout_clicked(bool)
   checkbox_datasource->setChecked(
       settings.value("MainWindow.saveLayoutDataSource", true).toBool());
 
-  auto checkbox_snippets = new QCheckBox("Save Scripts (transforms and colormaps)");
+  auto checkbox_snippets = new QCheckBox("Save Scripts (transforms)");
   checkbox_snippets->setToolTip("Do you want the layout to save your Lua scripts?");
   checkbox_snippets->setFocusPolicy(Qt::NoFocus);
   checkbox_snippets->setChecked(
@@ -3118,17 +3089,6 @@ void MainWindow::on_pushButtonSaveLayout_clicked(bool)
     auto snipped_saved = GetSnippetsFromXML(snippets_xml_text);
     auto snippets_root = ExportSnippets(snipped_saved, doc);
     root.appendChild(snippets_root);
-
-    QDomElement color_maps = doc.createElement("colorMaps");
-    for (const auto& it : ColorMapLibrary())
-    {
-      QString colormap_name = it.first;
-      QDomElement colormap = doc.createElement("colorMap");
-      QDomText colormap_script = doc.createTextNode(it.second->script());
-      colormap.setAttribute("name", colormap_name);
-      colormap.appendChild(colormap_script);
-      color_maps.appendChild(colormap);
-    }
   }
   root.appendChild(doc.createComment(" - - - - - - - - - - - - - - "));
   //------------------------------------
@@ -3448,10 +3408,4 @@ QStringList MainWindow::readAllCurvesFromXML(QDomElement root_node)
   recursiveXmlStream(0, root_node);
 
   return curves.values();
-}
-
-void MainWindow::on_actionColorMap_Editor_triggered(bool)
-{
-  ColorMapEditor dialog;
-  dialog.exec();
 }

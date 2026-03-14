@@ -176,9 +176,7 @@ pj_include_dirs = [
   plotjuggler_root / '3rdparty/QCodeEditor/include',
   plotjuggler_root / '3rdparty/Qt-Advanced-Docking/include',
   plotjuggler_root / '3rdparty/Qt-Advanced-Docking/include/Qads',
-  plotjuggler_root / '3rdparty/color_widgets/include',
   plotjuggler_root / '3rdparty/lua-5.4.3/src',
-  plotjuggler_root / '3rdparty/nlohmann',
   plotjuggler_root / '3rdparty/qwt/src',
   plotjuggler_root / '3rdparty/sol',
   plotjuggler_root / 'plotjuggler_app',
@@ -317,10 +315,6 @@ qwt_root = plotjuggler_root / '3rdparty/qwt/src'
 qwt_cpp = [path for path in walk_files(qwt_root, {'.cpp'}) if path.name != 'qwt_plot_glcanvas.cpp']
 qwt_headers = [path for path in walk_files(qwt_root, {'.h'}) if path.name != 'qwt_plot_glcanvas.h']
 
-colorwidgets_root = plotjuggler_root / '3rdparty/color_widgets'
-colorwidgets_cpp = walk_files(colorwidgets_root / 'src', {'.cpp'})
-colorwidgets_headers = walk_files(colorwidgets_root / 'include', {'.hpp'})
-
 qcodeeditor_root = plotjuggler_root / '3rdparty/QCodeEditor'
 qcodeeditor_cpp = walk_files(qcodeeditor_root / 'src/internal', {'.cpp'})
 qcodeeditor_headers = walk_files(qcodeeditor_root / 'include', {'', '.hpp'}, recursive=True)
@@ -347,11 +341,6 @@ app_cpp = walk_files(app_root, {'.cpp'}, recursive=True, exclude_names={'main.cp
 app_headers = walk_files(app_root, {'.h'}, recursive=True)
 
 plotjuggler_qwt = build_static_library('plotjuggler_qwt', qwt_cpp, qwt_headers)
-colorwidgets = build_static_library(
-  'colorwidgets',
-  colorwidgets_cpp,
-  colorwidgets_headers,
-  qrc_files=[colorwidgets_root / 'src/color_widgets.qrc'])
 qcodeeditor = build_static_library(
   'QCodeEditor',
   qcodeeditor_cpp,
@@ -388,7 +377,6 @@ cabana_plotjuggler = build_shared_library(
   [
     plotjuggler_app_core,
     plotjuggler_openpilot_common,
-    colorwidgets,
     qt_advanced_docking,
     qcodeeditor,
     plotjuggler_base,

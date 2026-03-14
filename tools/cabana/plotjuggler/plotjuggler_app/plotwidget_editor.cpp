@@ -28,8 +28,6 @@ PlotwidgetEditor::PlotwidgetEditor(PlotWidget* plotwidget, QWidget* parent)
 
   //  setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
 
-  setupColorWidget();
-
   QDomDocument doc;
   auto saved_state = plotwidget->xmlSaveState(doc);
 
@@ -135,35 +133,6 @@ void PlotwidgetEditor::onColorChanged(QColor c)
   }
 }
 
-void PlotwidgetEditor::setupColorWidget()
-{
-  auto wheel_layout = new QVBoxLayout();
-  wheel_layout->setMargin(0);
-  wheel_layout->setSpacing(5);
-  ui->widgetWheel->setLayout(wheel_layout);
-  _color_wheel = new color_widgets::ColorWheel(this);
-  wheel_layout->addWidget(_color_wheel);
-
-  _color_preview = new color_widgets::ColorPreview(this);
-  _color_preview->setMaximumHeight(25);
-
-  wheel_layout->addWidget(_color_preview);
-
-  connect(_color_wheel, &color_widgets::ColorWheel::colorChanged, this,
-          &PlotwidgetEditor::onColorChanged);
-
-  connect(_color_wheel, &color_widgets::ColorWheel::colorChanged, _color_preview,
-          &color_widgets::ColorPreview::setColor);
-
-  connect(_color_wheel, &color_widgets::ColorWheel::colorChanged, this,
-          [this](QColor col) {
-            QSignalBlocker block(ui->editColotText);
-            ui->editColotText->setText(col.name());
-          });
-
-  _color_wheel->setColor(Qt::blue);
-}
-
 void PlotwidgetEditor::onDeleteRow(QWidget* w)
 {
   int row_count = ui->listWidget->count();
@@ -192,8 +161,6 @@ void PlotwidgetEditor::onDeleteRow(QWidget* w)
 void PlotwidgetEditor::disableWidgets()
 {
   ui->widgetColor->setEnabled(false);
-  _color_wheel->setEnabled(false);
-  _color_preview->setEnabled(false);
 
   ui->frameLimits->setEnabled(false);
   ui->frameStyle->setEnabled(false);
@@ -271,8 +238,6 @@ void PlotwidgetEditor::on_editColotText_textChanged(const QString& text)
   if (text.size() == 7 && text[0] == '#' && QColor::isValidColor(text))
   {
     QColor col(text);
-    _color_wheel->setColor(col);
-    _color_preview->setColor(col);
   }
 }
 

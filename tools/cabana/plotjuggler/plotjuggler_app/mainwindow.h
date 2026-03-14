@@ -278,8 +278,6 @@ private slots:
   void on_pushButtonSaveLayout_clicked(bool checked = false);
   void on_pushButtonLoadDatafile_clicked(bool checked = false);
 
-  void on_actionColorMap_Editor_triggered(bool checked = false);
-
 private:
   QStringList readAllCurvesFromXML(QDomElement root_node);
   void loadAllPlugins(QStringList command_line_plugin_folders);

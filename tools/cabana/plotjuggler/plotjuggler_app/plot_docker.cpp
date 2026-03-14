@@ -300,9 +300,6 @@ DockWidget::DockWidget(PlotDataMapRef& datamap, QWidget* parent)
   connect(_toolbar->buttonSplitVertical(), &QPushButton::clicked, this,
           &DockWidget::splitVertical);
 
-  connect(_toolbar, &DockToolbar::backgroundColorRequest, _plot_widget,
-          &PlotWidget::onBackgroundColorRequest);
-
   connect(_plot_widget, &PlotWidget::splitHorizontal, this, &DockWidget::splitHorizontal);
 
   connect(_plot_widget, &PlotWidget::splitVertical, this, &DockWidget::splitVertical);

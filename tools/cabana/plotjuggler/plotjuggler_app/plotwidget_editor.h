@@ -10,8 +10,6 @@
 #include <QDialog>
 #include <QKeyEvent>
 #include "plotwidget.h"
-#include "color_wheel.hpp"
-#include "color_preview.hpp"
 #include "PlotJuggler/transform_function.h"
 
 namespace Ui
@@ -87,15 +85,12 @@ private slots:
 private:
   Ui::PlotWidgetEditor* ui;
 
-  color_widgets::ColorWheel* _color_wheel;
-  color_widgets::ColorPreview* _color_preview;
   PlotWidget* _plotwidget;
   PlotWidget* _plotwidget_origin;
   QRectF _bounding_rect_original;
 
   std::set<QWidget*> _connected_transform_widgets;
 
-  void setupColorWidget();
   void setupTable();
   void updateLimits();
   void onDeleteRow(QWidget* w);

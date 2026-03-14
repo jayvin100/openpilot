@@ -26,12 +26,9 @@
 
 #include "PlotJuggler/plotwidget_base.h"
 #include "customtracker.h"
-#include "colormap_editor.h"
 
 #include "transforms/transform_selector.h"
 #include "transforms/custom_function.h"
-
-#include "plot_background.h"
 
 class StatisticsDialog;
 
@@ -138,8 +135,6 @@ public slots:
 
   void onFlipAxis();
 
-  void onBackgroundColorRequest(QString name);
-
   void onShowDataStatistics();
 
 private slots:
@@ -185,8 +180,6 @@ private:
   QwtPlotGrid* _grid;
 
   QString _statistics_window_title = "";
-
-  std::unique_ptr<BackgroundColorItem> _background_item;
 
   bool _use_date_time_scale;
 

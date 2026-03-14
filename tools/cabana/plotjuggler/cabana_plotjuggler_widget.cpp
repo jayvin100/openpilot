@@ -26,7 +26,6 @@ void initPlotJugglerResources() {
   if (initialized) return;
 
   Q_INIT_RESOURCE(resource);
-  Q_INIT_RESOURCE(color_widgets);
   Q_INIT_RESOURCE(qcodeeditor_resources);
   Q_INIT_RESOURCE(ads);
   initialized = true;
