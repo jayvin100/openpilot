@@ -40,11 +40,12 @@ INSTALLER_URL_PATH = "/tmp/installer_url"
 
 
 class NetworkConnectivityMonitor:
-  def __init__(self, should_check: Callable[[], bool] | None = None):
+  def __init__(self, should_check: Callable[[], bool] | None = None, wifi_manager=None):
     self.network_connected = threading.Event()
     self.wifi_connected = threading.Event()
     self.recheck_event = threading.Event()
     self._should_check = should_check or (lambda: True)
+    self._wifi_manager = wifi_manager
     self._stop_event = threading.Event()
     self._last_timesyncd_restart = 0.0
     self._thread: threading.Thread | None = None
@@ -81,9 +82,18 @@ class NetworkConnectivityMonitor:
             self.recheck_event.clear()
             continue
 
-          self.network_connected.set()
-          if HARDWARE.get_network_type() == NetworkType.wifi:
+          # Only count as connected if on wifi (ignore ethernet for demo)
+          if self._wifi_manager and self._wifi_manager.connected_ssid:
+            self.network_connected.set()
             self.wifi_connected.set()
+          elif not self._wifi_manager:
+            # Fallback if no wifi manager provided
+            self.network_connected.set()
+            if HARDWARE.get_network_type() == NetworkType.wifi:
+              self.wifi_connected.set()
+          else:
+            self.network_connected.clear()
+            self.wifi_connected.clear()
         except urllib.error.URLError as e:
           if (isinstance(e.reason, ssl.SSLCertVerificationError) and
               not system_time_valid() and
@@ -335,6 +345,7 @@ class NetworkSetupPageBase(Scroller):
     self._wifi_manager = WifiManager()
     self._wifi_manager.set_active(True)
     self._network_monitor = network_monitor
+    self._network_monitor._wifi_manager = self._wifi_manager
     self._custom_software = False
     self._wifi_ui = WifiUIMici(self._wifi_manager)
 

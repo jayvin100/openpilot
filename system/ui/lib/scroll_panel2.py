@@ -8,14 +8,14 @@ from openpilot.system.ui.lib.application import gui_app, MouseEvent
 from openpilot.system.hardware import TICI
 from collections import deque
 
-MIN_VELOCITY = 10  # px/s, changes from auto scroll to steady state
+MIN_VELOCITY = 5  # px/s, changes from auto scroll to steady state
 MIN_VELOCITY_FOR_CLICKING = 2 * 60  # px/s, accepts clicks while auto scrolling below this velocity
 MIN_DRAG_PIXELS = 12
 AUTO_SCROLL_TC_SNAP = 0.025
 AUTO_SCROLL_TC = 0.18
 BOUNCE_RETURN_RATE = 10.0
 REJECT_DECELERATION_FACTOR = 3
-MAX_SPEED = 3000.0  # px/s
+MAX_SPEED = 10000.0  # px/s
 
 DEBUG = os.getenv("DEBUG_SCROLL", "0") == "1"
 

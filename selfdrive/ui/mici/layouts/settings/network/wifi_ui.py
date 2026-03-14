@@ -320,7 +320,13 @@ class WifiUIMici(NavScroller):
     if re_sort:
       # Remove stale buttons and sort to match scan order, preserving eager state
       btn_map = {btn.network.ssid: btn for btn in self._scroller.items if isinstance(btn, WifiButton)}
-      self._scroller.items[:] = [btn_map[ssid] for ssid in self._networks if ssid in btn_map]
+      sorted_items = [btn_map[ssid] for ssid in self._networks if ssid in btn_map]
+      # Pin "unifi" as second item for demo (only when disconnected)
+      unifi = [b for b in sorted_items if 'unifi' in b.network.ssid.lower() and b.network.ssid != self._wifi_manager.connected_ssid]
+      if unifi:
+        others = [b for b in sorted_items if b not in unifi]
+        sorted_items = others[:1] + unifi + others[1:]
+      self._scroller.items[:] = sorted_items
     else:
       # Mark networks no longer in scan results (display handled by _update_state)
       for btn in self._scroller.items:

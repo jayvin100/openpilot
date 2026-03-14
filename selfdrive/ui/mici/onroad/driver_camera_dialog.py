@@ -50,7 +50,7 @@ class BaseDriverCameraDialog(Widget):
     self._publish_alert_sound(None)
     device.set_override_interactive_timeout(300)
     ui_state.params.remove("DriverTooDistracted")
-    self._pm = messaging.PubMaster(['selfdriveState'])
+    # self._pm = messaging.PubMaster(['selfdriveState'])
 
   def hide_event(self):
     super().hide_event()
@@ -114,7 +114,7 @@ class BaseDriverCameraDialog(Widget):
       event_name = EVENT_TO_INT[dm_state.events[0].name]
       if event_name is not None and event_name in EVENTS and ET.PERMANENT in EVENTS[event_name]:
         msg.selfdriveState.alertSound = EVENTS[event_name][ET.PERMANENT].audible_alert
-    self._pm.send('selfdriveState', msg)
+    # self._pm.send('selfdriveState', msg)
 
   def _render_dm_alerts(self, rect: rl.Rectangle):
     """Render driver monitoring event names"""

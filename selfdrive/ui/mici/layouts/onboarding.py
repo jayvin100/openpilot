@@ -7,7 +7,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.button import SmallCircleIconButton
-from openpilot.system.ui.widgets.scroller import NavScroller, Scroller
+from openpilot.system.ui.widgets.scroller import NavScroller, Scroller, ITEM_SPACING
 from openpilot.system.ui.widgets.nav_widget import NavWidget
 from openpilot.system.ui.mici_setup import GreyBigButton, BigPillButton
 from openpilot.system.ui.widgets.label import gui_label
@@ -17,6 +17,34 @@ from openpilot.selfdrive.ui.ui_state import ui_state, device
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigConfirmationCircleButton
 from openpilot.selfdrive.ui.mici.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.mici.onroad.driver_camera_dialog import BaseDriverCameraDialog
+
+
+class DemoAutoScroll:
+  """Mixin for auto-scrolling through cards on show for demo recording."""
+  DEMO_SCROLL_DELAY = 1.75
+
+  def _init_demo_scroll(self):
+    self._demo_scroll_idx = 0
+
+  def _start_demo_scroll(self):
+    self._demo_scroll_idx = 0
+
+  def _tick_demo_scroll(self):
+    items = self._scroller._items
+    if len(items) < 2:
+      return
+
+    # Click anywhere to scroll to next card
+    for ev in gui_app.mouse_events:
+      if ev.left_pressed and not self._scroller.is_auto_scrolling and self._demo_scroll_idx < len(items) - 1:
+        item = items[self._demo_scroll_idx]
+        max_scroll = self._scroller.content_size - self._scroller.rect.width
+        remaining = max_scroll + self._scroller.scroll_panel.get_offset()
+        amount = min(item.rect.width + ITEM_SPACING, remaining)
+        if amount > 1:
+          self._scroller.scroll_to(amount, smooth=True, block_interaction=True)
+        self._demo_scroll_idx += 1
+        break
 
 
 class DriverCameraSetupDialog(BaseDriverCameraDialog):
@@ -50,9 +78,10 @@ class DriverCameraSetupDialog(BaseDriverCameraDialog):
     rl.end_scissor_mode()
 
 
-class TrainingGuidePreDMTutorial(NavScroller):
+class TrainingGuidePreDMTutorial(NavScroller, DemoAutoScroll):
   def __init__(self, continue_callback: Callable[[], None]):
     super().__init__()
+    self._init_demo_scroll()
 
     continue_button = BigPillButton("next")
     continue_button.set_click_callback(continue_callback)
@@ -68,8 +97,12 @@ class TrainingGuidePreDMTutorial(NavScroller):
 
   def show_event(self):
     super().show_event()
-    # Get driver monitoring model ready for next step
     ui_state.params.put_bool_nonblocking("IsDriverViewEnabled", True)
+    self._start_demo_scroll()
+
+  def _update_state(self):
+    super()._update_state()
+    self._tick_demo_scroll()
 
 
 class DMBadFaceDetected(NavScroller):
@@ -212,9 +245,10 @@ class TrainingGuideDMTutorial(NavWidget):
     rl.end_scissor_mode()
 
 
-class TrainingGuideRecordFront(NavScroller):
+class TrainingGuideRecordFront(NavScroller, DemoAutoScroll):
   def __init__(self, continue_callback: Callable[[], None]):
     super().__init__()
+    self._init_demo_scroll()
 
     def on_accept():
       ui_state.params.put_bool_nonblocking("RecordFront", True)
@@ -238,10 +272,19 @@ class TrainingGuideRecordFront(NavScroller):
       self._decline_button,
     ])
 
+  def show_event(self):
+    super().show_event()
+    self._start_demo_scroll()
 
-class TrainingGuideAttentionNotice(Scroller):
+  def _update_state(self):
+    super()._update_state()
+    self._tick_demo_scroll()
+
+
+class TrainingGuideAttentionNotice(Scroller, DemoAutoScroll):
   def __init__(self, continue_callback: Callable[[], None]):
     super().__init__()
+    self._init_demo_scroll()
 
     continue_button = BigPillButton("next")
     continue_button.set_click_callback(continue_callback)
@@ -255,6 +298,14 @@ class TrainingGuideAttentionNotice(Scroller):
       GreyBigButton("", "4. You are fully responsible for driving the car."),
       continue_button,
     ])
+
+  def show_event(self):
+    super().show_event()
+    self._start_demo_scroll()
+
+  def _update_state(self):
+    super()._update_state()
+    self._tick_demo_scroll()
 
 
 class TrainingGuide(NavWidget):
@@ -310,9 +361,10 @@ class QRCodeWidget(Widget):
       rl.unload_texture(self._qr_texture)
 
 
-class TermsPage(Scroller):
+class TermsPage(Scroller, DemoAutoScroll):
   def __init__(self, on_accept, on_decline):
     super().__init__()
+    self._init_demo_scroll()
 
     self._accept_button = BigConfirmationCircleButton("accept\nterms", gui_app.texture("icons_mici/setup/driver_monitoring/dm_check.png", 64, 64), on_accept)
     self._decline_button = BigConfirmationCircleButton("decline &\nuninstall", gui_app.texture("icons_mici/setup/cancel.png", 64, 64), on_decline,
@@ -331,6 +383,33 @@ class TermsPage(Scroller):
       self._accept_button,
       self._decline_button,
     ])
+
+  def show_event(self):
+    super().show_event()
+    self._demo_scroll_idx = 0
+
+  def _update_state(self):
+    super()._update_state()
+    items = self._scroller._items
+    if len(items) < 2:
+      return
+
+    # Click to scroll: first 2 clicks scroll one card each (to QR), third scrolls to end
+    for ev in gui_app.mouse_events:
+      if ev.left_pressed and not self._scroller.is_auto_scrolling and self._demo_scroll_idx < 3:
+        max_scroll = self._scroller.content_size - self._scroller.rect.width
+        remaining = max_scroll + self._scroller.scroll_panel.get_offset()
+
+        if self._demo_scroll_idx < 2:
+          item = items[self._demo_scroll_idx]
+          amount = min(item.rect.width + ITEM_SPACING, remaining)
+        else:
+          amount = remaining
+
+        if amount > 1:
+          self._scroller.scroll_to(amount, smooth=True, block_interaction=True)
+        self._demo_scroll_idx += 1
+        break
 
   def _render(self, _):
     rl.draw_rectangle_rec(self._rect, rl.BLACK)

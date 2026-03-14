@@ -297,7 +297,7 @@ class GuiApplication:
           '-s', f'{self._scaled_width}x{self._scaled_height}',  # Input resolution
           '-r', str(fps),           # Input frame rate
           '-i', 'pipe:0',           # Input from stdin
-          '-vf', 'vflip,format=yuv420p',  # Flip vertically and convert to yuv420p
+          '-vf', 'format=yuv420p',  # Flip vertically and convert to yuv420p
           '-r', str(output_fps),    # Output frame rate (for speed multiplier)
           '-c:v', 'libx264',
           '-preset', 'ultrafast',
@@ -662,7 +662,10 @@ class GuiApplication:
           image = rl.load_image_from_screen()
           data_size = image.width * image.height * 4
           data = bytes(rl.ffi.buffer(image.data, data_size))
-          self._ffmpeg_queue.put(data)  # Async write via background thread
+          try:
+            self._ffmpeg_queue.put_nowait(data)
+          except queue.Full:
+            pass
           rl.unload_image(image)
 
         self._monitor_fps()
