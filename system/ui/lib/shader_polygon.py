@@ -175,9 +175,12 @@ def _configure_shader_color(state: ShaderState, color: Optional[rl.Color],
     rl.set_shader_value_v(state.shader, state.locations['gradientStops'], state.gradient_stops_ptr, UNIFORM_FLOAT, len(gradient.stops))
     rl.set_shader_value(state.shader, state.locations['gradientColorCount'], state.color_count_ptr, UNIFORM_INT)
 
-    # Map normalized start/end to screen pixels
-    start_vec = rl.Vector2(origin_rect.x + gradient.start[0] * origin_rect.width, origin_rect.y + gradient.start[1] * origin_rect.height)
-    end_vec = rl.Vector2(origin_rect.x + gradient.end[0] * origin_rect.width, origin_rect.y + gradient.end[1] * origin_rect.height)
+    # Map normalized start/end to framebuffer pixels (gl_FragCoord space)
+    scale = gui_app._scale
+    start_vec = rl.Vector2((origin_rect.x + gradient.start[0] * origin_rect.width) * scale,
+                           (origin_rect.y + gradient.start[1] * origin_rect.height) * scale)
+    end_vec = rl.Vector2((origin_rect.x + gradient.end[0] * origin_rect.width) * scale,
+                         (origin_rect.y + gradient.end[1] * origin_rect.height) * scale)
     rl.set_shader_value(state.shader, state.locations['gradientStart'], start_vec, UNIFORM_VEC2)
     rl.set_shader_value(state.shader, state.locations['gradientEnd'], end_vec, UNIFORM_VEC2)
   else:
