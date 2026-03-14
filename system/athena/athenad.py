@@ -540,7 +540,7 @@ def getGithubUsername() -> str:
 
 @dispatcher.add_method
 def getNotCar() -> bool:
-  cp_bytes = Params().get("CarParams")
+  cp_bytes = Params().get("CarParamsPersistent")
   if cp_bytes is not None:
     with car.CarParams.from_bytes(cp_bytes) as CP:
       return CP.notCar
@@ -575,7 +575,12 @@ def startJoystickStream(sdp: str) -> dict:
   body = StreamRequestBody(sdp, ["driver", "wideRoad", "road"], ["testJoystick"], ["carState"])
   resp = requests.post(f"http://localhost:{WEBRTCD_PORT}/stream",
                        json=asdict(body), timeout=10)
-  resp.raise_for_status()
+  if not resp.ok:
+    try:
+      error_body = resp.json()
+      raise Exception(error_body.get("message", f"webrtcd returned {resp.status_code}"))
+    except ValueError:
+      resp.raise_for_status()
   return resp.json()
 
 
