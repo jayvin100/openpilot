@@ -3,7 +3,7 @@ import time
 import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.widgets import Widget
-from .animations import Animation, AnimationMode, NORMAL, SLEEPY, ASLEEP, INQUISITIVE
+from .animations import Animation, AnimationMode, NORMAL, SLEEPY, ASLEEP, INQUISITIVE, WINK
 
 GRID_COLS = 16
 GRID_ROWS = 8
@@ -162,9 +162,9 @@ class BodyLayout(Widget):
         self._last_input_time = time.monotonic()
 
       if time.monotonic() - self._last_input_time > IDLE_TIMEOUT:
-        self._animator.set_animation(INQUISITIVE)
+        self._animator.set_animation(WINK)
       else:
-        self._animator.set_animation(NORMAL)
+        self._animator.set_animation(WINK)
     else:
       self._was_active = False
       self._animator.set_animation(ASLEEP)

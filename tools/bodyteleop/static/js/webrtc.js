@@ -73,6 +73,11 @@ export function negotiate(pc) {
     return offerRtcRequest(offer.sdp, offer.type);
   }).then(function(response) {
     console.log(response);
+    if (!response.ok) {
+      return response.json().then(function(err) {
+        throw new Error(err.error || 'Connection failed (HTTP ' + response.status + ')');
+      });
+    }
     return response.json();
   }).then(function(answer) {
     return pc.setRemoteDescription(answer);

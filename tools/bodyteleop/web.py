@@ -53,7 +53,6 @@ async def index(request: 'web.Request'):
 async def ping(request: 'web.Request'):
   return web.Response(text="pong")
 
-
 async def offer(request: 'web.Request'):
   params = await request.json()
   body = StreamRequestBody(params["sdp"], ["driver"], ["testJoystick"], ["carState"])
@@ -77,6 +76,7 @@ def main():
   app = web.Application()
   app.router.add_get("/", index)
   app.router.add_get("/ping", ping, allow_head=True)
+  app.router.add_get("/status", status)
   app.router.add_post("/offer", offer)
   app.router.add_static('/static', os.path.join(TELEOPDIR, 'static'))
   web.run_app(app, access_log=None, host="0.0.0.0", port=5000, ssl_context=ssl_context)

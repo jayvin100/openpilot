@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Launch the big UI (comma 3X) simulating a comma body."""
+import argparse
 import os
 import time
 import threading
@@ -51,21 +52,27 @@ def send_messages():
 
 
 def main():
+  parser = argparse.ArgumentParser(description="Launch body view UI")
+  parser.add_argument("--joystick", action="store_true", help="Wait for joystick_control before going onroad")
+  args = parser.parse_args()
+
   # Set CarParamsPersistent so ui_state.CP.notCar is True on startup
   params = Params()
   CP = car.CarParams.new_message(notCar=True, brand="body", wheelbase=1, steerRatio=10)
   params.put("CarParamsPersistent", CP.to_bytes())
   params.put_bool("JoystickDebugMode", True)
-  params.put_bool("IsOffroad", True)
 
-  # Wait for joystick_control to start before going "onroad"
-  sm = messaging.SubMaster(['testJoystick'])
-  print("Waiting for joystick_control to start (run: python tools/joystick/joystick_control.py --keyboard) ...")
-  while sm.recv_frame['testJoystick'] == 0:
+  if args.joystick:
     params.put_bool("IsOffroad", True)
-    sm.update(100)
-  print("Joystick connected, starting body view.")
-  params.remove("IsOffroad")
+
+    # Wait for joystick_control to start before going "onroad"
+    sm = messaging.SubMaster(['testJoystick'])
+    print("Waiting for joystick_control to start (run: python tools/joystick/joystick_control.py --keyboard) ...")
+    while sm.recv_frame['testJoystick'] == 0:
+      params.put_bool("IsOffroad", True)
+      sm.update(100)
+    print("Joystick connected, starting body view.")
+    params.remove("IsOffroad")
 
   # Start message sender in background
   t = threading.Thread(target=send_messages, daemon=True)

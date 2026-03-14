@@ -32,17 +32,9 @@ def _mirror_no_flip(dots: list[tuple[int, int]]) -> list[tuple[int, int]]:
   return [(r, 15 - max_c - min_c + c) for r, c in dots]
 
 
-def _shift_up(dots: list[tuple[int, int]], n: int = 1) -> list[tuple[int, int]]:
-  return [(r - n, c) for r, c in dots]
-
-def _shift_down(dots: list[tuple[int, int]], n: int = 1) -> list[tuple[int, int]]:
-  return [(r + n, c) for r, c in dots]
-
-def _shift_left(dots: list[tuple[int, int]], n: int = 1) -> list[tuple[int, int]]:
-  return [(r, c - n) for r, c in dots]
-
-def _shift_right(dots: list[tuple[int, int]], n: int = 1) -> list[tuple[int, int]]:
-  return [(r, c + n) for r, c in dots]
+def _shift(dots: list[tuple[int, int]], rc: tuple[int, int]) -> list[tuple[int, int]]:
+  dr, dc = rc
+  return [(r + dr, c + dc) for r, c in dots]
 
 
 def _make_frame(left_eye: list[tuple[int, int]], right_eye: list[tuple[int, int]],
@@ -88,8 +80,11 @@ BROW_LOWERED = [
         (1, 1), (1, 2),
 (2, 0)
 ]
-BROW_STRAIGHT = [(2, 0), (2, 1), (2, 2)]
-NO_BROW = []
+BROW_STRAIGHT = [(1, 0), (1, 1), (1, 2)]
+BROW_DOWN = [
+(0, 1), (0, 2),
+                (1, 3)
+]
 
 # Mouths (centered, not mirrored)
 MOUTH_SMILE = [
@@ -129,16 +124,16 @@ NORMAL = Animation(
 
 ASLEEP = Animation(
   frames=[
-    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), NO_BROW, NO_BROW, MOUTH_NORMAL),
+    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), [], [], MOUTH_NORMAL),
   ],
   # frame_duration=0.25,
 )
 
 SLEEPY = Animation(
   frames=[
-    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), NO_BROW, _mirror(BROW_STRAIGHT), MOUTH_NORMAL),
-    _make_frame(EYE_CLOSED, _mirror(EYE_HALF), NO_BROW, _mirror(BROW_LOWERED), MOUTH_NORMAL),
-    _make_frame(EYE_CLOSED, _mirror(EYE_OPEN), NO_BROW, _mirror(BROW_HIGH), MOUTH_NORMAL)
+    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), [], _shift(_mirror(BROW_STRAIGHT), (1,0)), MOUTH_NORMAL),
+    _make_frame(EYE_CLOSED, _mirror(EYE_HALF), [], _mirror(BROW_LOWERED), MOUTH_NORMAL),
+    _make_frame(EYE_CLOSED, _mirror(EYE_OPEN), [], _mirror(BROW_HIGH), MOUTH_NORMAL)
   ],
   frame_duration=0.25,
   mode=AnimationMode.ONCE_FORWARD_BACKWARD,
@@ -151,17 +146,17 @@ INQUISITIVE = Animation(
     _make_frame(EYE_OPEN, _mirror(EYE_OPEN), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
 
     _make_frame(EYE_LEFT_LOOK, _mirror(EYE_RIGHT_LOOK), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
-    _make_frame(_shift_left(EYE_LEFT_LOOK, 1), _shift_left(_mirror(EYE_RIGHT_LOOK), 1), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
-    _make_frame(_shift_left(EYE_LEFT_LOOK, 1), _shift_left(_mirror(EYE_RIGHT_LOOK), 1), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
-    _make_frame(_shift_left(EYE_LEFT_LOOK, 1), _shift_left(_mirror(EYE_RIGHT_LOOK), 1), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
+    _make_frame(_shift(EYE_LEFT_LOOK, (0, -1)), _shift(_mirror(EYE_RIGHT_LOOK), (0, -1)), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
+    _make_frame(_shift(EYE_LEFT_LOOK, (0, -1)), _shift(_mirror(EYE_RIGHT_LOOK), (0, -1)), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
+    _make_frame(_shift(EYE_LEFT_LOOK, (0, -1)), _shift(_mirror(EYE_RIGHT_LOOK), (0, -1)), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
     _make_frame(EYE_LEFT_LOOK, _mirror(EYE_RIGHT_LOOK), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
 
     # _make_frame(EYE_OPEN, _mirror(EYE_OPEN), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
 
     _make_frame(EYE_RIGHT_LOOK, _mirror(EYE_LEFT_LOOK), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
-    _make_frame(_shift_right(EYE_RIGHT_LOOK, 1), _shift_right(_mirror(EYE_LEFT_LOOK), 1), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
-    _make_frame(_shift_right(EYE_RIGHT_LOOK, 1), _shift_right(_mirror(EYE_LEFT_LOOK), 1), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
-    _make_frame(_shift_right(EYE_RIGHT_LOOK, 1), _shift_right(_mirror(EYE_LEFT_LOOK), 1), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
+    _make_frame(_shift(EYE_RIGHT_LOOK, (0, 1)), _shift(_mirror(EYE_LEFT_LOOK), (0, 1)), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
+    _make_frame(_shift(EYE_RIGHT_LOOK, (0, 1)), _shift(_mirror(EYE_LEFT_LOOK), (0, 1)), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
+    _make_frame(_shift(EYE_RIGHT_LOOK, (0, 1)), _shift(_mirror(EYE_LEFT_LOOK), (0, 1)), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
     _make_frame(EYE_RIGHT_LOOK, _mirror(EYE_LEFT_LOOK), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
 
     _make_frame(EYE_OPEN, _mirror(EYE_OPEN), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
@@ -169,4 +164,13 @@ INQUISITIVE = Animation(
   mode=AnimationMode.REPEAT_FORWARD,
   frame_duration=0.15,
   repeat_interval=10
+)
+
+WINK = Animation(
+  frames=[
+    _make_frame(EYE_OPEN, _mirror(EYE_OPEN), BROW_HIGH, _mirror(BROW_HIGH), MOUTH_SMILE),
+    _make_frame(EYE_OPEN, _mirror(EYE_CLOSED), BROW_HIGH, _mirror(_shift(BROW_DOWN, (0, 2))), MOUTH_SMILE),
+  ],
+  mode=AnimationMode.ONCE_FORWARD_BACKWARD,
+  frame_duration=0.75,
 )

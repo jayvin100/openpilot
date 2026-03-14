@@ -227,10 +227,47 @@ async def stream_options(request: 'web.Request'):
   return response
 
 
+def _cleanup_stale_streams(stream_dict: dict):
+  stale = [sid for sid, s in stream_dict.items() if s.run_task is None or s.run_task.done()]
+  for sid in stale:
+    del stream_dict[sid]
+
+
+def _get_active_streams(stream_dict: dict) -> list[str]:
+  return [sid for sid, s in stream_dict.items() if s.run_task is not None and not s.run_task.done()]
+
+
+def _is_body_active(debug_mode: bool) -> bool:
+  if debug_mode:
+    return True
+  try:
+    sm = messaging.SubMaster(['selfdriveState'])
+    sm.update(timeout=500)
+    return sm['selfdriveState'].enabled
+  except Exception:
+    return False
+
+
 async def get_stream(request: 'web.Request'):
   logger = logging.getLogger("webrtcd")
   try:
     stream_dict, debug_mode = request.app['streams'], request.app['debug']
+
+    _cleanup_stale_streams(stream_dict)
+
+    active_streams = _get_active_streams(stream_dict)
+    if active_streams:
+      raise web.HTTPConflict(
+        text=json.dumps({"error": "already_connected", "message": "Another device is already connected to the stream"}),
+        content_type="application/json",
+      )
+
+    if not _is_body_active(debug_mode):
+      raise web.HTTPServiceUnavailable(
+        text=json.dumps({"error": "not_active", "message": "comma body is not active (selfdriveState.enabled is false)"}),
+        content_type="application/json",
+      )
+
     raw_body = await request.json()
     body = StreamRequestBody(**raw_body)
 
@@ -243,6 +280,8 @@ async def get_stream(request: 'web.Request'):
     response = web.json_response({"sdp": answer.sdp, "type": answer.type})
     _add_cors_headers(request, response)
     return response
+  except web.HTTPException:
+    raise
   except Exception:
     logger.exception("Error in /stream handler")
     raise
