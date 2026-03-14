@@ -1,22 +1,22 @@
 <RCC>
     <qresource prefix="/">
         <file>resources/default.snippets.xml</file>
-        <file>style_light/checkbox_checked.svg</file>
-        <file>style_light/checkbox_checked_disabled.svg</file>
-        <file>style_light/checkbox_checked_focus.svg</file>
-        <file>style_light/checkbox_unchecked.svg</file>
-        <file>style_light/checkbox_unchecked_disabled.svg</file>
-        <file>style_light/checkbox_unchecked_focus.svg</file>
+        <file alias="style_light/checkbox_checked.svg">../.gen/bootstrap_svg/style_light/checkbox_checked.svg</file>
+        <file alias="style_light/checkbox_checked_disabled.svg">../.gen/bootstrap_svg/style_light/checkbox_checked_disabled.svg</file>
+        <file alias="style_light/checkbox_checked_focus.svg">../.gen/bootstrap_svg/style_light/checkbox_checked_focus.svg</file>
+        <file alias="style_light/checkbox_unchecked.svg">../.gen/bootstrap_svg/style_light/checkbox_unchecked.svg</file>
+        <file alias="style_light/checkbox_unchecked_disabled.svg">../.gen/bootstrap_svg/style_light/checkbox_unchecked_disabled.svg</file>
+        <file alias="style_light/checkbox_unchecked_focus.svg">../.gen/bootstrap_svg/style_light/checkbox_unchecked_focus.svg</file>
         <file>style_light/colored_charts.png</file>
         <file>style_light/line_tracker.png</file>
         <file>style_light/line_tracker_1.png</file>
         <file>style_light/line_tracker_a.png</file>
-        <file>style_light/radio_checked.svg</file>
-        <file>style_light/radio_checked_disabled.svg</file>
-        <file>style_light/radio_checked_focus.svg</file>
-        <file>style_light/radio_unchecked.svg</file>
-        <file>style_light/radio_unchecked_disabled.svg</file>
-        <file>style_light/radio_unchecked_focus.svg</file>
+        <file alias="style_light/radio_checked.svg">../.gen/bootstrap_svg/style_light/radio_checked.svg</file>
+        <file alias="style_light/radio_checked_disabled.svg">../.gen/bootstrap_svg/style_light/radio_checked_disabled.svg</file>
+        <file alias="style_light/radio_checked_focus.svg">../.gen/bootstrap_svg/style_light/radio_checked_focus.svg</file>
+        <file alias="style_light/radio_unchecked.svg">../.gen/bootstrap_svg/style_light/radio_unchecked.svg</file>
+        <file alias="style_light/radio_unchecked_disabled.svg">../.gen/bootstrap_svg/style_light/radio_unchecked_disabled.svg</file>
+        <file alias="style_light/radio_unchecked_focus.svg">../.gen/bootstrap_svg/style_light/radio_unchecked_focus.svg</file>
         <file>style_light/window_close.png</file>
         <file>style_light/window_close_disabled.png</file>
         <file>style_light/window_close_focus.png</file>
@@ -106,52 +106,52 @@
         <file>style_dark/window_undock_focus.png</file>
         <file>style_dark/window_undock_pressed.png</file>
         <file>style_dark/copy_clipboard.png</file>
-        <file>resources/svg/add_column.svg</file>
-        <file>resources/svg/add_row.svg</file>
-        <file>resources/svg/add_tab.svg</file>
-        <file>resources/svg/close-button.svg</file>
+        <file alias="resources/svg/add_column.svg">../.gen/bootstrap_svg/app/add_column.svg</file>
+        <file alias="resources/svg/add_row.svg">../.gen/bootstrap_svg/app/add_row.svg</file>
+        <file alias="resources/svg/add_tab.svg">../.gen/bootstrap_svg/app/add_tab.svg</file>
+        <file alias="resources/svg/close-button.svg">../.gen/bootstrap_svg/app/close-button.svg</file>
         <file>resources/svg/colored_charts.svg</file>
-        <file>resources/svg/fullscreen.svg</file>
-        <file>resources/svg/left-arrow.svg</file>
-        <file>resources/svg/list.svg</file>
-        <file>resources/svg/pause.svg</file>
-        <file>resources/svg/pencil-edit.svg</file>
-        <file>resources/svg/play_arrow.svg</file>
+        <file alias="resources/svg/fullscreen.svg">../.gen/bootstrap_svg/app/fullscreen.svg</file>
+        <file alias="resources/svg/left-arrow.svg">../.gen/bootstrap_svg/app/left-arrow.svg</file>
+        <file alias="resources/svg/list.svg">../.gen/bootstrap_svg/app/list.svg</file>
+        <file alias="resources/svg/pause.svg">../.gen/bootstrap_svg/app/pause.svg</file>
+        <file alias="resources/svg/pencil-edit.svg">../.gen/bootstrap_svg/app/pencil-edit.svg</file>
+        <file alias="resources/svg/play_arrow.svg">../.gen/bootstrap_svg/app/play_arrow.svg</file>
         <file>resources/svg/point_chart.svg</file>
-        <file>resources/svg/ratio.svg</file>
+        <file alias="resources/svg/ratio.svg">../.gen/bootstrap_svg/app/ratio.svg</file>
         <file>resources/svg/remove_list.svg</file>
-        <file>resources/svg/save.svg</file>
-        <file>resources/svg/settings_cog.svg</file>
-        <file>resources/svg/tree.svg</file>
-        <file>resources/svg/zoom_horizontal.svg</file>
-        <file>resources/svg/zoom_max.svg</file>
-        <file>resources/svg/zoom_vertical.svg</file>
-        <file>resources/svg/grid.svg</file>
-        <file>resources/svg/datetime.svg</file>
-        <file>resources/svg/link.svg</file>
-        <file>resources/svg/legend.svg</file>
-        <file>resources/svg/remove_red.svg</file>
-        <file>resources/svg/loop.svg</file>
+        <file alias="resources/svg/save.svg">../.gen/bootstrap_svg/app/save.svg</file>
+        <file alias="resources/svg/settings_cog.svg">../.gen/bootstrap_svg/app/settings_cog.svg</file>
+        <file alias="resources/svg/tree.svg">../.gen/bootstrap_svg/app/tree.svg</file>
+        <file alias="resources/svg/zoom_horizontal.svg">../.gen/bootstrap_svg/app/zoom_horizontal.svg</file>
+        <file alias="resources/svg/zoom_max.svg">../.gen/bootstrap_svg/app/zoom_max.svg</file>
+        <file alias="resources/svg/zoom_vertical.svg">../.gen/bootstrap_svg/app/zoom_vertical.svg</file>
+        <file alias="resources/svg/grid.svg">../.gen/bootstrap_svg/app/grid.svg</file>
+        <file alias="resources/svg/datetime.svg">../.gen/bootstrap_svg/app/datetime.svg</file>
+        <file alias="resources/svg/link.svg">../.gen/bootstrap_svg/app/link.svg</file>
+        <file alias="resources/svg/legend.svg">../.gen/bootstrap_svg/app/legend.svg</file>
+        <file alias="resources/svg/remove_red.svg">../.gen/bootstrap_svg/app/remove_red.svg</file>
+        <file alias="resources/svg/loop.svg">../.gen/bootstrap_svg/app/loop.svg</file>
         <file>resources/svg/t0.svg</file>
-        <file>resources/svg/copy.svg</file>
+        <file alias="resources/svg/copy.svg">../.gen/bootstrap_svg/app/copy.svg</file>
         <file>resources/svg/Fx.svg</file>
-        <file>resources/svg/export.svg</file>
-        <file>resources/svg/import.svg</file>
-        <file>resources/svg/green_circle.svg</file>
-        <file>resources/svg/red_circle.svg</file>
+        <file alias="resources/svg/export.svg">../.gen/bootstrap_svg/app/export.svg</file>
+        <file alias="resources/svg/import.svg">../.gen/bootstrap_svg/app/import.svg</file>
+        <file alias="resources/svg/green_circle.svg">../.gen/bootstrap_svg/app/green_circle.svg</file>
+        <file alias="resources/svg/red_circle.svg">../.gen/bootstrap_svg/app/red_circle.svg</file>
         <file>resources/animated_radio.gif</file>
-        <file>style_dark/radio_checked.svg</file>
-        <file>style_dark/radio_checked_disabled.svg</file>
-        <file>style_dark/radio_checked_focus.svg</file>
-        <file>style_dark/radio_unchecked.svg</file>
-        <file>style_dark/radio_unchecked_disabled.svg</file>
-        <file>style_dark/radio_unchecked_focus.svg</file>
-        <file>style_dark/checkbox_checked.svg</file>
-        <file>style_dark/checkbox_checked_disabled.svg</file>
-        <file>style_dark/checkbox_checked_focus.svg</file>
-        <file>style_dark/checkbox_unchecked.svg</file>
-        <file>style_dark/checkbox_unchecked_disabled.svg</file>
-        <file>style_dark/checkbox_unchecked_focus.svg</file>
+        <file alias="style_dark/radio_checked.svg">../.gen/bootstrap_svg/style_dark/radio_checked.svg</file>
+        <file alias="style_dark/radio_checked_disabled.svg">../.gen/bootstrap_svg/style_dark/radio_checked_disabled.svg</file>
+        <file alias="style_dark/radio_checked_focus.svg">../.gen/bootstrap_svg/style_dark/radio_checked_focus.svg</file>
+        <file alias="style_dark/radio_unchecked.svg">../.gen/bootstrap_svg/style_dark/radio_unchecked.svg</file>
+        <file alias="style_dark/radio_unchecked_disabled.svg">../.gen/bootstrap_svg/style_dark/radio_unchecked_disabled.svg</file>
+        <file alias="style_dark/radio_unchecked_focus.svg">../.gen/bootstrap_svg/style_dark/radio_unchecked_focus.svg</file>
+        <file alias="style_dark/checkbox_checked.svg">../.gen/bootstrap_svg/style_dark/checkbox_checked.svg</file>
+        <file alias="style_dark/checkbox_checked_disabled.svg">../.gen/bootstrap_svg/style_dark/checkbox_checked_disabled.svg</file>
+        <file alias="style_dark/checkbox_checked_focus.svg">../.gen/bootstrap_svg/style_dark/checkbox_checked_focus.svg</file>
+        <file alias="style_dark/checkbox_unchecked.svg">../.gen/bootstrap_svg/style_dark/checkbox_unchecked.svg</file>
+        <file alias="style_dark/checkbox_unchecked_disabled.svg">../.gen/bootstrap_svg/style_dark/checkbox_unchecked_disabled.svg</file>
+        <file alias="style_dark/checkbox_unchecked_focus.svg">../.gen/bootstrap_svg/style_dark/checkbox_unchecked_focus.svg</file>
         <file>style_light/arrow_down.png</file>
         <file>style_light/arrow_down_disabled.png</file>
         <file>style_light/arrow_down_focus.png</file>
@@ -190,19 +190,19 @@
         <file>style_light/branch_open_pressed.png</file>
         <file>resources/stylesheet_light.qss</file>
         <file>resources/stylesheet_dark.qss</file>
-        <file>resources/svg/right-arrow.svg</file>
-        <file>resources/svg/plot_image.svg</file>
-        <file>resources/svg/paste.svg</file>
-        <file>resources/svg/collapse.svg</file>
-        <file>resources/svg/expand.svg</file>
-        <file>resources/svg/trash.svg</file>
-        <file>resources/svg/clear.svg</file>
-        <file>resources/svg/move_view.svg</file>
-        <file>resources/svg/alarm-bell.svg</file>
-        <file>resources/svg/alarm-bell-active.svg</file>
+        <file alias="resources/svg/right-arrow.svg">../.gen/bootstrap_svg/app/right-arrow.svg</file>
+        <file alias="resources/svg/plot_image.svg">../.gen/bootstrap_svg/app/plot_image.svg</file>
+        <file alias="resources/svg/paste.svg">../.gen/bootstrap_svg/app/paste.svg</file>
+        <file alias="resources/svg/collapse.svg">../.gen/bootstrap_svg/app/collapse.svg</file>
+        <file alias="resources/svg/expand.svg">../.gen/bootstrap_svg/app/expand.svg</file>
+        <file alias="resources/svg/trash.svg">../.gen/bootstrap_svg/app/trash.svg</file>
+        <file alias="resources/svg/clear.svg">../.gen/bootstrap_svg/app/clear.svg</file>
+        <file alias="resources/svg/move_view.svg">../.gen/bootstrap_svg/app/move_view.svg</file>
+        <file alias="resources/svg/alarm-bell.svg">../.gen/bootstrap_svg/app/alarm-bell.svg</file>
+        <file alias="resources/svg/alarm-bell-active.svg">../.gen/bootstrap_svg/app/alarm-bell-active.svg</file>
         <file>resources/svg/xy.svg</file>
         <file>resources/svg/scatter.svg</file>
-        <file>resources/svg/zoom_in.svg</file>
+        <file alias="resources/svg/zoom_in.svg">../.gen/bootstrap_svg/app/zoom_in.svg</file>
         <file>resources/lua_style_dark.xml</file>
         <file>resources/lua_style_light.xml</file>
     </qresource>

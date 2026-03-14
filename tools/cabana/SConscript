@@ -311,6 +311,44 @@ def build_shared_library(name, cpp_sources, headers, link_libs, qrc_files=(), ui
 
 pj_ui_headers = generate_ui_headers(walk_files(plotjuggler_root, {'.ui'}, recursive=True))
 
+bootstrap_svg_root = plotjuggler_gen_root / 'bootstrap_svg'
+bootstrap_svg_script = plotjuggler_root / 'generate_bootstrap_svgs.py'
+bootstrap_icons_source = repo_root / 'third_party/bootstrap/bootstrap-icons.svg'
+generated_bootstrap_svgs = [
+  *(bootstrap_svg_root / 'app' / name for name in [
+    'add_column.svg', 'add_row.svg', 'add_tab.svg', 'alarm-bell-active.svg',
+    'alarm-bell.svg', 'clear.svg', 'close-button.svg', 'collapse.svg', 'copy.svg',
+    'datetime.svg', 'expand.svg', 'export.svg', 'fullscreen.svg', 'green_circle.svg',
+    'grid.svg', 'import.svg', 'left-arrow.svg', 'legend.svg', 'link.svg', 'list.svg',
+    'loop.svg', 'move_view.svg', 'paste.svg', 'pause.svg', 'pencil-edit.svg',
+    'play_arrow.svg', 'plot_image.svg', 'ratio.svg', 'red_circle.svg',
+    'remove_red.svg', 'right-arrow.svg', 'save.svg', 'settings_cog.svg',
+    'trash.svg', 'tree.svg', 'zoom_horizontal.svg', 'zoom_in.svg',
+    'zoom_max.svg', 'zoom_vertical.svg',
+  ]),
+  *(bootstrap_svg_root / 'style_light' / name for name in [
+    'checkbox_checked.svg', 'checkbox_checked_disabled.svg', 'checkbox_checked_focus.svg',
+    'checkbox_unchecked.svg', 'checkbox_unchecked_disabled.svg', 'checkbox_unchecked_focus.svg',
+    'radio_checked.svg', 'radio_checked_disabled.svg', 'radio_checked_focus.svg',
+    'radio_unchecked.svg', 'radio_unchecked_disabled.svg', 'radio_unchecked_focus.svg',
+  ]),
+  *(bootstrap_svg_root / 'style_dark' / name for name in [
+    'checkbox_checked.svg', 'checkbox_checked_disabled.svg', 'checkbox_checked_focus.svg',
+    'checkbox_unchecked.svg', 'checkbox_unchecked_disabled.svg', 'checkbox_unchecked_focus.svg',
+    'radio_checked.svg', 'radio_checked_disabled.svg', 'radio_checked_focus.svg',
+    'radio_unchecked.svg', 'radio_unchecked_disabled.svg', 'radio_unchecked_focus.svg',
+  ]),
+  *(bootstrap_svg_root / 'ads' / name for name in [
+    'close-button.svg', 'close-button-disabled.svg', 'close-button-focused.svg',
+    'detach-button.svg', 'detach-button-disabled.svg', 'tabs-menu-button.svg',
+  ]),
+]
+bootstrap_svg_targets = [repo_rel(path) for path in generated_bootstrap_svgs]
+bootstrap_svg_outputs = pj_env.Command(
+  bootstrap_svg_targets,
+  [repo_rel(bootstrap_svg_script), repo_rel(bootstrap_icons_source)],
+  f'python3 ${{SOURCES[0]}} ${{SOURCES[1]}} {bootstrap_svg_root}')
+
 qwt_root = plotjuggler_root / '3rdparty/qwt/src'
 qwt_cpp = [path for path in walk_files(qwt_root, {'.cpp'}) if path.name != 'qwt_plot_glcanvas.cpp']
 qwt_headers = [path for path in walk_files(qwt_root, {'.h'}) if path.name != 'qwt_plot_glcanvas.h']
@@ -375,6 +413,8 @@ plotjuggler_app_core = build_static_library(
   app_headers,
   qrc_files=[app_root / 'resource.qrc'],
   cppdefines=pj_version_defs)
+pj_env.Depends(plotjuggler_app_core, bootstrap_svg_outputs)
+pj_env.Depends(qt_advanced_docking, bootstrap_svg_outputs)
 plotjuggler_toolbox_lua_editor = build_static_library(
   'plotjuggler_toolbox_lua_editor',
   [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.cpp'],

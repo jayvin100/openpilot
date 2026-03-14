@@ -1,14 +1,14 @@
 <RCC>
     <qresource prefix="/ads">
         <file>stylesheets/default.css</file>
-        <file>images/close-button.svg</file>
-        <file>images/close-button-disabled.svg</file>
+        <file alias="images/close-button.svg">../../../.gen/bootstrap_svg/ads/close-button.svg</file>
+        <file alias="images/close-button-disabled.svg">../../../.gen/bootstrap_svg/ads/close-button-disabled.svg</file>
         <file>stylesheets/default_linux.css</file>
-        <file>images/close-button-focused.svg</file>
+        <file alias="images/close-button-focused.svg">../../../.gen/bootstrap_svg/ads/close-button-focused.svg</file>
         <file>stylesheets/focus_highlighting.css</file>
         <file>stylesheets/focus_highlighting_linux.css</file>
-        <file>images/tabs-menu-button.svg</file>
-        <file>images/detach-button.svg</file>
-        <file>images/detach-button-disabled.svg</file>
+        <file alias="images/tabs-menu-button.svg">../../../.gen/bootstrap_svg/ads/tabs-menu-button.svg</file>
+        <file alias="images/detach-button.svg">../../../.gen/bootstrap_svg/ads/detach-button.svg</file>
+        <file alias="images/detach-button-disabled.svg">../../../.gen/bootstrap_svg/ads/detach-button-disabled.svg</file>
     </qresource>
 </RCC>
