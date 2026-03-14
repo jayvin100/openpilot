@@ -576,6 +576,12 @@ def startJoystickStream(sdp: str) -> dict:
   try:
     resp = requests.post(f"http://localhost:{WEBRTCD_PORT}/stream",
                        json=asdict(body), timeout=10)
+    if not resp.ok:
+      try:
+        error_body = resp.json()
+        raise Exception(error_body.get("message", f"webrtcd returned {resp.status_code}"))
+      except ValueError:
+        resp.raise_for_status()
     return resp.json()
   except requests.ConnectTimeout:
     raise Exception("webrtc took too long to respond. is it on?")
