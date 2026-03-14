@@ -26,7 +26,7 @@ class SliderBase(Widget, abc.ABC):
 
     self._load_assets()
 
-    self._drag_threshold = -self._rect.width // 2
+    self._drag_threshold = -self._rect.width // 4
 
     # State
     self._opacity_filter = FirstOrderFilter(1.0, 0.1, 1 / gui_app.target_fps)
