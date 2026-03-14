@@ -235,11 +235,6 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
   _publish_timer->setInterval(20);
   connect(_publish_timer, &QTimer::timeout, this, &MainWindow::onPlaybackLoop);
 
-  ui->menuFile->setToolTipsVisible(true);
-
-  this->setMenuBar(ui->menuBar);
-  ui->menuBar->setNativeMenuBar(false);
-
   if (_test_option)
   {
     buildDummyData();
@@ -542,14 +537,6 @@ void MainWindow::initializeActions()
   connect(&_fullscreen_shortcut, &QShortcut::activated, this,
           &MainWindow::onActionFullscreenTriggered);
 
-  QShortcut* open_menu_shortcut = new QShortcut(QKeySequence(Qt::ALT + Qt::Key_F), this);
-  connect(open_menu_shortcut, &QShortcut::activated,
-          [this]() { ui->menuFile->exec(ui->menuBar->mapToGlobal(QPoint(0, 25))); });
-
-  QShortcut* open_help_shortcut = new QShortcut(QKeySequence(Qt::ALT + Qt::Key_H), this);
-  connect(open_help_shortcut, &QShortcut::activated,
-          [this]() { ui->menuHelp->exec(ui->menuBar->mapToGlobal(QPoint(230, 25))); });
-
   //---------------------------------------------
 
   QSettings settings;
@@ -788,17 +775,9 @@ QStringList MainWindow::initializePlugins(QString directory_name)
 
         _toolboxes.insert(std::make_pair(plugin_name, toolbox));
 
-        auto action = ui->menuTools->addAction(toolbox->name());
-
-        int new_index = ui->widgetStack->count();
         auto provided = toolbox->providedWidget();
         auto widget = provided.first;
         ui->widgetStack->addWidget(widget);
-
-        connect(action, &QAction::triggered, toolbox, &ToolboxPlugin::onShowWidget);
-
-        connect(action, &QAction::triggered, this,
-                [=]() { ui->widgetStack->setCurrentIndex(new_index); });
 
         connect(toolbox, &ToolboxPlugin::closed, this,
                 [=]() { ui->widgetStack->setCurrentIndex(0); });
@@ -2797,12 +2776,6 @@ void MainWindow::onCustomPlotCreated(std::vector<CustomPlotPtr> custom_plots)
   _curvelist_widget->clearSelections();
 }
 
-void MainWindow::on_actionShare_the_love_triggered(bool)
-{
-  QDesktopServices::openUrl(QUrl("https://twitter.com/intent/"
-                                 "tweet?hashtags=PlotJuggler"));
-}
-
 /*
 void MainWindow::on_actionSaveAllPlotTabs_triggered()
 {
@@ -3115,7 +3088,6 @@ void MainWindow::onActionFullscreenTriggered()
   ui->leftMainWindowFrame->setVisible(!_minimized);
   //  ui->widgetOptions->setVisible(!_minimized && ui->pushButtonOptions->isChecked());
   ui->widgetTimescale->setVisible(!_minimized);
-  ui->menuBar->setVisible(!_minimized);
 
   for (auto& it : TabbedPlotWidget::instances())
   {

@@ -1,8 +1,6 @@
 <RCC>
     <qresource prefix="/">
-        <file>resources/office_chart_line_stacked.png</file>
         <file>resources/default.snippets.xml</file>
-        <file>resources/DejaVuSans-ExtraLight.ttf</file>
         <file>style_light/checkbox_checked.svg</file>
         <file>style_light/checkbox_checked_disabled.svg</file>
         <file>style_light/checkbox_checked_focus.svg</file>
@@ -107,7 +105,6 @@
         <file>style_dark/window_undock_disabled.png</file>
         <file>style_dark/window_undock_focus.png</file>
         <file>style_dark/window_undock_pressed.png</file>
-        <file>resources/twitter.png</file>
         <file>style_dark/copy_clipboard.png</file>
         <file>resources/svg/add_column.svg</file>
         <file>resources/svg/add_row.svg</file>
@@ -208,6 +205,5 @@
         <file>resources/svg/zoom_in.svg</file>
         <file>resources/lua_style_dark.xml</file>
         <file>resources/lua_style_light.xml</file>
-        <file>resources/svg/color_background.svg</file>
     </qresource>
 </RCC>

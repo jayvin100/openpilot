@@ -27,7 +27,6 @@
 #include "PlotJuggler/plotwidget_base.h"
 #include "customtracker.h"
 
-#include "transforms/transform_selector.h"
 #include "transforms/custom_function.h"
 
 class StatisticsDialog;
@@ -213,8 +212,6 @@ private:
   double _time_offset;
 
   Range _custom_Y_limits;
-
-  TransformSelector* _transform_select_dialog;
 
   SnippetsMap _snippets;
 

@@ -262,7 +262,6 @@ public slots:
 private slots:
   void on_stylesheetChanged(QString style_name);
   void on_actionPreferences_triggered(bool checked = false);
-  void on_actionShare_the_love_triggered(bool checked = false);
   void on_playbackStep_valueChanged(double arg1);
   void on_actionLoadStyleSheet_triggered(bool checked = false);
   void on_pushButtonLegend_clicked(bool checked = false);

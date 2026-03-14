@@ -77,7 +77,6 @@ PlotWidget::PlotWidget(PlotDataMapRef& datamap, QWidget* parent)
   , _use_date_time_scale(false)
   , _dragging({ DragInfo::NONE, {}, nullptr })
   , _time_offset(0.0)
-  , _transform_select_dialog(nullptr)
   , _context_menu_enabled(true)
 {
   connect(this, &PlotWidget::curveListChanged, this,
