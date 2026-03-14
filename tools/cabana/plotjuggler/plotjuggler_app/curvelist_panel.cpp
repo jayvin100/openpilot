@@ -86,7 +86,6 @@ void CurveListPanel::clear()
   _custom_view->clear();
   _tree_view->clear();
   _tree_view_items.clear();
-  ui->labelNumberDisplayed->setText("0 of 0");
 }
 
 bool CurveListPanel::addCurve(const std::string& plot_name)
@@ -269,12 +268,6 @@ void CurveListPanel::changeFontSize(int point_size)
   settings.setValue("FilterableListWidget/table_point_size", point_size);
 }
 
-bool CurveListPanel::is2ndColumnHidden() const
-{
-  // return ui->checkBoxHideSecondColumn->isChecked();
-  return false;
-}
-
 void CurveListPanel::update2ndColumnValues(double tracker_time)
 {
   _tracker_time = tracker_time;
@@ -359,11 +352,8 @@ void CurveListPanel::refreshValues()
           return;
         }
 
-        if (!is2ndColumnHidden())
-        {
-          QString str_value = GetValue(curve_name.toStdString());
-          cell->setText(1, str_value);
-        }
+        QString str_value = GetValue(curve_name.toStdString());
+        cell->setText(1, str_value);
       }
     };
 
@@ -425,15 +415,6 @@ void CurveListPanel::on_lineEditFilter_textChanged(const QString& search_string)
 {
   bool updated = _tree_view->applyVisibilityFilter(search_string) |
                  _custom_view->applyVisibilityFilter(search_string);
-
-  std::pair<int, int> hc_1 = _tree_view->hiddenItemsCount();
-  std::pair<int, int> hc_2 = _custom_view->hiddenItemsCount();
-
-  int item_count = hc_1.second + hc_2.second;
-  int visible_count = item_count - hc_1.first - hc_2.first;
-
-  ui->labelNumberDisplayed->setText(QString::number(visible_count) + QString(" of ") +
-                                    QString::number(item_count));
   if (updated)
   {
     emit hiddenItemsChanged();
@@ -523,7 +504,6 @@ void CurveListPanel::on_stylesheetChanged(QString theme)
   _style_dir = theme;
   ui->buttonAddCustom->setIcon(LoadSvg(":/resources/svg/add_tab.svg", theme));
   ui->buttonEditCustom->setIcon(LoadSvg(":/resources/svg/pencil-edit.svg", theme));
-  ui->pushButtonTrash->setIcon(LoadSvg(":/resources/svg/trash.svg", theme));
 
   auto ChangeIconVisitor = [&](QTreeWidgetItem* cell) {
     const auto& curve_name = cell->data(0, CustomRoles::Name).toString().toStdString();
@@ -540,36 +520,4 @@ void CurveListPanel::on_stylesheetChanged(QString theme)
   };
 
   _tree_view->treeVisitor(ChangeIconVisitor);
-}
-
-void CurveListPanel::on_checkBoxShowValues_toggled(bool show)
-{
-  _tree_view->hideValuesColumn(!show);
-  _custom_view->hideValuesColumn(!show);
-  emit hiddenItemsChanged();
-}
-
-void CurveListPanel::on_pushButtonTrash_clicked(bool)
-{
-  QMessageBox msgBox(this);
-  msgBox.setWindowTitle("Warning. Can't be undone.");
-  msgBox.setText(tr("Delete data:\n\n"
-                    "[Delete All]: remove timeseries and plots.\n"
-                    "[Delete Points]: reset data points, but keep plots and "
-                    "timeseries.\n"));
-  QPushButton* buttonAll = msgBox.addButton(tr("Delete All"), QMessageBox::NoRole);
-  QPushButton* buttonPoints = msgBox.addButton(tr("Delete Points"), QMessageBox::NoRole);
-  msgBox.addButton(QMessageBox::Cancel);
-  msgBox.setDefaultButton(QMessageBox::Cancel);
-
-  msgBox.exec();
-
-  if (msgBox.clickedButton() == buttonAll)
-  {
-    requestDeleteAll(1);
-  }
-  else if (msgBox.clickedButton() == buttonPoints)
-  {
-    requestDeleteAll(2);
-  }
 }

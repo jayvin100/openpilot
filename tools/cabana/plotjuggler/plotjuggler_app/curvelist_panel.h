@@ -52,8 +52,6 @@ public:
 
   void changeFontSize(int point_size);
 
-  bool is2ndColumnHidden() const;
-
   void update2ndColumnValues(double time);
 
   virtual void keyPressEvent(QKeyEvent* event) override;
@@ -72,10 +70,6 @@ private slots:
 
   void onCustomSelectionChanged(const QItemSelection& selected,
                                 const QItemSelection& deselected);
-
-  void on_checkBoxShowValues_toggled(bool show);
-
-  void on_pushButtonTrash_clicked(bool checked);
 
 public slots:
 
@@ -120,8 +114,6 @@ signals:
   void refreshMathPlot(const std::string& curve_name);
 
   void deleteCurves(const std::vector<std::string>& curve_names);
-
-  void requestDeleteAll(int);
 };
 
 #endif  // CURVE_SELECTOR_H

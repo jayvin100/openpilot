@@ -1,6 +1,7 @@
 #include "tools/cabana/videowidget.h"
 
 #include <algorithm>
+#include <cmath>
 #include <thread>
 
 #include <QAction>
@@ -13,8 +14,13 @@
 
 #include "tools/cabana/tools/routeinfo.h"
 
-const int MIN_VIDEO_HEIGHT = 100;
+const int DEFAULT_VIDEO_WIDTH = 420;
+const int MIN_VIDEO_WIDTH = 320;
+const int MIN_CAMERA_HEIGHT = 220;
+const int THUMBNAIL_HEIGHT = 100;
 const int THUMBNAIL_MARGIN = 3;
+const int VIDEO_CONTROLS_HEIGHT = 72;
+const double DEFAULT_CAMERA_ASPECT_RATIO = 1928.0 / 1208.0;
 
 // Indexed by TimelineType: None, Engaged, AlertInfo, AlertWarning, AlertCritical, UserBookmark
 static const QColor timeline_colors[] = {
@@ -69,6 +75,18 @@ VideoWidget::VideoWidget(QWidget *parent) : QFrame(parent) {
           timeline_colors[(int)TimelineType::AlertInfo].name(),
           timeline_colors[(int)TimelineType::AlertWarning].name(),
           timeline_colors[(int)TimelineType::AlertCritical].name()));
+}
+
+QSize VideoWidget::sizeHint() const {
+  const int width = DEFAULT_VIDEO_WIDTH;
+  const int camera_height = cam_widget ? cam_widget->heightForWidth(width) : MIN_CAMERA_HEIGHT;
+  return QSize(width, camera_height + VIDEO_CONTROLS_HEIGHT);
+}
+
+QSize VideoWidget::minimumSizeHint() const {
+  const int width = MIN_VIDEO_WIDTH;
+  const int camera_height = cam_widget ? cam_widget->heightForWidth(width) : MIN_CAMERA_HEIGHT;
+  return QSize(width, camera_height + VIDEO_CONTROLS_HEIGHT);
 }
 
 void VideoWidget::createPlaybackController() {
@@ -149,8 +167,8 @@ QWidget *VideoWidget::createCameraWidget() {
   camera_tab->setExpanding(false);
 
   l->addWidget(cam_widget = new StreamCameraView("camerad", VISION_STREAM_ROAD));
-  cam_widget->setMinimumHeight(MIN_VIDEO_HEIGHT);
-  cam_widget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::MinimumExpanding);
+  cam_widget->setMinimumHeight(MIN_CAMERA_HEIGHT);
+  cam_widget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
 
   l->addWidget(slider = new Slider(w));
   slider->setSingleStep(0);
@@ -332,6 +350,21 @@ StreamCameraView::StreamCameraView(std::string stream_name, VisionStreamType str
   connect(fade_animation, &QPropertyAnimation::valueChanged, this, QOverload<>::of(&StreamCameraView::update));
 }
 
+int StreamCameraView::heightForWidth(int width) const {
+  const double aspect_ratio = (stream_width > 0 && stream_height > 0)
+                                  ? static_cast<double>(stream_width) / stream_height
+                                  : DEFAULT_CAMERA_ASPECT_RATIO;
+  return std::max(static_cast<int>(std::lround(width / aspect_ratio)), MIN_CAMERA_HEIGHT);
+}
+
+QSize StreamCameraView::sizeHint() const {
+  return QSize(DEFAULT_VIDEO_WIDTH, heightForWidth(DEFAULT_VIDEO_WIDTH));
+}
+
+QSize StreamCameraView::minimumSizeHint() const {
+  return QSize(MIN_VIDEO_WIDTH, heightForWidth(MIN_VIDEO_WIDTH));
+}
+
 void StreamCameraView::parseQLog(std::shared_ptr<LogReader> qlog) {
   std::mutex mutex;
   const auto &events = qlog->events;
@@ -383,7 +416,7 @@ void StreamCameraView::paintGL() {
 }
 
 QPixmap StreamCameraView::generateThumbnail(QPixmap thumb, double seconds) {
-  QPixmap scaled = thumb.scaledToHeight(MIN_VIDEO_HEIGHT - THUMBNAIL_MARGIN * 2, Qt::SmoothTransformation);
+  QPixmap scaled = thumb.scaledToHeight(THUMBNAIL_HEIGHT - THUMBNAIL_MARGIN * 2, Qt::SmoothTransformation);
   QPainter p(&scaled);
   p.setPen(QPen(palette().color(QPalette::BrightText), 2));
   p.drawRect(scaled.rect());
@@ -395,14 +428,17 @@ QPixmap StreamCameraView::generateThumbnail(QPixmap thumb, double seconds) {
 }
 
 void StreamCameraView::drawScrubThumbnail(QPainter &p) {
-  p.fillRect(rect(), Qt::black);
   auto it = big_thumbnails.lower_bound(can->toMonoTime(thumbnail_dispaly_time));
-  if (it != big_thumbnails.end()) {
-    QPixmap scaled_thumb = it->second.scaled(rect().size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    QRect thumb_rect(rect().center() - scaled_thumb.rect().center(), scaled_thumb.size());
-    p.drawPixmap(thumb_rect.topLeft(), scaled_thumb);
-    drawTime(p, thumb_rect, thumbnail_dispaly_time);
+  if (it == big_thumbnails.end()) {
+    return;
   }
+
+  QPixmap scaled_thumb = it->second.scaled(rect().size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+  QRect thumb_rect(rect().center() - scaled_thumb.rect().center(), scaled_thumb.size());
+  p.drawPixmap(thumb_rect.topLeft(), scaled_thumb);
+  p.setPen(QPen(palette().color(QPalette::BrightText), 2));
+  p.drawRect(thumb_rect.adjusted(0, 0, -1, -1));
+  drawTime(p, thumb_rect, thumbnail_dispaly_time);
 }
 
 void StreamCameraView::drawThumbnail(QPainter &p) {

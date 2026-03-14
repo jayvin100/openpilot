@@ -141,17 +141,6 @@ MainWindow::MainWindow(const MainWindowConfig& config, QWidget* parent)
   connect(ui->playbackStep, &QDoubleSpinBox::editingFinished, this,
           [this]() { ui->playbackStep->clearFocus(); });
 
-  connect(_curvelist_widget, &CurveListPanel::requestDeleteAll, this, [this](int option) {
-    if (option == 1)
-    {
-      deleteAllData();
-    }
-    else if (option == 2)
-    {
-      on_actionClearBuffer_triggered();
-    }
-  });
-
   _main_tabbed_widget =
       new TabbedPlotWidget("Main Window", this, _mapped_plot_data, this);
 

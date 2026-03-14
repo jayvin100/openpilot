@@ -37,6 +37,10 @@ class StreamCameraView : public CameraWidget {
 
 public:
   StreamCameraView(std::string stream_name, VisionStreamType stream_type, QWidget *parent = nullptr);
+  bool hasHeightForWidth() const override { return true; }
+  int heightForWidth(int width) const override;
+  QSize sizeHint() const override;
+  QSize minimumSizeHint() const override;
   void paintGL() override;
   void showPausedOverlay() { fade_animation->start(); }
   void parseQLog(std::shared_ptr<LogReader> qlog);
@@ -63,6 +67,8 @@ class VideoWidget : public QFrame {
 
 public:
   VideoWidget(QWidget *parnet = nullptr);
+  QSize sizeHint() const override;
+  QSize minimumSizeHint() const override;
   void showThumbnail(double seconds);
 
 protected:
