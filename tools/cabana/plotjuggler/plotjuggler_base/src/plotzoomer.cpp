@@ -45,37 +45,32 @@ void PlotZoomer::widgetMouseMoveEvent(QMouseEvent* me)
 {
   if (_mouse_pressed)
   {
-    auto patterns = this->mousePattern();
-    for (QwtEventPattern::MousePattern& pattern : patterns)
+    QRect rect(me->pos(), _initial_pos);
+    QRectF zoomRect = invTransform(rect.normalized());
+
+    if (zoomRect.width() > minZoomSize().width() &&
+        zoomRect.height() > minZoomSize().height())
     {
-      QRect rect(me->pos(), _initial_pos);
-      QRectF zoomRect = invTransform(rect.normalized());
-
-      if (zoomRect.width() > minZoomSize().width() &&
-          zoomRect.height() > minZoomSize().height())
+      if (!_zoom_enabled)
       {
-        if (!_zoom_enabled)
-        {
-          QSettings settings;
-          QString theme = settings.value("Preferences::theme", "light").toString();
-          const QPixmap& pixmap = LoadSvg(":/resources/svg/zoom_in.svg", theme);
-          QCursor zoom_cursor(pixmap.scaled(24, 24));
+        QSettings settings;
+        QString theme = settings.value("Preferences::theme", "light").toString();
+        const QPixmap& pixmap = LoadSvg(":/resources/svg/zoom_in.svg", theme);
+        QCursor zoom_cursor(pixmap.scaled(24, 24));
 
-          _zoom_enabled = true;
-          this->setRubberBand(RectRubberBand);
-          this->setTrackerMode(AlwaysOff);
-          QPen pen(parentWidget()->palette().foreground().color(), 1, Qt::DashLine);
-          this->setRubberBandPen(pen);
-          QApplication::setOverrideCursor(zoom_cursor);
-        }
+        _zoom_enabled = true;
+        this->setRubberBand(RectRubberBand);
+        this->setTrackerMode(AlwaysOff);
+        QPen pen(parentWidget()->palette().windowText().color(), 1, Qt::DashLine);
+        this->setRubberBandPen(pen);
+        QApplication::setOverrideCursor(zoom_cursor);
       }
-      else if (_zoom_enabled)
-      {
-        _zoom_enabled = false;
-        this->setRubberBand(NoRubberBand);
-        QApplication::restoreOverrideCursor();
-      }
-      break;
+    }
+    else if (_zoom_enabled)
+    {
+      _zoom_enabled = false;
+      this->setRubberBand(NoRubberBand);
+      QApplication::restoreOverrideCursor();
     }
   }
   QwtPlotPicker::widgetMouseMoveEvent(me);

@@ -321,17 +321,17 @@ PlotWidgetBase::PlotWidgetBase(QWidget* parent)
   };
 
   auto onEvent = [this](QEvent* event) {
-    if (auto ev = dynamic_cast<QDragEnterEvent*>(event))
+    if (auto drag_enter_event = dynamic_cast<QDragEnterEvent*>(event))
     {
-      emit dragEnterSignal(ev);
+      emit dragEnterSignal(drag_enter_event);
     }
-    else if(auto ev = dynamic_cast<QDragLeaveEvent*>(event))
+    else if (auto drag_leave_event = dynamic_cast<QDragLeaveEvent*>(event))
     {
-        emit dragLeaveSignal(ev);
+      emit dragLeaveSignal(drag_leave_event);
     }
-    else if (auto ev = dynamic_cast<QDropEvent*>(event))
+    else if (auto drop_event = dynamic_cast<QDropEvent*>(event))
     {
-      emit dropSignal(ev);
+      emit dropSignal(drop_event);
     }
   };
 
@@ -581,7 +581,7 @@ bool PlotWidgetBase::eventFilter(QObject* obj, QEvent* event)
 
         if (ctrl_modifier)
         {
-          if (legend_rect.contains(mouse_event->pos()) && legend()->isVisible())
+          if (legend_rect.contains(mouse_event->position().toPoint()) && legend()->isVisible())
           {
             int prev_size = legend()->font().pointSize();
             int new_size = prev_size;

@@ -317,12 +317,12 @@ PlotWidget::CurveInfo* PlotWidget::addCurveXY(std::string name_x, std::string na
 
     if (name.empty() || curve_it)
     {
-      int ret = QMessageBox::warning(qwtPlot(), "Missing name",
-                                     "The name of the curve is missing or exist already. "
-                                     "Try again or abort.",
-                                     QMessageBox::Abort | QMessageBox::Retry,
-                                     QMessageBox::NoButton);
-      if (ret == QMessageBox::Abort || ret == QMessageBox::NoButton)
+      int warning_result = QMessageBox::warning(qwtPlot(), "Missing name",
+                                                "The name of the curve is missing or exist already. "
+                                                "Try again or abort.",
+                                                QMessageBox::Abort | QMessageBox::Retry,
+                                                QMessageBox::NoButton);
+      if (warning_result == QMessageBox::Abort || warning_result == QMessageBox::NoButton)
       {
         return nullptr;
       }
@@ -1273,8 +1273,8 @@ void PlotWidget::onShowDataStatistics()
   auto setToNull = [this]() { _statistics_dialog = nullptr; };
 
   connect(this, &PlotWidget::rectChanged, _statistics_dialog,
-          [this](PlotWidget*, QRectF rect) {
-            _statistics_dialog->update({ rect.left(), rect.right() });
+          [this](PlotWidget*, QRectF updated_rect) {
+            _statistics_dialog->update({ updated_rect.left(), updated_rect.right() });
           });
 
   connect(_statistics_dialog, &QDialog::rejected, this, setToNull);

@@ -1,8 +1,28 @@
-import subprocess
 import os
+import re
 import shutil
+import subprocess
+import xml.etree.ElementTree as ET
+from pathlib import Path
 
 Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal')
+
+
+def sorted_paths(paths):
+  return sorted(paths, key=lambda p: str(p))
+
+
+def walk_files(root, suffixes, recursive=False, exclude_names=()):
+  iterator = root.rglob('*') if recursive else root.glob('*')
+  out = []
+  for path in iterator:
+    if not path.is_file() or path.name in exclude_names or path.suffix not in suffixes:
+      continue
+    if any(part in {'.build', '.gen'} for part in path.relative_to(root).parts):
+      continue
+    out.append(path)
+  return sorted_paths(out)
+
 
 # Detect Qt - skip build if not available
 if arch == "Darwin":
@@ -19,38 +39,42 @@ if not has_qt:
 SConscript(['#tools/replay/SConscript'])
 Import('replay_lib')
 
-qt_env = env.Clone()
-qt_modules = ["Widgets", "Gui", "Core"]
+repo_root = Path(Dir('#').abspath)
+cabana_root = Path(Dir('.').abspath)
+plotjuggler_root = cabana_root / 'plotjuggler'
+plotjuggler_gen_root = plotjuggler_root / '.gen'
+plotjuggler_ui_root = plotjuggler_gen_root / 'ui'
 
-qt_libs = []
-if arch == "Darwin":
-  qt_env['QTDIR'] = f"{brew_prefix}/opt/qt@5"
-  qt_dirs = [
-    os.path.join(qt_env['QTDIR'], "include"),
-  ]
-  qt_dirs += [f"{qt_env['QTDIR']}/include/Qt{m}" for m in qt_modules]
-  qt_env["LINKFLAGS"] += ["-F" + os.path.join(qt_env['QTDIR'], "lib")]
-  qt_env["FRAMEWORKS"] += [f"Qt{m}" for m in qt_modules] + ["OpenGL"]
-  qt_env.AppendENVPath('PATH', os.path.join(qt_env['QTDIR'], "bin"))
-else:
-  qt_install_prefix = subprocess.check_output(['qmake', '-query', 'QT_INSTALL_PREFIX'], encoding='utf8').strip()
-  qt_install_headers = subprocess.check_output(['qmake', '-query', 'QT_INSTALL_HEADERS'], encoding='utf8').strip()
 
-  qt_env['QTDIR'] = qt_install_prefix
-  qt_dirs = [
-    f"{qt_install_headers}",
-  ]
+def repo_rel(path):
+  path = Path(path)
+  try:
+    return '#' + str(path.relative_to(repo_root)).replace(os.sep, '/')
+  except ValueError:
+    return str(path)
 
-  qt_gui_path = os.path.join(qt_install_headers, "QtGui")
-  qt_gui_dirs = [d for d in os.listdir(qt_gui_path) if os.path.isdir(os.path.join(qt_gui_path, d))]
-  qt_dirs += [f"{qt_install_headers}/QtGui/{qt_gui_dirs[0]}/QtGui", ] if qt_gui_dirs else []
-  qt_dirs += [f"{qt_install_headers}/Qt{m}" for m in qt_modules]
 
-  qt_libs = [f"Qt5{m}" for m in qt_modules] + ["GL"]
-qt_env['QT3DIR'] = qt_env['QTDIR']
-qt_env.Tool('qt3')
+def find_system_library(name):
+  candidate_dirs = []
+  if arch == "Darwin":
+    candidate_dirs += [Path(f"{brew_prefix}/lib")]
+  else:
+    candidate_dirs += [
+      Path('/usr/lib/x86_64-linux-gnu'),
+      Path('/lib/x86_64-linux-gnu'),
+      Path('/usr/lib'),
+      Path('/lib'),
+      Path('/usr/local/lib'),
+    ]
 
-qt_env['CPPPATH'] += qt_dirs
+  for directory in candidate_dirs:
+    for suffix in ('.so', '.a', '.dylib'):
+      candidate = directory / f'lib{name}{suffix}'
+      if candidate.exists():
+        return File(str(candidate))
+  return None
+
+
 qt_flags = [
   "-D_REENTRANT",
   "-DQT_NO_DEBUG",
@@ -59,44 +83,343 @@ qt_flags = [
   "-DQT_CORE_LIB",
   "-DQT_MESSAGELOGCONTEXT",
 ]
-qt_env['CXXFLAGS'] += qt_flags
-qt_env['LIBPATH'] += ['#selfdrive/ui', ]
-qt_env['LIBS'] = qt_libs
 
-base_frameworks = qt_env['FRAMEWORKS']
-base_libs = [common, messaging, cereal, visionipc, 'm', 'ssl', 'crypto', 'pthread'] + qt_env["LIBS"]
+base_qt_modules = ["Widgets", "Gui", "Core"]
+pj_qt_modules = base_qt_modules + ["PrintSupport", "Concurrent", "Xml", "Svg", "OpenGL"]
 
+if arch == "Darwin":
+  qt_install_prefix = f"{brew_prefix}/opt/qt@5"
+  qt_install_headers = os.path.join(qt_install_prefix, "include")
+  qt_install_libs = os.path.join(qt_install_prefix, "lib")
+  qt_gui_subdir = None
+else:
+  qt_install_prefix = subprocess.check_output(
+      ['qmake', '-query', 'QT_INSTALL_PREFIX'], encoding='utf8').strip()
+  qt_install_headers = subprocess.check_output(
+      ['qmake', '-query', 'QT_INSTALL_HEADERS'], encoding='utf8').strip()
+  qt_install_libs = subprocess.check_output(
+      ['qmake', '-query', 'QT_INSTALL_LIBS'], encoding='utf8').strip()
+  qt_gui_path = os.path.join(qt_install_headers, "QtGui")
+  qt_gui_dirs = [
+    d for d in os.listdir(qt_gui_path)
+    if os.path.isdir(os.path.join(qt_gui_path, d))
+  ]
+  qt_gui_subdir = os.path.join(qt_install_headers, "QtGui", qt_gui_dirs[0], "QtGui") if qt_gui_dirs else None
+  pj_qt_modules.append("X11Extras")
+
+
+def make_qt_env(modules, autoscan=True):
+  qenv = env.Clone()
+  qenv['QTDIR'] = qt_install_prefix
+  if arch == "Darwin":
+    cpp_dirs = [os.path.join(qenv['QTDIR'], "include")]
+    cpp_dirs += [os.path.join(qenv['QTDIR'], "include", f"Qt{module}") for module in modules]
+    qenv["LINKFLAGS"] += ["-F" + qt_install_libs]
+    qenv["LIBPATH"] += [qt_install_libs]
+    qenv["FRAMEWORKS"] += [f"Qt{module}" for module in modules]
+    if "OpenGL" in modules:
+      qenv["FRAMEWORKS"] += ["OpenGL"]
+    qenv.AppendENVPath('PATH', os.path.join(qenv['QTDIR'], "bin"))
+    qt_libs = []
+  else:
+    cpp_dirs = [qt_install_headers]
+    if qt_gui_subdir:
+      cpp_dirs.append(qt_gui_subdir)
+    cpp_dirs += [os.path.join(qt_install_headers, f"Qt{module}") for module in modules]
+    qt_libs = [f"Qt5{module}" for module in modules]
+    if "OpenGL" in modules:
+      qt_libs.append("GL")
+    qenv["LIBPATH"] += [qt_install_libs]
+
+  qenv['QT3DIR'] = qenv['QTDIR']
+  qenv.Tool('qt3')
+  if not autoscan:
+    qenv['QT3_AUTOSCAN'] = 0
+  qenv['QT_RCC'] = os.path.join(qenv['QTDIR'], 'bin', 'rcc')
+  qenv['CPPPATH'] += cpp_dirs
+  qenv['CXXFLAGS'] += qt_flags
+  qenv['LIBS'] = qt_libs
+  return qenv
+
+
+qt_env = make_qt_env(base_qt_modules, autoscan=True)
+qt_env['LIBPATH'] += ['#selfdrive/ui']
+
+base_frameworks = list(qt_env['FRAMEWORKS'])
+base_libs = [common, messaging, cereal, visionipc, '-lm', '-lssl', '-lcrypto', '-lpthread'] + qt_env["LIBS"]
 if arch == "Darwin":
   base_frameworks.append('QtCharts')
 else:
-  base_libs.append('Qt5Charts')
+  base_libs += ['Qt5Charts', '-lGL']
 
 cabana_env = qt_env.Clone()
 if arch == "Darwin":
   cabana_env['CPPPATH'] += [f"{brew_prefix}/include"]
   cabana_env['LIBPATH'] += [f"{brew_prefix}/lib"]
 
-pj_lib_ext = "dylib" if arch == "Darwin" else "so"
-pj_output_dir = cabana_env.Dir('.').abspath
-pj_build_dir = cabana_env.Dir('plotjuggler/.build').abspath
-pj_inputs = []
-for root, dirs, files in os.walk(cabana_env.Dir('plotjuggler').abspath):
-  dirs[:] = [d for d in dirs if d != ".build"]
-  for filename in files:
-    path = os.path.join(root, filename)
-    if os.path.isfile(path) and not os.path.islink(path):
-      pj_inputs.append(path)
-pj_outputs = [os.path.join(pj_output_dir, f"{name}.{pj_lib_ext}") for name in [
-  "libcabana_plotjuggler",
-  "libDataLoadRlog",
-  "libDataStreamCereal",
-  "libToolboxLuaEditor",
-]]
-pj_build = cabana_env.Command(pj_outputs,
-                              pj_inputs,
-                              f"python3 tools/cabana/plotjuggler/build.py --build-dir {pj_build_dir} --output-dir {pj_output_dir}")
+pj_env = make_qt_env(pj_qt_modules, autoscan=False)
+pj_env['CXXFLAGS'] += ['-fPIC']
+pj_env.AppendUnique(CPPDEFINES=[
+  ('PJ_MAJOR_VERSION', 3),
+  ('PJ_MINOR_VERSION', 6),
+  ('PJ_PATCH_VERSION', 1),
+  'FMT_HEADER_ONLY',
+  'DYNAMIC_CAPNP',
+])
+if arch == "Darwin":
+  pj_env['CPPPATH'] += [f"{brew_prefix}/include"]
+  pj_env['LIBPATH'] += [f"{brew_prefix}/lib"]
 
-cabana_libs = [cereal, messaging, visionipc, replay_lib, 'avformat', 'avcodec', 'swresample', 'avutil', 'x264', 'z', 'bz2', 'zstd', 'yuv', 'usb-1.0'] + base_libs
+pj_include_dirs = [
+  plotjuggler_root,
+  plotjuggler_root / '3rdparty',
+  plotjuggler_root / '3rdparty/QCodeEditor/include',
+  plotjuggler_root / '3rdparty/Qt-Advanced-Docking/include',
+  plotjuggler_root / '3rdparty/Qt-Advanced-Docking/include/Qads',
+  plotjuggler_root / '3rdparty/color_widgets/include',
+  plotjuggler_root / '3rdparty/lua-5.4.3/src',
+  plotjuggler_root / '3rdparty/nlohmann',
+  plotjuggler_root / '3rdparty/qwt/src',
+  plotjuggler_root / '3rdparty/sol',
+  plotjuggler_root / 'plotjuggler_app',
+  plotjuggler_root / 'plotjuggler_base/include',
+  plotjuggler_root / 'plotjuggler_base/src',
+  plotjuggler_root / 'plotjuggler_plugins',
+  plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog',
+  repo_root,
+  repo_root / 'msgq',
+  repo_root / 'cereal',
+  repo_root / 'cereal/gen/cpp',
+  plotjuggler_ui_root,
+]
+pj_env['CPPPATH'] += [repo_rel(path) for path in pj_include_dirs]
+
+pj_frameworks = list(pj_env['FRAMEWORKS'])
+pj_qt_libs = list(pj_env['LIBS'])
+pj_platform_libs = ['-lxcb'] if arch != "Darwin" else []
+pj_system_capnp_libs = [find_system_library(name) for name in ('capnp', 'capnpc', 'kj')]
+if all(pj_system_capnp_libs):
+  pj_common_link_libs = pj_system_capnp_libs
+else:
+  pj_common_link_libs = ['capnp', 'kj']
+pj_version_defs = [('MainWindow', 'PlotJugglerMainWindow')]
+pj_meta_re = re.compile(r'\b(Q_OBJECT|Q_GADGET|Q_PLUGIN_METADATA)\b')
+
+
+def safe_target_name(path):
+  rel = os.path.splitext(repo_rel(path))[0]
+  return re.sub(r'[^A-Za-z0-9_]+', '_', rel)
+
+
+def ui_header_target(ui_path):
+  return repo_rel(plotjuggler_ui_root / f"ui_{Path(ui_path).stem}.h")
+
+
+def moc_target(header_path):
+  return repo_rel(plotjuggler_gen_root / 'moc' / f"moc_{safe_target_name(header_path)}.cpp")
+
+
+def qrc_target(qrc_path):
+  return repo_rel(plotjuggler_gen_root / 'rcc' / f"qrc_{safe_target_name(qrc_path)}.cpp")
+
+
+def object_target(group, source_path, suffix):
+  return repo_rel(plotjuggler_gen_root / 'obj' / group / f"{safe_target_name(source_path)}{suffix}")
+
+
+def qrc_dependencies(qrc_path):
+  deps = [repo_rel(qrc_path)]
+  tree = ET.parse(qrc_path)
+  for file_elem in tree.findall('.//file'):
+    if file_elem.text:
+      deps.append(repo_rel(qrc_path.parent / file_elem.text.strip()))
+  return deps
+
+
+def generate_ui_headers(ui_files):
+  ui_headers = []
+  for ui_path in ui_files:
+    ui_headers += pj_env.Command(
+      ui_header_target(ui_path),
+      repo_rel(ui_path),
+      '$QT3_UIC -o $TARGET $SOURCE')
+  return ui_headers
+
+
+def generate_qrc_sources(local_env, qrc_files):
+  qrc_sources = []
+  for qrc_path in qrc_files:
+    resource_name = Path(qrc_path).stem
+    qrc_sources += local_env.Command(
+      qrc_target(qrc_path),
+      qrc_dependencies(qrc_path),
+      f'$QT_RCC -name {resource_name} -o $TARGET ${{SOURCES[0]}}')
+  return qrc_sources
+
+
+def generate_moc_sources(local_env, headers, extra_deps):
+  moc_sources = []
+  for header in headers:
+    if not pj_meta_re.search(header.read_text(errors='ignore')):
+      continue
+    moc_cpp = local_env.Command(
+      moc_target(header),
+      repo_rel(header),
+      '$QT3_MOC $_CPPDEFFLAGS $_CPPINCFLAGS -o $TARGET $SOURCE')
+    if extra_deps:
+      local_env.Depends(moc_cpp, extra_deps)
+    moc_sources += moc_cpp
+  return moc_sources
+
+
+def build_objects(local_env, group, sources, shared, deps):
+  builder = local_env.SharedObject if shared else local_env.StaticObject
+  suffix = local_env.subst('$SHOBJSUFFIX' if shared else '$OBJSUFFIX')
+  objects = []
+  for source in sources:
+    target = object_target(group, source, suffix)
+    obj = builder(target, source)
+    if deps:
+      local_env.Depends(obj, deps)
+    objects += obj
+  return objects
+
+
+def build_static_library(name, cpp_sources, headers, qrc_files=(), cppdefines=()):
+  local_env = pj_env.Clone()
+  if cppdefines:
+    local_env.AppendUnique(CPPDEFINES=list(cppdefines))
+  generated_sources = generate_qrc_sources(local_env, qrc_files)
+  generated_sources += generate_moc_sources(local_env, headers, pj_ui_headers)
+  source_list = [repo_rel(path) for path in cpp_sources] + generated_sources
+  objects = build_objects(local_env, name, source_list, shared=False, deps=pj_ui_headers)
+  return local_env.Library(repo_rel(plotjuggler_gen_root / 'lib' / name), objects)
+
+
+def build_shared_library(name, cpp_sources, headers, link_libs, qrc_files=(), ui_deps=True,
+                         cppdefines=(), linkflags=()):
+  local_env = pj_env.Clone()
+  if cppdefines:
+    local_env.AppendUnique(CPPDEFINES=list(cppdefines))
+  if linkflags:
+    local_env['LINKFLAGS'] += list(linkflags)
+  local_env['LIBS'] = list(link_libs) + pj_qt_libs
+  generated_sources = generate_qrc_sources(local_env, qrc_files)
+  generated_sources += generate_moc_sources(local_env, headers, pj_ui_headers if ui_deps else [])
+  source_list = [repo_rel(path) for path in cpp_sources] + generated_sources
+  objects = build_objects(local_env, name, source_list, shared=True, deps=pj_ui_headers if ui_deps else [])
+  return local_env.SharedLibrary(name, objects, FRAMEWORKS=pj_frameworks)
+
+
+pj_ui_headers = generate_ui_headers(walk_files(plotjuggler_root, {'.ui'}, recursive=True))
+
+qwt_root = plotjuggler_root / '3rdparty/qwt/src'
+qwt_cpp = [path for path in walk_files(qwt_root, {'.cpp'}) if path.name != 'qwt_plot_glcanvas.cpp']
+qwt_headers = [path for path in walk_files(qwt_root, {'.h'}) if path.name != 'qwt_plot_glcanvas.h']
+
+colorwidgets_root = plotjuggler_root / '3rdparty/color_widgets'
+colorwidgets_cpp = walk_files(colorwidgets_root / 'src', {'.cpp'})
+colorwidgets_headers = walk_files(colorwidgets_root / 'include', {'.hpp'})
+
+qcodeeditor_root = plotjuggler_root / '3rdparty/QCodeEditor'
+qcodeeditor_cpp = walk_files(qcodeeditor_root / 'src/internal', {'.cpp'})
+qcodeeditor_headers = walk_files(qcodeeditor_root / 'include', {'', '.hpp'}, recursive=True)
+
+ads_root = plotjuggler_root / '3rdparty/Qt-Advanced-Docking'
+ads_cpp = walk_files(ads_root / 'src', {'.cpp'})
+if arch != "Darwin":
+  ads_cpp += walk_files(ads_root / 'src/linux', {'.cpp'})
+ads_headers = walk_files(ads_root / 'include/Qads', {'.h'})
+if arch != "Darwin":
+  ads_headers += walk_files(ads_root / 'src/linux', {'.h'})
+
+lua_root = plotjuggler_root / '3rdparty/lua-5.4.3/src'
+lua_cpp = [path for path in walk_files(lua_root, {'.c'}) if path.name not in {'lua.c', 'luac.c'}]
+
+base_root = plotjuggler_root / 'plotjuggler_base'
+base_cpp = walk_files(base_root / 'src', {'.cpp'})
+base_headers = walk_files(base_root / 'src', {'.h'})
+base_headers += walk_files(base_root / 'include/PlotJuggler', {'.h'}, recursive=True)
+base_headers += walk_files(base_root / 'include/PlotJuggler', {'.hpp'}, recursive=True)
+
+app_root = plotjuggler_root / 'plotjuggler_app'
+app_cpp = walk_files(app_root, {'.cpp'}, recursive=True, exclude_names={'main.cpp'})
+app_headers = walk_files(app_root, {'.h'}, recursive=True)
+
+plotjuggler_qwt = build_static_library('plotjuggler_qwt', qwt_cpp, qwt_headers)
+colorwidgets = build_static_library(
+  'colorwidgets',
+  colorwidgets_cpp,
+  colorwidgets_headers,
+  qrc_files=[colorwidgets_root / 'src/color_widgets.qrc'])
+qcodeeditor = build_static_library(
+  'QCodeEditor',
+  qcodeeditor_cpp,
+  qcodeeditor_headers,
+  qrc_files=[qcodeeditor_root / 'resources/qcodeeditor_resources.qrc'])
+qt_advanced_docking = build_static_library(
+  'qt_advanced_docking',
+  ads_cpp,
+  ads_headers,
+  qrc_files=[ads_root / 'src/ads.qrc'],
+  cppdefines=['ADS_STATIC'])
+
+lua_env = pj_env.Clone()
+lua_env.AppendUnique(CPPDEFINES=['LUA_USE_POSIX'] if arch != "Darwin" else [])
+lua_objects = build_objects(lua_env, 'lua_static', [repo_rel(path) for path in lua_cpp], shared=False, deps=[])
+lua_static = lua_env.Library(repo_rel(plotjuggler_gen_root / 'lib' / 'lua_static'), lua_objects)
+
+plotjuggler_base = build_static_library('plotjuggler_base', base_cpp, base_headers)
+plotjuggler_openpilot_common = build_static_library(
+  'plotjuggler_openpilot_common',
+  [plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog/rlog_parser.cpp'],
+  [plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog/rlog_parser.hpp'])
+plotjuggler_app_core = build_static_library(
+  'plotjuggler_app_core',
+  app_cpp,
+  app_headers,
+  qrc_files=[app_root / 'resource.qrc'],
+  cppdefines=pj_version_defs)
+
+cabana_plotjuggler = build_shared_library(
+  'cabana_plotjuggler',
+  [plotjuggler_root / 'cabana_plotjuggler_widget.cpp'],
+  [plotjuggler_root / 'cabana_plotjuggler_widget.h'],
+  [
+    plotjuggler_app_core,
+    plotjuggler_openpilot_common,
+    colorwidgets,
+    qt_advanced_docking,
+    qcodeeditor,
+    plotjuggler_base,
+    plotjuggler_qwt,
+    lua_static,
+  ] + pj_common_link_libs + pj_platform_libs,
+  cppdefines=pj_version_defs,
+  linkflags=['-Wl,-Bsymbolic-functions'] if arch != "Darwin" else [])
+
+data_load_rlog = build_shared_library(
+  'DataLoadRlog',
+  [plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog/dataload_rlog.cpp'],
+  [plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog/dataload_rlog.hpp'],
+  [plotjuggler_openpilot_common, plotjuggler_base, plotjuggler_qwt, lua_static] +
+  pj_common_link_libs + ['bz2'])
+
+data_stream_cereal = build_shared_library(
+  'DataStreamCereal',
+  [plotjuggler_root / 'plotjuggler_plugins/DataStreamCereal/datastream_cereal.cpp'],
+  [plotjuggler_root / 'plotjuggler_plugins/DataStreamCereal/datastream_cereal.h'],
+  [plotjuggler_openpilot_common, plotjuggler_base, plotjuggler_qwt, lua_static, cereal, common,
+   messaging] + pj_common_link_libs + ['ssl', 'crypto', 'pthread'])
+
+toolbox_lua_editor = build_shared_library(
+  'ToolboxLuaEditor',
+  [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.cpp'],
+  [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.h'],
+  [plotjuggler_base, plotjuggler_qwt, lua_static, qcodeeditor])
+
+cabana_libs = [cereal, messaging, visionipc, replay_lib, 'avformat', 'avcodec', 'swresample',
+               'avutil', 'x264', 'z', 'bz2', 'zstd', 'yuv', '-lusb-1.0'] + base_libs
 opendbc_path = '-DOPENDBC_FILE_PATH=\'"%s"\'' % (cabana_env.Dir("../../opendbc_repo/opendbc/dbc").abspath)
 cabana_env['CXXFLAGS'] += [opendbc_path]
 
@@ -106,20 +429,28 @@ assets_src = "assets/assets.qrc"
 cabana_env.Command(assets, assets_src, f"rcc $SOURCES -o $TARGET")
 cabana_env.Depends(assets, Glob('/assets/*', exclude=[assets, assets_src, "assets/assets.o"]))
 
-cabana_srcs = ['mainwin.cc', 'streams/pandastream.cc', 'streams/devicestream.cc', 'streams/livestream.cc', 'streams/abstractstream.cc', 'streams/replaystream.cc', 'binaryview.cc', 'historylog.cc', 'videowidget.cc', 'signalview.cc',
+cabana_srcs = ['mainwin.cc', 'streams/pandastream.cc', 'streams/devicestream.cc',
+               'streams/livestream.cc', 'streams/abstractstream.cc', 'streams/replaystream.cc',
+               'binaryview.cc', 'historylog.cc', 'videowidget.cc', 'signalview.cc',
                'streams/routes.cc', 'dbc/dbc.cc', 'dbc/dbcfile.cc', 'dbc/dbcmanager.cc',
                'utils/export.cc', 'utils/util.cc', 'utils/elidedlabel.cc',
-               'chart/chartswidget.cc', 'chart/chart.cc', 'chart/signalselector.cc', 'chart/tiplabel.cc', 'chart/sparkline.cc',
-               'commands.cc', 'messageswidget.cc', 'streamselector.cc', 'settings.cc', 'panda.cc',
-               'cameraview.cc', 'detailwidget.cc', 'pjwindow.cc', 'tools/findsimilarbits.cc', 'tools/findsignal.cc', 'tools/routeinfo.cc']
+               'chart/chartswidget.cc', 'chart/chart.cc', 'chart/signalselector.cc',
+               'chart/tiplabel.cc', 'chart/sparkline.cc', 'commands.cc', 'messageswidget.cc',
+               'streamselector.cc', 'settings.cc', 'panda.cc', 'cameraview.cc',
+               'detailwidget.cc', 'pjwindow.cc', 'tools/findsimilarbits.cc',
+               'tools/findsignal.cc', 'tools/routeinfo.cc']
 if arch != "Darwin":
   cabana_srcs += ['streams/socketcanstream.cc']
-cabana_lib = cabana_env.Library("cabana_lib", cabana_srcs, LIBS=cabana_libs, FRAMEWORKS=base_frameworks)
-cabana_program = cabana_env.Program('_cabana', ['cabana.cc', cabana_lib, assets], LIBS=cabana_libs + [pj_outputs[0]], FRAMEWORKS=base_frameworks)
-cabana_env.Depends(cabana_program, pj_build)
+cabana_lib = cabana_env.Library("cabana_lib", cabana_srcs, LIBS=cabana_libs,
+                                FRAMEWORKS=base_frameworks)
+cabana_program = cabana_env.Program('_cabana', ['cabana.cc', cabana_lib, assets],
+                                    LIBS=cabana_libs + [cabana_plotjuggler],
+                                    FRAMEWORKS=base_frameworks)
+cabana_env.Depends(cabana_program, [data_load_rlog, data_stream_cereal, toolbox_lua_editor])
 
 if GetOption('extras'):
-  cabana_env.Program('tests/test_cabana', ['tests/test_runner.cc', 'tests/test_cabana.cc', cabana_lib], LIBS=[cabana_libs])
+  cabana_env.Program('tests/test_cabana', ['tests/test_runner.cc', 'tests/test_cabana.cc', cabana_lib],
+                     LIBS=[cabana_libs])
 
 output_json_file = 'tools/cabana/dbc/car_fingerprint_to_dbc.json'
 generate_dbc = cabana_env.Command('#' + output_json_file,

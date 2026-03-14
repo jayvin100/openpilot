@@ -22,8 +22,8 @@ MenuBar::MenuBar(QWidget* parent) : QMenuBar(parent)
   _font.setPixelSize(18);
 
   QFontMetrics fm(_font);
-  _width_plot = fm.width("Plot");
-  _width_juggler = fm.width("Juggler");
+  _width_plot = fm.horizontalAdvance("Plot");
+  _width_juggler = fm.horizontalAdvance("Juggler");
 }
 
 // void MenuBar::paintEvent(QPaintEvent* event)

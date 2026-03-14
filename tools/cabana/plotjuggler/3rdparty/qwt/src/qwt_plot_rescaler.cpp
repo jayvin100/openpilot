@@ -434,8 +434,8 @@ QwtInterval QwtPlotRescaler::expandScale( QwtAxisId axisId,
             double dist = 0.0;
             for ( int axisPos = 0; axisPos < QwtAxis::AxisPositions; axisPos++ )
             {
-                const QwtAxisId axisId( axisPos );
-                const double d = pixelDist( axisId, newSize );
+                const QwtAxisId currentAxisId( axisPos );
+                const double d = pixelDist( currentAxisId, newSize );
                 if ( d > dist )
                     dist = d;
             }

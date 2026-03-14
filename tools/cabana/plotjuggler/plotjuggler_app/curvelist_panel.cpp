@@ -99,8 +99,8 @@ bool CurveListPanel::addCurve(const std::string& plot_name)
 
   QString group_name;
 
-  auto FindInPlotData = [&](auto& plot_data, const std::string& plot_name) {
-    auto it = plot_data.find(plot_name);
+  auto FindInPlotData = [&](auto& plot_data, const std::string& candidate_name) {
+    auto it = plot_data.find(candidate_name);
     if (it != plot_data.end())
     {
       auto& plot = it->second;
@@ -196,8 +196,8 @@ void CurveListPanel::updateAppearance()
 
         QVariant text_color;
 
-        auto GetTextColor = [&](auto& plot_data, const std::string& curve_name) {
-          auto it = plot_data.find(curve_name);
+        auto GetTextColor = [&](auto& plot_data, const std::string& candidate_curve_name) {
+          auto it = plot_data.find(candidate_curve_name);
           if (it != plot_data.end())
           {
             auto& series = it->second;
@@ -227,9 +227,9 @@ void CurveListPanel::updateAppearance()
           return false;
         };
 
-        bool valid = (GetTextColor(_plot_data.numeric, curve_name) ||
-                      GetTextColor(_plot_data.scatter_xy, curve_name) ||
-                      GetTextColor(_plot_data.strings, curve_name));
+        GetTextColor(_plot_data.numeric, curve_name) ||
+            GetTextColor(_plot_data.scatter_xy, curve_name) ||
+            GetTextColor(_plot_data.strings, curve_name);
       }
     };
 
@@ -283,7 +283,7 @@ void CurveListPanel::update2ndColumnValues(double tracker_time)
 
 void CurveListPanel::refreshValues()
 {
-  auto default_foreground = _custom_view->palette().foreground();
+  auto default_foreground = _custom_view->palette().windowText();
 
   auto FormattedNumber = [](double value) {
     QString num_text = QString::number(value, 'f', 3);
@@ -407,7 +407,7 @@ QString StringifyArray(QString str)
 
 QString CurveListPanel::getTreeName(QString name)
 {
-  auto parts = name.split('/', QString::SplitBehavior::SkipEmptyParts);
+  auto parts = name.split('/', Qt::SkipEmptyParts);
 
   QString out;
   for (int i = 0; i < parts.size(); i++)

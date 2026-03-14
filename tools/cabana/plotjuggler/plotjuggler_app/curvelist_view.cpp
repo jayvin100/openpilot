@@ -301,7 +301,7 @@ bool CurvesView::eventFilterBase(QObject* object, QEvent* event)
         painter.setFont(QFont("Arial", 14));
 
         painter.setBackground(Qt::transparent);
-        painter.setPen(table_widget->palette().foreground().color());
+        painter.setPen(table_widget->palette().windowText().color());
         painter.drawText(QRect(0, 0, 80, 30), Qt::AlignCenter, text);
         painter.end();
 
@@ -320,11 +320,12 @@ bool CurvesView::eventFilterBase(QObject* object, QEvent* event)
     if (ctrl_modifier_pressed)
     {
       int prev_size = _point_size;
-      if (wheel_event->delta() < 0)
+      const int wheel_delta = wheel_event->angleDelta().y();
+      if (wheel_delta < 0)
       {
         _point_size = std::max(8, prev_size - 1);
       }
-      else if (wheel_event->delta() > 0)
+      else if (wheel_delta > 0)
       {
         _point_size = std::min(14, prev_size + 1);
       }

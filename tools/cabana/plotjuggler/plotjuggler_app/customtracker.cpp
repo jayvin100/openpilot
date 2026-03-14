@@ -153,11 +153,11 @@ void CurveTracker::setPosition(const QPointF& position)
       visible_points++;
       double val = point.y();
 
-      QString line;
+      QString label_line;
 
       if (_param == VALUE)
       {
-        line = QString("<font color=%1>%2</font>").arg(color.name()).arg(val);
+        label_line = QString("<font color=%1>%2</font>").arg(color.name()).arg(val);
       }
       else if (_param == VALUE_NAME)
       {
@@ -166,13 +166,13 @@ void CurveTracker::setPosition(const QPointF& position)
         while (whitespaces-- > 0)
           value.prepend("&nbsp;");
 
-        line = QString("<font color=%1>%2 : %3</font>")
-                   .arg(color.name())
-                   .arg(value)
-                   .arg(curve->title().text());
+        label_line = QString("<font color=%1>%2 : %3</font>")
+                         .arg(color.name())
+                         .arg(value)
+                         .arg(curve->title().text());
       }
 
-      text_lines.insert(std::make_pair(val, line));
+      text_lines.insert(std::make_pair(val, label_line));
       _marker[i]->setVisible(true);
     }
     else
@@ -197,7 +197,7 @@ void CurveTracker::setPosition(const QPointF& position)
   }
   mark_text.setBorderPen(QColor(Qt::transparent));
 
-  QColor background_color = _plot->palette().background().color();
+  QColor background_color = _plot->palette().window().color();
   background_color.setAlpha(180);
   mark_text.setBackgroundBrush(background_color);
   mark_text.setText(text_marker_info);

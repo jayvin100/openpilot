@@ -152,7 +152,6 @@ public:
 
 Q_DECLARE_OPAQUE_POINTER(PJ::TransformFactory*)
 Q_DECLARE_METATYPE(PJ::TransformFactory*)
-Q_GLOBAL_STATIC(PJ::TransformFactory, _transform_factory_ptr_from_macro)
 
 QT_BEGIN_NAMESPACE
 

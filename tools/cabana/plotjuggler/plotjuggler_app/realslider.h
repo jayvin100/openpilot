@@ -7,6 +7,7 @@
 #ifndef REALSLIDER_H
 #define REALSLIDER_H
 
+#include <cmath>
 #include <QSlider>
 
 class RealSlider : public QSlider

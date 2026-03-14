@@ -4,9 +4,6 @@
 #include <QCodeEditor>
 #include <QStyleSyntaxHighlighter>
 #include <QFramedTextAttribute>
-#include <QCXXHighlighter>
-
-
 // Qt
 #include <QTextBlock>
 #include <QPaintEvent>

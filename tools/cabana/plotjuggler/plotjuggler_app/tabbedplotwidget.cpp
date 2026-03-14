@@ -299,8 +299,6 @@ void TabbedPlotWidget::on_tabWidget_currentChanged(int index)
 
 void TabbedPlotWidget::on_tabWidget_tabCloseRequested(int index)
 {
-  PlotDocker* tab = dynamic_cast<PlotDocker*>(tabWidget()->widget(index));
-
   // first add then delete.
   // Otherwise currentPlotGrid might be empty
   if (tabWidget()->count() == 1)

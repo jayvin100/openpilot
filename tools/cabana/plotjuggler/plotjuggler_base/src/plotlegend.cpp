@@ -61,7 +61,7 @@ void PlotLegend::draw(QPainter* painter, const QwtScaleMap& xMap, const QwtScale
   {
     painter->save();
 
-    QColor col = _parent_plot->canvas()->palette().foreground().color();
+    QColor col = _parent_plot->canvas()->palette().windowText().color();
     painter->setPen(col);
     painter->setBrush(QBrush(Qt::white, Qt::SolidPattern));
     painter->drawEllipse(iconRect);
@@ -114,7 +114,7 @@ void PlotLegend::drawLegendData(QPainter* painter, const QwtPlotItem* plotItem,
     }
     else
     {
-      pen.setColor(_parent_plot->canvas()->palette().foreground().color());
+      pen.setColor(_parent_plot->canvas()->palette().windowText().color());
     }
     painter->setPen(pen);
     painter->setFont(font());
@@ -129,7 +129,7 @@ void PlotLegend::drawBackground(QPainter* painter, const QRectF& rect) const
   painter->save();
 
   auto pen = textPen();
-  pen.setColor(_parent_plot->canvas()->palette().foreground().color());
+  pen.setColor(_parent_plot->canvas()->palette().windowText().color());
 
   painter->setPen(pen);
   painter->setBrush(backgroundBrush());

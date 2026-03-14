@@ -85,7 +85,7 @@ void CurveTreeView::addItem(const QString& group_name, const QString& tree_name,
   QStringList parts;
   if (use_separator)
   {
-    parts = tree_name.split('/', QString::SplitBehavior::SkipEmptyParts);
+    parts = tree_name.split('/', Qt::SkipEmptyParts);
   }
   else
   {
@@ -99,7 +99,7 @@ void CurveTreeView::addItem(const QString& group_name, const QString& tree_name,
 
   bool prefix_is_group = tree_name.startsWith(group_name);
   bool hasGroup = !group_name.isEmpty();
-  auto group_parts = group_name.split('/', QString::SplitBehavior::SkipEmptyParts);
+  auto group_parts = group_name.split('/', Qt::SkipEmptyParts);
 
   if (hasGroup && !prefix_is_group)
   {
@@ -213,7 +213,7 @@ bool CurveTreeView::applyVisibilityFilter(const QString& search_string)
   bool updated = false;
   _hidden_count = 0;
 
-  QStringList spaced_items = search_string.split(' ', QString::SkipEmptyParts);
+  QStringList spaced_items = search_string.split(' ', Qt::SkipEmptyParts);
 
   auto hideFunc = [&](QTreeWidgetItem* item) {
     QString name = item->data(0, Qt::UserRole).toString();

@@ -151,7 +151,7 @@ QPointF PlotMagnifier::invTransform(QPoint pos)
 
 void PlotMagnifier::widgetWheelEvent(QWheelEvent* event)
 {
-  _mouse_position = invTransform(event->pos());
+  _mouse_position = invTransform(event->position().toPoint());
   QwtPlotMagnifier::widgetWheelEvent(event);
 }
 

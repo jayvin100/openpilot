@@ -8,6 +8,8 @@
 
 namespace PJ
 {
+Q_GLOBAL_STATIC(PJ::TransformFactory, s_transform_factory)
+
 TransformFunction::TransformFunction() : _data(nullptr)
 {
   static unsigned order = 0;
@@ -91,7 +93,7 @@ TransformFactory* PJ::TransformFactory::instance()
   static TransformFactory* _ptr(nullptr);
   if (!qApp->property("TransformFactory").isValid() && !_ptr)
   {
-    _ptr = _transform_factory_ptr_from_macro;
+    _ptr = s_transform_factory;
     qApp->setProperty("TransformFactory", QVariant::fromValue(_ptr));
   }
   else if (!_ptr)

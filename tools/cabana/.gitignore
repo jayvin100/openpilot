@@ -1,5 +1,7 @@
 moc_*
 *.moc
+plotjuggler/.gen/
+plotjuggler/.build/
 
 assets.cc
 

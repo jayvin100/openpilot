@@ -24412,7 +24412,7 @@ namespace sol { namespace u_detail {
 		// this one is the actual meta-handling table,
 		// the next one will be the one for
 		int for_each_backing_metatable_calls = 0;
-		auto for_each_backing_metatable = [&](lua_State* L_, submetatable_type smt_, stateless_reference& fast_index_table_) {
+		auto for_each_backing_metatable = [&](lua_State*, submetatable_type smt_, stateless_reference& fast_index_table_) {
 			// Pointer types, AKA "references" from C++
 			const char* metakey = nullptr;
 			switch (smt_) {
