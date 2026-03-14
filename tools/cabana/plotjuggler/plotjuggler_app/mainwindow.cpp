@@ -48,16 +48,13 @@
 #include "transforms/lua_custom_function.h"
 #include "utils.h"
 #include "stylesheet.h"
-#include "dummy_data.h"
 #include "PlotJuggler/svg_util.h"
 #include "PlotJuggler/reactive_function.h"
+#include "dummy_data.h"
 #include "multifile_prefix.h"
 
-#include "ui_aboutdialog.h"
-#include "ui_support_dialog.h"
 #include "preferences_dialog.h"
 #include "nlohmann_parsers.h"
-#include "cheatsheet/cheatsheet_dialog.h"
 #include "colormap_editor.h"
 
 #ifdef COMPILED_WITH_CATKIN
@@ -120,28 +117,9 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
 
   ui->setupUi(this);
 
-  // setupUi() sets the windowTitle so the skin-based setting must be done after
-  _skin_path = "://resources/skin";
-  if (commandline_parser.isSet("skin_path"))
-  {
-    QDir path(commandline_parser.value("skin_path"));
-    if (path.exists())
-    {
-      _skin_path = path.absolutePath();
-    }
-  }
   if (commandline_parser.isSet("window_title"))
   {
     setWindowTitle(commandline_parser.value("window_title"));
-  }
-  else
-  {
-    QFile fileTitle(_skin_path + "/mainwindow_title.txt");
-    if (fileTitle.open(QIODevice::ReadOnly))
-    {
-      QString title = fileTitle.readAll().trimmed();
-      setWindowTitle(title);
-    }
   }
 
   QSettings settings;
@@ -324,12 +302,6 @@ MainWindow::MainWindow(const QCommandLineParser& commandline_parser, QWidget* pa
     ui->buttonHideStreamingFrame->setText("+");
     ui->frameStreaming->setHidden(true);
   }
-  if (settings.value("MainWindow.hiddenPublishersFrame", false).toBool())
-  {
-    ui->buttonHidePublishersFrame->setText("+");
-    ui->framePublishers->setHidden(true);
-  }
-
   //----------------------------------------------------------
   QIcon trackerIconA, trackerIconB, trackerIconC;
 
@@ -786,51 +758,6 @@ QStringList MainWindow::initializePlugins(QString directory_name)
       {
         publisher->setDataMap(&_mapped_plot_data);
         _state_publisher.insert(std::make_pair(plugin_name, publisher));
-
-        ui->layoutPublishers->setColumnStretch(0, 1.0);
-
-        int row = _state_publisher.size() - 1;
-        auto label = new QLabel(plugin_name, ui->framePublishers);
-        ui->layoutPublishers->addWidget(label, row, 0);
-
-        auto start_checkbox = new QCheckBox(ui->framePublishers);
-        ui->layoutPublishers->addWidget(start_checkbox, row, 1);
-        start_checkbox->setFocusPolicy(Qt::FocusPolicy::NoFocus);
-
-        connect(start_checkbox, &QCheckBox::toggled, this,
-                [=](bool enable) { publisher->setEnabled(enable); });
-
-        connect(publisher, &StatePublisher::closed, start_checkbox,
-                [=]() { start_checkbox->setChecked(false); });
-
-        if (publisher->availableActions().empty())
-        {
-          QFrame* empty = new QFrame(ui->framePublishers);
-          empty->setFixedSize({ 22, 22 });
-          ui->layoutPublishers->addWidget(empty, row, 2);
-        }
-        else
-        {
-          auto options_button = new QPushButton(ui->framePublishers);
-          options_button->setFlat(true);
-          options_button->setFixedSize({ 24, 24 });
-          ui->layoutPublishers->addWidget(options_button, row, 2);
-
-          _publisher_option_buttons.push_back(options_button);
-          options_button->setIcon(LoadSvg(":/resources/svg/settings_cog.svg", _current_theme));
-          options_button->setIconSize({ 16, 16 });
-
-          auto optionsMenu = [=]() {
-            PopupMenu* menu = new PopupMenu(options_button, this);
-            for (auto action : publisher->availableActions())
-            {
-              menu->addAction(action);
-            }
-            menu->exec();
-          };
-
-          connect(options_button, &QPushButton::clicked, options_button, optionsMenu);
-        }
       }
       else if (message_parser)
       {
@@ -1337,20 +1264,12 @@ void MainWindow::deleteAllData()
   _redo_states.clear();
 
   bool stopped = false;
-
-  for (int idx = 0; idx < ui->layoutPublishers->count(); idx++)
+  for (auto& [_, publisher] : _state_publisher)
   {
-    QLayoutItem* item = ui->layoutPublishers->itemAt(idx);
-    if (dynamic_cast<QWidgetItem*>(item))
+    if (publisher && publisher->enabled())
     {
-      if (auto checkbox = dynamic_cast<QCheckBox*>(item->widget()))
-      {
-        if (checkbox->isChecked())
-        {
-          checkbox->setChecked(false);
-          stopped = true;
-        }
-      }
+      publisher->setEnabled(false);
+      stopped = true;
     }
   }
 
@@ -1817,13 +1736,6 @@ void MainWindow::applyTheme(const QString& theme)
   if (_function_editor)
   {
     _function_editor->on_stylesheetChanged(theme);
-  }
-  for (auto* button : _publisher_option_buttons)
-  {
-    if (button)
-    {
-      button->setIcon(LoadSvg(":/resources/svg/settings_cog.svg", theme));
-    }
   }
   forEachWidget([&](PlotWidget*, PlotDocker* docker, int) {
     docker->on_stylesheetChanged(theme);
@@ -2914,62 +2826,10 @@ void MainWindow::onCustomPlotCreated(std::vector<CustomPlotPtr> custom_plots)
   _curvelist_widget->clearSelections();
 }
 
-void MainWindow::on_actionReportBug_triggered(bool)
-{
-  QDesktopServices::openUrl(QUrl("https://github.com/facontidavide/PlotJuggler/issues"));
-}
-
 void MainWindow::on_actionShare_the_love_triggered(bool)
 {
   QDesktopServices::openUrl(QUrl("https://twitter.com/intent/"
                                  "tweet?hashtags=PlotJuggler"));
-}
-
-void MainWindow::on_actionAbout_triggered(bool)
-{
-  QDialog* dialog = new QDialog(this);
-  auto ui = new Ui::AboutDialog();
-  ui->setupUi(dialog);
-
-  ui->label_version->setText(QString("version: ") + QApplication::applicationVersion());
-  dialog->setAttribute(Qt::WA_DeleteOnClose);
-
-  QFile fileTitle(_skin_path + "/about_window_title.html");
-  if (fileTitle.open(QIODevice::ReadOnly))
-  {
-    ui->titleTextBrowser->setHtml(fileTitle.readAll());
-  }
-
-  QFile fileBody(_skin_path + "/about_window_body.html");
-  if (fileBody.open(QIODevice::ReadOnly))
-  {
-    ui->bodyTextBrowser->setHtml(fileBody.readAll());
-  }
-
-  dialog->setAttribute(Qt::WA_DeleteOnClose);
-  dialog->exec();
-}
-
-void MainWindow::on_actionCheatsheet_triggered(bool)
-{
-  QSettings settings;
-
-  CheatsheetDialog* dialog = new CheatsheetDialog(this);
-  dialog->restoreGeometry(settings.value("Cheatsheet.geometry").toByteArray());
-  dialog->exec();
-  settings.setValue("Cheatsheet.geometry", dialog->saveGeometry());
-  dialog->deleteLater();
-}
-
-void MainWindow::on_actionSupportPlotJuggler_triggered(bool)
-{
-  QDialog* dialog = new QDialog(this);
-  auto ui = new Ui::SupportDialog();
-  ui->setupUi(dialog);
-
-  dialog->setAttribute(Qt::WA_DeleteOnClose);
-
-  dialog->exec();
 }
 
 /*
@@ -3534,15 +3394,6 @@ void MainWindow::on_buttonHideStreamingFrame_clicked(bool)
   settings.setValue("MainWindow.hiddenStreamingFrame", hidden);
 }
 
-void MainWindow::on_buttonHidePublishersFrame_clicked(bool)
-{
-  bool hidden = !ui->framePublishers->isHidden();
-  ui->buttonHidePublishersFrame->setText(hidden ? "+" : " -");
-  ui->framePublishers->setHidden(hidden);
-
-  QSettings settings;
-  settings.setValue("MainWindow.hiddenPublishersFrame", hidden);
-}
 
 void MainWindow::on_buttonRecentLayout_clicked(bool)
 {

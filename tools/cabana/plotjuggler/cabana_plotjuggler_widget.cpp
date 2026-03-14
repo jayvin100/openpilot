@@ -55,7 +55,6 @@ void initPlotJugglerParser(QCommandLineParser *parser) {
   parser->addOption(QCommandLineOption(QStringList{"buffer_size"}, "Streaming buffer size", "seconds"));
   parser->addOption(QCommandLineOption(QStringList{"enabled_plugins"}, "Enabled plugins", "name_list"));
   parser->addOption(QCommandLineOption(QStringList{"disabled_plugins"}, "Disabled plugins", "name_list"));
-  parser->addOption(QCommandLineOption(QStringList{"skin_path"}, "Skin path", "path"));
   parser->addOption(QCommandLineOption(QStringList{"start_streamer"}, "Start a streaming plugin", "file_name"));
   parser->addOption(QCommandLineOption(QStringList{"window_title"}, "Window title", "window_title"));
   parser->parse(QStringList{QStringLiteral("cabana-plotjuggler")});

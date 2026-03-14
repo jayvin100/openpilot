@@ -185,9 +185,7 @@ private:
   QMenu* _recent_data_files;
   QMenu* _recent_layout_files;
 
-  QString _skin_path;
   QString _current_theme = "light";
-  std::vector<QPushButton*> _publisher_option_buttons;
 
   void initializeActions();
   QStringList initializePlugins(QString subdir_name);
@@ -250,12 +248,6 @@ public slots:
 
   void onActionFullscreenTriggered();
 
-  void on_actionReportBug_triggered(bool checked = false);
-  void on_actionCheatsheet_triggered(bool checked = false);
-  void on_actionSupportPlotJuggler_triggered(bool checked = false);
-  // TODO ?  void on_actionSaveAllPlotTabs_triggered();
-
-  void on_actionAbout_triggered(bool checked = false);
   void on_actionExit_triggered(bool checked = false);
 
   void on_pushButtonActivateGrid_toggled(bool checked);
@@ -279,7 +271,6 @@ private slots:
   void on_buttonStreamingOptions_clicked(bool checked = false);
   void on_buttonHideFileFrame_clicked(bool checked = false);
   void on_buttonHideStreamingFrame_clicked(bool checked = false);
-  void on_buttonHidePublishersFrame_clicked(bool checked = false);
 
   void on_buttonRecentData_clicked(bool checked = false);
   void on_buttonRecentLayout_clicked(bool checked = false);

@@ -799,7 +799,6 @@ QWidget#leftMainWindowFrame
 
 QWidget#widgetLabelLoad,
 QWidget#widgetLabelStreaming,
-QWidget#widgetLabelPublishers,
 QWidget#widgetLabelTimeseries
 {
     background-color: #3e4750;
@@ -808,14 +807,12 @@ QWidget#widgetLabelTimeseries
 
 QWidget#widgetLabelLoad QLabel,
 QWidget#widgetLabelStreaming QLabel,
-QWidget#widgetLabelPublishers QLabel,
 QWidget#widgetLabelTimeseries QLabel
 {
     color: #FFFFFF;
 }
 
 QPushButton#buttonHideFileFrame,
-QPushButton#buttonHidePublishersFrame,
 QPushButton#buttonHideStreamingFrame {
     color: #FFFFFF;
     background-color: transparent;
@@ -904,4 +901,3 @@ QWidget#qwtCanvas {
 QDialog#PlotWidgetEditor QListView::item:selected {
     background-color: ${main_background};
 }
-
