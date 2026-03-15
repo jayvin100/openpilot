@@ -100,6 +100,21 @@ def run_layout_model_validation(repo_root: Path, contract_path: Path) -> tuple[i
   return proc.returncode, proc.stdout
 
 
+def available_memory_gb() -> int:
+  try:
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    available_pages = os.sysconf("SC_AVPHYS_PAGES")
+    return max(1, int((page_size * available_pages) / (1024 ** 3)))
+  except (AttributeError, OSError, ValueError):
+    return 8
+
+
+def auto_runtime_jobs(layout_count: int) -> int:
+  cpu_budget = max(1, (os.cpu_count() or 2) // 4)
+  memory_budget = max(1, available_memory_gb() // 4)
+  return max(1, min(layout_count, 4, cpu_budget, memory_budget))
+
+
 def main() -> int:
   parser = argparse.ArgumentParser(description="Validate Cabana PJ layouts against the checked-in contract.")
   parser.add_argument("--contract", default="tools/cabana/pj_validation/layout_contract.json")
@@ -110,8 +125,8 @@ def main() -> int:
   parser.add_argument("--output-dir", default="", help="Directory for generated screenshots and summary JSON.")
   parser.add_argument("--screenshot-delay-ms", type=int, default=0)
   parser.add_argument("--timeout-sec", type=int, default=30)
-  parser.add_argument("--runtime-jobs", type=int, default=2,
-                      help="Number of parallel runtime screenshot jobs to run.")
+  parser.add_argument("--runtime-jobs", type=int, default=0,
+                      help="Number of parallel runtime screenshot jobs to run. 0 = auto.")
   args = parser.parse_args()
 
   repo_root = Path(__file__).resolve().parents[3]
@@ -168,7 +183,7 @@ def main() -> int:
 
   runtime_results = {}
   if args.runtime:
-    runtime_jobs = max(1, args.runtime_jobs)
+    runtime_jobs = auto_runtime_jobs(len(layout_names)) if args.runtime_jobs <= 0 else max(1, args.runtime_jobs)
 
     def run_one_runtime(layout_name: str) -> tuple[str, dict]:
       layout_path = layout_dir / layout_name
