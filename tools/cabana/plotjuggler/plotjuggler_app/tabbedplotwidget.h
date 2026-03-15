@@ -12,6 +12,7 @@
 #include <QTableWidget>
 #include <QDomDocument>
 #include "plot_docker.h"
+#include "tools/cabana/pj_layout/layout_model.h"
 
 class TabbedPlotWidget : public QWidget
 {
@@ -34,6 +35,12 @@ public:
   const QTabWidget* tabWidget() const;
 
   PlotDocker* addTab(QString name);
+  PlotDocker* createTab(const QString& name = {});
+  bool renameTab(int index, const QString& name);
+  bool closeTab(int index);
+
+  cabana::pj_layout::TabbedWidgetModel saveStateModel() const;
+  bool loadStateModel(const cabana::pj_layout::TabbedWidgetModel& widget_model);
 
   QDomElement xmlSaveState(QDomDocument& doc) const;
 
@@ -62,7 +69,7 @@ public slots:
 
 private slots:
 
-  void on_renameCurrentTab();
+  void on_renameCurrentTab(int index = -1);
 
   // void on_savePlotsToFile();
 

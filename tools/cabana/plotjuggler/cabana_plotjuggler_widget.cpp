@@ -62,17 +62,15 @@ public:
     initPlotJugglerResources();
     initPlotJugglerTransforms();
     qApp->setProperty("PlotJugglerEmbedded", true);
-    pj_window = new MainWindow({}, parent);
-    pj_window->setParent(parent, Qt::Widget);
-    pj_window->setWindowFlag(Qt::Widget, true);
-    pj_window->setWindowFlag(Qt::Window, false);
-    pj_window->setMinimumSize(0, 0);
-    pj_window->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    if (auto *central = pj_window->centralWidget()) {
-      central->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    pj_controller = new MainWindow({}, parent);
+    pj_controller->hide();
+    pj_pane = pj_controller->takeEmbeddedPane();
+    if (pj_pane) {
+      pj_pane->setMinimumSize(0, 0);
+      pj_pane->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+      layout->addWidget(pj_pane, 1);
+      pj_pane->show();
     }
-    layout->addWidget(pj_window, 1);
-    pj_window->show();
 
     engine = std::make_unique<cabana::pj_engine::ReplayEngine>();
     engine->setBatchReadyHandler([this](const cabana::pj_engine::ParsedBatchPtr &batch) {
@@ -82,16 +80,18 @@ public:
 
       QElapsedTimer append_timer;
       append_timer.start();
-      pj_window->appendExternalData(std::move(batch->data_map));
+      pj_controller->appendExternalData(std::move(batch->data_map));
       engine->noteBatchConsumed(*batch, append_timer.elapsed());
     });
 
     if (qEnvironmentVariableIsSet("CABANA_PJ_DEBUG")) {
       QTimer::singleShot(3000, parent, [this, parent]() {
         qInfo() << "CabanaPlotJugglerWidget geom" << parent->geometry() << "visible" << parent->isVisible();
-        qInfo() << "Embedded MainWindow geom" << pj_window->geometry() << "visible" << pj_window->isVisible()
-                << "sizeHint" << pj_window->sizeHint();
-        pj_window->dumpObjectTree();
+        if (pj_pane) {
+          qInfo() << "Detached PJ pane geom" << pj_pane->geometry() << "visible" << pj_pane->isVisible()
+                  << "sizeHint" << pj_pane->sizeHint();
+          pj_pane->dumpObjectTree();
+        }
       });
     }
 
@@ -101,17 +101,24 @@ public:
 
     const QString embedded_screenshot_path = qEnvironmentVariable("CABANA_PJ_EMBED_SCREENSHOT");
     if (!embedded_screenshot_path.isEmpty()) {
-      QTimer::singleShot(20000, parent, [this, embedded_screenshot_path]() { pj_window->grab().save(embedded_screenshot_path); });
+      QTimer::singleShot(20000, parent, [this, embedded_screenshot_path]() {
+        if (pj_pane) {
+          pj_pane->grab().save(embedded_screenshot_path);
+        }
+      });
     }
   }
 
   ~Impl() {
+    if (pj_controller) {
+      pj_controller->close();
+    }
     engine.reset();
   }
 
   void refreshLayoutOnce() {
     if (layout_loaded || layout_path.isEmpty()) return;
-    layout_loaded = pj_window->loadLayoutFromFile(layout_path);
+    layout_loaded = pj_controller->loadLayoutFromFile(layout_path);
     if (qEnvironmentVariableIsSet("CABANA_PJ_DEBUG")) {
       qInfo() << "Cabana PJ layout load" << layout_path << "success" << layout_loaded;
     }
@@ -123,9 +130,9 @@ public:
   }
 
   void resizeTo(const QSize &size) {
-    if (!pj_window) return;
-    pj_window->resize(size);
-    pj_window->updateGeometry();
+    if (!pj_pane) return;
+    pj_pane->resize(size);
+    pj_pane->updateGeometry();
   }
 
   QString perfSummary() const {
@@ -140,7 +147,8 @@ public:
         .arg(engine_summary);
   }
 
-  MainWindow *pj_window = nullptr;
+  MainWindow *pj_controller = nullptr;
+  QWidget *pj_pane = nullptr;
   std::unique_ptr<cabana::pj_engine::ReplayEngine> engine;
   QString dbc_name;
   QString layout_path;
@@ -157,7 +165,7 @@ CabanaPlotJugglerWidget::~CabanaPlotJugglerWidget() = default;
 void CabanaPlotJugglerWidget::clearData() {
   impl_->layout_loaded = false;
   impl_->engine->clear();
-  impl_->pj_window->clearExternalData();
+  impl_->pj_controller->clearExternalData();
   impl_->refreshLayoutOnce();
 }
 
@@ -170,7 +178,7 @@ void CabanaPlotJugglerWidget::setCurrentTime(double relative_sec) {
   if (impl_->perf.enabled) {
     timer.start();
   }
-  impl_->pj_window->setExternalTrackerTime(impl_->engine->routeStartSec() + relative_sec);
+  impl_->pj_controller->setExternalTrackerTime(impl_->engine->routeStartSec() + relative_sec);
   if (impl_->perf.enabled) {
     const qint64 elapsed = timer.elapsed();
     impl_->perf.tracker_calls++;
@@ -185,7 +193,7 @@ void CabanaPlotJugglerWidget::setCurrentTime(double relative_sec) {
 }
 
 void CabanaPlotJugglerWidget::setPlaybackPaused(bool paused) {
-  impl_->pj_window->setExternalPlaybackPaused(paused);
+  impl_->pj_controller->setExternalPlaybackPaused(paused);
 }
 
 void CabanaPlotJugglerWidget::resizeEvent(QResizeEvent *event) {

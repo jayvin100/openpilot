@@ -16,6 +16,7 @@
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
 #include <QApplication>
+#include "curve_drag.h"
 
 class TabWidget : public QTabWidget
 {
@@ -34,24 +35,11 @@ public:
       ev->ignore();
       return;
     }
-    const QMimeData* mimeData = ev->mimeData();
-    QStringList mimeFormats = mimeData->formats();
-    for (const QString& format : mimeFormats)
+    CurveDragPayload payload = DecodeCurveDragPayload(ev->mimeData());
+    if (!payload.isValid())
     {
-      QByteArray encoded = mimeData->data(format);
-      QDataStream stream(&encoded, QIODevice::ReadOnly);
-
-      QStringList curves;
-
-      while (!stream.atEnd())
-      {
-        QString curve_name;
-        stream >> curve_name;
-        if (!curve_name.isEmpty())
-        {
-          curves.push_back(curve_name);
-        }
-      }
+      ev->ignore();
+      return;
     }
     ev->ignore();
   }

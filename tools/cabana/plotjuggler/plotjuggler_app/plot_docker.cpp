@@ -16,6 +16,112 @@
 #include <QLineEdit>
 #include "PlotJuggler/svg_util.h"
 
+namespace {
+
+cabana::pj_layout::LayoutNode SaveLayoutNodeModel(QWidget* widget)
+{
+  cabana::pj_layout::LayoutNode node;
+
+  if (auto* splitter = qobject_cast<QSplitter*>(widget))
+  {
+    node.kind = cabana::pj_layout::LayoutNode::Kind::Splitter;
+    node.orientation = splitter->orientation();
+
+    int total_size = 0;
+    for (int size : splitter->sizes())
+    {
+      total_size += size;
+    }
+    for (int size : splitter->sizes())
+    {
+      node.sizes.push_back(total_size > 0 ? double(size) / double(total_size) : 0.0);
+    }
+    for (int i = 0; i < splitter->count(); ++i)
+    {
+      node.children.push_back(SaveLayoutNodeModel(splitter->widget(i)));
+    }
+    return node;
+  }
+
+  if (auto* dock_area = qobject_cast<ads::CDockAreaWidget*>(widget))
+  {
+    node.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
+    for (int i = 0; i < dock_area->dockWidgetsCount(); ++i)
+    {
+      auto* dock_widget = dynamic_cast<DockWidget*>(dock_area->dockWidget(i));
+      if (dock_widget)
+      {
+        node.name = dock_widget->title();
+        node.plots.push_back(dock_widget->plotWidget()->savePlotModel());
+      }
+    }
+  }
+  return node;
+}
+
+void RestoreLayoutNodeModel(const cabana::pj_layout::LayoutNode& node, DockWidget* widget)
+{
+  if (node.kind == cabana::pj_layout::LayoutNode::Kind::DockArea)
+  {
+    if (!node.plots.empty())
+    {
+      widget->plotWidget()->loadPlotModel(node.plots.front());
+    }
+    if (!node.name.isEmpty())
+    {
+      widget->setTitle(node.name);
+    }
+    return;
+  }
+
+  const int splitter_count = static_cast<int>(node.children.size());
+  if (splitter_count == 0)
+  {
+    return;
+  }
+
+  std::vector<DockWidget*> widgets(splitter_count);
+  widgets[0] = widget;
+  PlotDocker* docker = static_cast<PlotDocker*>(widget->dockManager());
+  for (int i = 1; i < splitter_count; ++i)
+  {
+    widget = docker->splitDockWidget(widget, node.orientation);
+    widgets[i] = widget;
+  }
+
+  int total_size = 0;
+  for (int i = 0; i < splitter_count; ++i)
+  {
+    total_size += (node.orientation == Qt::Horizontal) ? widgets[i]->width() : widgets[i]->height();
+  }
+  if (total_size <= 0)
+  {
+    total_size = 1;
+  }
+
+  QList<int> sizes;
+  for (double size : node.sizes)
+  {
+    sizes.push_back(static_cast<int>(size * total_size));
+  }
+  while (sizes.size() < splitter_count)
+  {
+    sizes.push_back(total_size / splitter_count);
+  }
+
+  if (auto* splitter = ads::internal::findParent<ads::CDockSplitter*>(widget))
+  {
+    splitter->setSizes(sizes);
+  }
+
+  for (int i = 0; i < splitter_count; ++i)
+  {
+    RestoreLayoutNodeModel(node.children[i], widgets[i]);
+  }
+}
+
+}  // namespace
+
 class SplittableComponentsFactory : public ads::CDockComponentsFactory
 {
 public:
@@ -39,14 +145,9 @@ PlotDocker::PlotDocker(QString name, PlotDataMapRef& datamap,
   auto CreateFirstWidget = [&]() {
     if (dockAreaCount() == 0)
     {
-      DockWidget* widget = new DockWidget(datamap, _snapshot_lookup, this);
-
+      DockWidget* widget = createDockWidget();
       auto area = addDockWidget(ads::TopDockWidgetArea, widget);
       area->setAllowedAreas(ads::OuterDockAreas);
-
-      this->plotWidgetAdded(widget->plotWidget());
-
-      connect(widget, &DockWidget::undoableChange, this, &PlotDocker::undoableChange);
     }
   };
 
@@ -69,6 +170,49 @@ QString PlotDocker::name() const
 void PlotDocker::setName(QString name)
 {
   _name = name;
+}
+
+cabana::pj_layout::TabModel PlotDocker::saveStateModel() const
+{
+  cabana::pj_layout::TabModel tab_model;
+  tab_model.tab_name = _name;
+  for (CDockContainerWidget* container : dockContainers())
+  {
+    cabana::pj_layout::ContainerModel container_model;
+    container_model.has_root = true;
+    container_model.root = SaveLayoutNodeModel(container->rootSplitter());
+    tab_model.containers.push_back(std::move(container_model));
+  }
+  return tab_model;
+}
+
+bool PlotDocker::loadStateModel(const cabana::pj_layout::TabModel& tab_model)
+{
+  if (!isHidden())
+  {
+    hide();
+  }
+
+  _name = tab_model.tab_name;
+
+  for (const auto& container_model : tab_model.containers)
+  {
+    if (!container_model.has_root)
+    {
+      continue;
+    }
+    auto* widget = dynamic_cast<DockWidget*>(dockArea(0)->currentDockWidget());
+    if (widget)
+    {
+      RestoreLayoutNodeModel(container_model.root, widget);
+    }
+  }
+
+  if (isHidden())
+  {
+    show();
+  }
+  return true;
 }
 
 QDomElement saveChildNodesState(QDomDocument& doc, QWidget* widget)
@@ -115,7 +259,7 @@ QDomElement saveChildNodesState(QDomDocument& doc, QWidget* widget)
         {
           auto plotwidget_elem = dock_widget->plotWidget()->xmlSaveState(doc);
           area_elem.appendChild(plotwidget_elem);
-          area_elem.setAttribute("name", dock_widget->toolBar()->label()->text());
+          area_elem.setAttribute("name", dock_widget->title());
         }
       }
       return area_elem;
@@ -195,7 +339,7 @@ void PlotDocker::restoreSplitter(QDomElement elem, DockWidget* widget)
       if (child_elem.hasAttribute("name"))
       {
         QString area_name = child_elem.attribute("name");
-        widgets[index]->toolBar()->label()->setText(area_name);
+        widgets[index]->setTitle(area_name);
       }
       index++;
     }
@@ -251,6 +395,82 @@ PlotWidget* PlotDocker::plotAt(int index)
   return static_cast<PlotWidget*>(dock_widget->plotWidget());
 }
 
+DockWidget* PlotDocker::createDockWidget()
+{
+  auto* widget = new DockWidget(_datamap, _snapshot_lookup, this);
+  connect(widget, &DockWidget::undoableChange, this, &PlotDocker::undoableChange);
+  plotWidgetAdded(widget->plotWidget());
+  return widget;
+}
+
+DockWidget* PlotDocker::splitDockWidget(DockWidget* source, Qt::Orientation orientation)
+{
+  if (!source)
+  {
+    return nullptr;
+  }
+
+  auto* new_widget = createDockWidget();
+  auto area = addDockWidget((orientation == Qt::Horizontal) ? ads::RightDockWidgetArea :
+                                                          ads::BottomDockWidgetArea,
+                            new_widget, source->dockAreaWidget());
+  area->setAllowedAreas(ads::OuterDockAreas);
+  emit undoableChange();
+  return new_widget;
+}
+
+bool PlotDocker::closeDockWidget(DockWidget* dock_widget)
+{
+  if (!dock_widget)
+  {
+    return false;
+  }
+
+  if (auto* area = dock_widget->dockAreaWidget())
+  {
+    area->closeArea();
+  }
+
+  if (auto* plot_widget = dock_widget->takePlotWidget())
+  {
+    plot_widget->deleteLater();
+  }
+
+  emit undoableChange();
+  return true;
+}
+
+void PlotDocker::setDockTitle(DockWidget* dock_widget, const QString& title)
+{
+  if (!dock_widget || title.isEmpty())
+  {
+    return;
+  }
+  dock_widget->setTitle(title);
+  emit undoableChange();
+}
+
+void PlotDocker::toggleDockFullscreen(DockWidget* dock_widget)
+{
+  if (!dock_widget)
+  {
+    return;
+  }
+
+  dock_widget->toolBar()->toggleFullscreen();
+  bool fullscreen = dock_widget->toolBar()->isFullscreen();
+
+  for (int i = 0; i < dockAreaCount(); i++)
+  {
+    auto area = dockArea(i);
+    if (area != dock_widget->dockAreaWidget())
+    {
+      area->setVisible(!fullscreen);
+    }
+    dock_widget->toolBar()->buttonClose()->setHidden(fullscreen);
+  }
+}
+
 void PlotDocker::setHorizontalLink(bool enabled)
 {
   // TODO
@@ -297,47 +517,38 @@ DockWidget::DockWidget(PlotDataMapRef& datamap,
   setFeature(ads::CDockWidget::DockWidgetDeleteOnClose, true);
 
   _toolbar = new DockToolbar(this);
-  _toolbar->label()->setText("...");
   qobject_cast<QBoxLayout*>(layout())->insertWidget(0, _toolbar);
+  setTitle("...");
 
   connect(_toolbar->buttonSplitHorizontal(), &QPushButton::clicked, this,
-          &DockWidget::splitHorizontal);
+          [this]() { splitHorizontal(); });
 
   connect(_toolbar->buttonSplitVertical(), &QPushButton::clicked, this,
-          &DockWidget::splitVertical);
+          [this]() { splitVertical(); });
 
-  connect(_plot_widget, &PlotWidget::splitHorizontal, this, &DockWidget::splitHorizontal);
+  connect(_plot_widget, &PlotWidget::splitHorizontal, this, [this]() { splitHorizontal(); });
 
-  connect(_plot_widget, &PlotWidget::splitVertical, this, &DockWidget::splitVertical);
+  connect(_plot_widget, &PlotWidget::splitVertical, this, [this]() { splitVertical(); });
 
-  connect(_toolbar, &DockToolbar::titleChanged, _plot_widget,
-          [=](QString title) { _plot_widget->setStatisticsTitle(title); });
-
-  auto FullscreenAction = [=]() {
-    PlotDocker* parent_docker = static_cast<PlotDocker*>(dockManager());
-
-    this->toolBar()->toggleFullscreen();
-    bool fullscreen = this->toolBar()->isFullscreen();
-
-    for (int i = 0; i < parent_docker->dockAreaCount(); i++)
+  connect(_toolbar, &DockToolbar::titleChanged, this, [this](const QString& title) {
+    if (auto* parent_docker = static_cast<PlotDocker*>(dockManager()))
     {
-      auto area = parent_docker->dockArea(i);
-      if (area != dockAreaWidget())
-      {
-        area->setVisible(!fullscreen);
-      }
-      this->toolBar()->buttonClose()->setHidden(fullscreen);
+      parent_docker->setDockTitle(this, title);
     }
-  };
+  });
 
-  QObject::connect(_toolbar->buttonFullscreen(), &QPushButton::clicked, FullscreenAction);
+  connect(_toolbar->buttonFullscreen(), &QPushButton::clicked, this, [this]() {
+    if (auto* parent_docker = static_cast<PlotDocker*>(dockManager()))
+    {
+      parent_docker->toggleDockFullscreen(this);
+    }
+  });
 
-  QObject::connect(_toolbar->buttonClose(), &QPushButton::pressed, [=]() {
-    dockAreaWidget()->closeArea();
-    takeWidget();
-    _plot_widget->deleteLater();
-    _plot_widget = nullptr;
-    this->undoableChange();
+  connect(_toolbar->buttonClose(), &QPushButton::pressed, this, [this]() {
+    if (auto* parent_docker = static_cast<PlotDocker*>(dockManager()))
+    {
+      parent_docker->closeDockWidget(this);
+    }
   });
 
   this->layout()->setMargin(10);
@@ -349,41 +560,14 @@ DockWidget::~DockWidget()
 
 DockWidget* DockWidget::splitHorizontal()
 {
-  // create a sibling (same parent)
-  auto new_widget = new DockWidget(_datamap, _snapshot_lookup, qobject_cast<QWidget*>(parent()));
-
-  PlotDocker* parent_docker = static_cast<PlotDocker*>(dockManager());
-  auto area = parent_docker->addDockWidget(ads::RightDockWidgetArea, new_widget,
-                                           dockAreaWidget());
-
-  area->setAllowedAreas(ads::OuterDockAreas);
-
-  parent_docker->plotWidgetAdded(new_widget->plotWidget());
-
-  connect(this, &DockWidget::undoableChange, parent_docker, &PlotDocker::undoableChange);
-
-  this->undoableChange();
-
-  return new_widget;
+  auto* parent_docker = static_cast<PlotDocker*>(dockManager());
+  return parent_docker ? parent_docker->splitDockWidget(this, Qt::Horizontal) : nullptr;
 }
 
 DockWidget* DockWidget::splitVertical()
 {
-  auto new_widget = new DockWidget(_datamap, _snapshot_lookup, qobject_cast<QWidget*>(parent()));
-
-  PlotDocker* parent_docker = static_cast<PlotDocker*>(dockManager());
-
-  auto area = parent_docker->addDockWidget(ads::BottomDockWidgetArea, new_widget,
-                                           dockAreaWidget());
-
-  area->setAllowedAreas(ads::OuterDockAreas);
-  parent_docker->plotWidgetAdded(new_widget->plotWidget());
-
-  connect(this, &DockWidget::undoableChange, parent_docker, &PlotDocker::undoableChange);
-
-  this->undoableChange();
-
-  return new_widget;
+  auto* parent_docker = static_cast<PlotDocker*>(dockManager());
+  return parent_docker ? parent_docker->splitDockWidget(this, Qt::Vertical) : nullptr;
 }
 
 PlotWidget* DockWidget::plotWidget()
@@ -391,7 +575,32 @@ PlotWidget* DockWidget::plotWidget()
   return _plot_widget;
 }
 
+PlotWidget* DockWidget::takePlotWidget()
+{
+  PlotWidget* plot_widget = _plot_widget;
+  takeWidget();
+  _plot_widget = nullptr;
+  return plot_widget;
+}
+
 DockToolbar* DockWidget::toolBar()
 {
   return _toolbar;
+}
+
+QString DockWidget::title() const
+{
+  return _toolbar ? _toolbar->label()->text() : QString{};
+}
+
+void DockWidget::setTitle(const QString& title)
+{
+  if (_toolbar)
+  {
+    _toolbar->label()->setText(title);
+  }
+  if (_plot_widget)
+  {
+    _plot_widget->setStatisticsTitle(title);
+  }
 }

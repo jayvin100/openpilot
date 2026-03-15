@@ -27,6 +27,7 @@
 
 #include "PlotJuggler/plotwidget_base.h"
 #include "customtracker.h"
+#include "tools/cabana/pj_layout/layout_model.h"
 
 #include "transforms/custom_function.h"
 
@@ -43,6 +44,9 @@ public:
   void setContextMenuEnabled(bool enabled);
 
   virtual ~PlotWidget() override;
+
+  cabana::pj_layout::PlotModel savePlotModel() const;
+  bool loadPlotModel(const cabana::pj_layout::PlotModel& plot_model, bool autozoom = true);
 
   QDomElement xmlSaveState(QDomDocument& doc) const;
 

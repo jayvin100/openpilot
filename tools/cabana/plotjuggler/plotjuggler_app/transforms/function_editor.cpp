@@ -1,6 +1,7 @@
 #include "function_editor.h"
 #include "custom_function.h"
 #include "plotwidget.h"
+#include "curve_drag.h"
 #include <QDebug>
 #include <QMessageBox>
 #include <QFont>
@@ -283,37 +284,20 @@ bool FunctionEditorWidget::eventFilter(QObject* obj, QEvent* ev)
   if (ev->type() == QEvent::DragEnter)
   {
     auto event = static_cast<QDragEnterEvent*>(ev);
-    const QMimeData* mimeData = event->mimeData();
-    QStringList mimeFormats = mimeData->formats();
-
-    for (const QString& format : mimeFormats)
+    CurveDragPayload payload = DecodeCurveDragPayload(event->mimeData());
+    if (payload.mode != CurveDragMode::AddCurves)
     {
-      QByteArray encoded = mimeData->data(format);
-      QDataStream stream(&encoded, QIODevice::ReadOnly);
+      return false;
+    }
 
-      if (format != "curveslist/add_curve")
-      {
-        return false;
-      }
+    _dragging_curves = payload.curves;
 
-      _dragging_curves.clear();
-
-      while (!stream.atEnd())
-      {
-        QString curve_name;
-        stream >> curve_name;
-        if (!curve_name.isEmpty())
-        {
-          _dragging_curves.push_back(curve_name);
-        }
-      }
-      if ((obj == ui->lineEditSource && _dragging_curves.size() == 1) ||
-          (obj == ui->lineEditTab2Filter && _dragging_curves.size() == 1) ||
-          (obj == ui->listAdditionalSources && _dragging_curves.size() > 0))
-      {
-        event->acceptProposedAction();
-        return true;
-      }
+    if ((obj == ui->lineEditSource && _dragging_curves.size() == 1) ||
+        (obj == ui->lineEditTab2Filter && _dragging_curves.size() == 1) ||
+        (obj == ui->listAdditionalSources && _dragging_curves.size() > 0))
+    {
+      event->acceptProposedAction();
+      return true;
     }
   }
   else if (ev->type() == QEvent::Drop)

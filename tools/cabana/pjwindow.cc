@@ -1,6 +1,8 @@
 #include "tools/cabana/pjwindow.h"
 
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 
 #include <QAction>
 #include <QCloseEvent>
@@ -70,8 +72,11 @@ PlotJugglerWindow::PlotJugglerWindow(AbstractStream *stream, const QString &dbc_
     QTimer::singleShot(capture_delay_ms, this, [this, screenshot_path, exit_after_screenshot]() {
       grab().save(screenshot_path);
       if (exit_after_screenshot) {
+        std::thread([]() {
+          std::this_thread::sleep_for(std::chrono::seconds(2));
+          std::_Exit(0);
+        }).detach();
         qApp->exit(0);
-        QTimer::singleShot(2000, []() { std::_Exit(0); });
       }
     });
   }

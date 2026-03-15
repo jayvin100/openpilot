@@ -669,5 +669,20 @@ QDomElement ToDomElement(const XmlElement &element, QDomDocument *document) {
   return BuildDomElement(element, document);
 }
 
+bool ParsePlotElement(const QDomElement &element, PlotModel *plot, QString *error) {
+  if (element.isNull() || element.tagName() != "plot") {
+    if (error) {
+      *error = QString("Expected <plot> element, got <%1>").arg(element.tagName());
+    }
+    return false;
+  }
+  *plot = ParsePlot(element);
+  return true;
+}
+
+QDomElement ToPlotDomElement(const PlotModel &plot, QDomDocument *document) {
+  return SavePlot(plot, document);
+}
+
 }  // namespace pj_layout
 }  // namespace cabana

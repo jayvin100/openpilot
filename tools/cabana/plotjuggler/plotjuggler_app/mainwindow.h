@@ -16,6 +16,7 @@
 #include <QMovie>
 #include <QPushButton>
 #include <QShortcut>
+#include <QToolButton>
 
 #include "plotwidget.h"
 #include "plot_docker.h"
@@ -54,6 +55,7 @@ public:
   void setExternalPlaybackPaused(bool paused);
 
   bool loadLayoutFromFile(QString filename);
+  QWidget* takeEmbeddedPane();
 
 public slots:
 
@@ -174,6 +176,7 @@ private:
   bool loadLayoutDocument(const QDomDocument& dom_document);
 
   void checkAllCurvesFromLayout(const QDomElement& root);
+  void checkAllCurvesFromLayout(const cabana::pj_layout::LayoutModel& layout);
 
   void importPlotDataMap(PlotDataMapRef& new_data, bool remove_old);
 
@@ -240,6 +243,8 @@ private slots:
 
 private:
   QStringList readAllCurvesFromXML(QDomElement root_node);
+  QStringList readAllCurvesFromLayout(const cabana::pj_layout::LayoutModel& layout) const;
+  QWidget* dialogParentWidget() const;
 };
 
 class PopupMenu : public QMenu

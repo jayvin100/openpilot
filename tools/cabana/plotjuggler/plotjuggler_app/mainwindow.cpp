@@ -216,6 +216,17 @@ MainWindow::MainWindow(const MainWindowConfig& config, QWidget* parent)
   initializeActions();
   initializeEmbeddedToolboxes();
 
+  if (_embedded_mode)
+  {
+    auto* tools_button = new QToolButton(ui->frameFile);
+    tools_button->setText(tr("Tools"));
+    tools_button->setToolTip(tr("Open PlotJuggler tools"));
+    tools_button->setFocusPolicy(Qt::NoFocus);
+    tools_button->setPopupMode(QToolButton::InstantPopup);
+    tools_button->setMenu(_tools_menu);
+    ui->horizontalLayout_11->insertWidget(3, tools_button);
+  }
+
   _undo_timer.start();
 
   // save initial state
@@ -304,6 +315,37 @@ MainWindow::MainWindow(const MainWindowConfig& config, QWidget* parent)
 MainWindow::~MainWindow()
 {
   delete ui;
+}
+
+QWidget* MainWindow::takeEmbeddedPane()
+{
+  if (!_embedded_mode)
+  {
+    return centralWidget();
+  }
+
+  if (auto* current_menu_bar = menuBar())
+  {
+    current_menu_bar->hide();
+  }
+
+  QWidget* pane = takeCentralWidget();
+  if (pane)
+  {
+    pane->setParent(nullptr);
+    pane->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    pane->show();
+  }
+  return pane;
+}
+
+QWidget* MainWindow::dialogParentWidget() const
+{
+  if (ui && ui->centralWidget)
+  {
+    return ui->centralWidget;
+  }
+  return const_cast<MainWindow*>(this);
 }
 
 void MainWindow::clearExternalData()
@@ -633,40 +675,18 @@ void MainWindow::onPlotTabAdded(PlotDocker* docker)
 
 QDomDocument MainWindow::saveUiStateDom() const
 {
-  QDomDocument doc;
-  QDomProcessingInstruction instr = doc.createProcessingInstruction("xml", "version='1.0'"
-                                                                           " encoding='"
-                                                                           "UTF-8'");
-
-  doc.appendChild(instr);
-
-  QDomElement root = doc.createElement("root");
-
-  for (auto& it : TabbedPlotWidget::instances())
-  {
-    QDomElement tabbed_area = it.second->xmlSaveState(doc);
-    root.appendChild(tabbed_area);
-  }
-
-  doc.appendChild(root);
-
-  QDomElement relative_time = doc.createElement("use_relative_time_offset");
-  relative_time.setAttribute("enabled", ui->pushButtonRemoveTimeOffset->isChecked());
-  root.appendChild(relative_time);
-
-  return doc;
+  return cabana::pj_layout::ToXmlDocument(saveUiStateModel());
 }
 
 LayoutModel MainWindow::saveUiStateModel() const
 {
-  const QDomDocument legacy_doc = saveUiStateDom();
-
   LayoutModel layout;
-  QString error;
-  if (!cabana::pj_layout::ParseLayoutXml(legacy_doc.toString(), &layout, &error))
+  for (const auto& [_, widget] : TabbedPlotWidget::instances())
   {
-    qWarning().noquote() << QString("Failed to convert UI state through pj_layout: %1").arg(error);
+    layout.tabbed_widgets.push_back(widget->saveStateModel());
   }
+  layout.has_relative_time_offset = true;
+  layout.use_relative_time_offset = ui->pushButtonRemoveTimeOffset->isChecked();
   return layout;
 }
 
@@ -716,7 +736,64 @@ void MainWindow::checkAllCurvesFromLayout(const QDomElement& root)
     return;
   }
 
-  QMessageBox msgBox(this);
+  QMessageBox msgBox(dialogParentWidget());
+  msgBox.setWindowTitle("Warning");
+  msgBox.setText(tr("One or more timeseries in the layout haven't been loaded yet\n"
+                    "What do you want to do?"));
+
+  msgBox.addButton(tr("Remove curves from plots"), QMessageBox::RejectRole);
+  QPushButton* buttonPlaceholder =
+      msgBox.addButton(tr("Create empty placeholders"), QMessageBox::YesRole);
+  msgBox.setDefaultButton(buttonPlaceholder);
+  msgBox.exec();
+  if (msgBox.clickedButton() == buttonPlaceholder)
+  {
+    create_placeholders();
+  }
+}
+
+void MainWindow::checkAllCurvesFromLayout(const LayoutModel& layout)
+{
+  std::set<std::string> missing_curves;
+
+  for (const auto& curve_name_qt : readAllCurvesFromLayout(layout))
+  {
+    const auto curve_name = curve_name_qt.toStdString();
+    if (curve_name.empty())
+    {
+      continue;
+    }
+
+    const bool has_numeric = (_mapped_plot_data.numeric.count(curve_name) != 0);
+    const bool has_string = (_mapped_plot_data.strings.count(curve_name) != 0);
+    const bool has_scatter = (_mapped_plot_data.scatter_xy.count(curve_name) != 0);
+    if (!has_numeric && !has_string && !has_scatter)
+    {
+      missing_curves.insert(curve_name);
+    }
+  }
+
+  if (missing_curves.empty())
+  {
+    return;
+  }
+
+  auto create_placeholders = [&]() {
+    for (const auto& name : missing_curves)
+    {
+      _mapped_plot_data.addNumeric(name);
+      _curvelist_widget->addCurve(name);
+    }
+    _curvelist_widget->refreshColumns();
+  };
+
+  if (_embedded_mode)
+  {
+    create_placeholders();
+    return;
+  }
+
+  QMessageBox msgBox(dialogParentWidget());
   msgBox.setWindowTitle("Warning");
   msgBox.setText(tr("One or more timeseries in the layout haven't been loaded yet\n"
                     "What do you want to do?"));
@@ -734,67 +811,56 @@ void MainWindow::checkAllCurvesFromLayout(const QDomElement& root)
 
 bool MainWindow::loadUiStateDom(const QDomDocument& state_document)
 {
-  QDomElement root = state_document.namedItem("root").toElement();
-  if (root.isNull())
+  LayoutModel layout;
+  QString error;
+  if (!cabana::pj_layout::ParseLayoutXml(state_document.toString(), &layout, &error))
   {
-    qWarning() << "No <root> element found at the top-level of the XML file!";
+    qWarning().noquote() << QString("Failed to parse layout state through pj_layout: %1").arg(error);
     return false;
   }
-
-  size_t num_floating = 0;
-  std::map<QString, QDomElement> tabbed_widgets_with_name;
-
-  for (QDomElement tw = root.firstChildElement("tabbed_widget"); tw.isNull() == false;
-       tw = tw.nextSiblingElement("tabbed_widget"))
-  {
-    if (tw.attribute("parent") != ("main_window"))
-    {
-      num_floating++;
-    }
-    tabbed_widgets_with_name[tw.attribute("name")] = tw;
-  }
-
-  // add if missing
-  for (const auto& it : tabbed_widgets_with_name)
-  {
-    if (TabbedPlotWidget::instance(it.first) == nullptr)
-    {
-      // TODO createTabbedDialog(it.first, nullptr);
-    }
-  }
-
-  // remove those which don't share list of names
-  for (const auto& it : TabbedPlotWidget::instances())
-  {
-    if (tabbed_widgets_with_name.count(it.first) == 0)
-    {
-      it.second->deleteLater();
-    }
-  }
-
-  //-----------------------------------------------------
-  checkAllCurvesFromLayout(root);
-  //-----------------------------------------------------
-
-  for (QDomElement tw = root.firstChildElement("tabbed_widget"); tw.isNull() == false;
-       tw = tw.nextSiblingElement("tabbed_widget"))
-  {
-    TabbedPlotWidget* tabwidget = TabbedPlotWidget::instance(tw.attribute("name"));
-    tabwidget->xmlLoadState(tw);
-  }
-
-  QDomElement relative_time = root.firstChildElement("use_relative_time_offset");
-  if (!relative_time.isNull())
-  {
-    bool remove_offset = (relative_time.attribute("enabled") == QString("1"));
-    ui->pushButtonRemoveTimeOffset->setChecked(remove_offset);
-  }
-  return true;
+  return loadUiStateModel(layout);
 }
 
 bool MainWindow::loadUiStateModel(const LayoutModel& layout)
 {
-  return loadUiStateDom(cabana::pj_layout::ToXmlDocument(layout));
+  std::map<QString, cabana::pj_layout::TabbedWidgetModel> tabbed_widgets_with_name;
+  for (const auto& widget_model : layout.tabbed_widgets)
+  {
+    tabbed_widgets_with_name[widget_model.name] = widget_model;
+  }
+
+  for (const auto& [name, widget_model] : tabbed_widgets_with_name)
+  {
+    Q_UNUSED(widget_model);
+    if (TabbedPlotWidget::instance(name) == nullptr)
+    {
+      // TODO createTabbedDialog(name, nullptr);
+    }
+  }
+
+  for (const auto& [name, widget] : TabbedPlotWidget::instances())
+  {
+    if (tabbed_widgets_with_name.count(name) == 0)
+    {
+      widget->deleteLater();
+    }
+  }
+
+  checkAllCurvesFromLayout(layout);
+
+  for (const auto& widget_model : layout.tabbed_widgets)
+  {
+    if (auto* tabwidget = TabbedPlotWidget::instance(widget_model.name))
+    {
+      tabwidget->loadStateModel(widget_model);
+    }
+  }
+
+  if (layout.has_relative_time_offset)
+  {
+    ui->pushButtonRemoveTimeOffset->setChecked(layout.use_relative_time_offset);
+  }
+  return true;
 }
 
 bool MainWindow::xmlLoadState(QDomDocument state_document)
@@ -919,7 +985,7 @@ void MainWindow::loadStyleSheet(QString file_path)
   }
   catch (std::runtime_error& err)
   {
-    QMessageBox::warning(this, tr("Error loading StyleSheet"), tr(err.what()));
+    QMessageBox::warning(dialogParentWidget(), tr("Error loading StyleSheet"), tr(err.what()));
   }
 }
 
@@ -979,7 +1045,7 @@ void MainWindow::dropEvent(QDropEvent* event)
   if (!unsupported_files.isEmpty())
   {
     QMessageBox::information(
-        this, tr("Replay-only mode"),
+        dialogParentWidget(), tr("Replay-only mode"),
         tr("Cabana-hosted PlotJuggler no longer opens standalone data files.\n"
            "Use Cabana replay input and optional layout XML files instead."));
   }
@@ -1017,7 +1083,7 @@ void MainWindow::loadPluginState(const LayoutModel& layout)
 
     if (plugin_name.isEmpty())
     {
-      QMessageBox::warning(this, tr("Error loading Plugin State from Layout"),
+      QMessageBox::warning(dialogParentWidget(), tr("Error loading Plugin State from Layout"),
                            tr("The method xmlSaveState() must return a node like this "
                               "<plugin ID=\"PluginName\" "));
       continue;
@@ -1114,7 +1180,7 @@ bool MainWindow::loadLayoutFromFile(QString filename)
   if (!cabana::pj_layout::LoadLayoutFile(filename, &layout, &error))
   {
     QMessageBox::warning(
-        this, tr("Layout"), tr("Cannot load layout %1:\n%2.").arg(filename).arg(error));
+        dialogParentWidget(), tr("Layout"), tr("Cannot load layout %1:\n%2.").arg(filename).arg(error));
     return false;
   }
 
@@ -1123,17 +1189,12 @@ bool MainWindow::loadLayoutFromFile(QString filename)
 
 bool MainWindow::loadLayoutModel(const LayoutModel& layout)
 {
-  const QDomDocument domDocument = cabana::pj_layout::ToXmlDocument(layout);
   QSettings settings;
-
-  //-------------------------------------------------
-  // refresh plugins
-  QDomElement root = domDocument.namedItem("root").toElement();
 
   if (_embedded_mode)
   {
     std::set<std::string> added_placeholders;
-    for (const auto& curve_name_qt : readAllCurvesFromXML(root))
+    for (const auto& curve_name_qt : readAllCurvesFromLayout(layout))
     {
       const auto curve_name = curve_name_qt.toStdString();
       if (curve_name.empty())
@@ -1232,7 +1293,7 @@ bool MainWindow::loadLayoutModel(const LayoutModel& layout)
         }
         else
         {
-          QMessageBox::warning(this, tr("Exception"), message);
+          QMessageBox::warning(dialogParentWidget(), tr("Exception"), message);
         }
       }
     }
@@ -1269,7 +1330,7 @@ bool MainWindow::loadLayoutModel(const LayoutModel& layout)
 
     if (snippets_are_different)
     {
-      QMessageBox msgBox(this);
+      QMessageBox msgBox(dialogParentWidget());
       msgBox.setWindowTitle("Overwrite custom transforms?");
       msgBox.setText("Your layout file contains a set of custom transforms different "
                      "from "
@@ -1590,7 +1651,7 @@ void MainWindow::on_pushButtonUseDateTime_toggled(bool checked)
   {
     if (first)
     {
-      QMessageBox::information(this, tr("Note"),
+      QMessageBox::information(dialogParentWidget(), tr("Note"),
                                tr("When \"Use Date Time\" is checked, the option "
                                   "\"Remove Time Offset\" "
                                   "is automatically disabled.\n"
@@ -1689,7 +1750,7 @@ void MainWindow::onRefreshCustomPlot(const std::string& plot_name)
   }
   catch (const std::runtime_error& e)
   {
-    QMessageBox::critical(this, "error",
+    QMessageBox::critical(dialogParentWidget(), "error",
                           "Failed to refresh data : " + QString::fromStdString(e.what()));
   }
 }
@@ -1739,7 +1800,7 @@ void MainWindow::onCustomPlotCreated(std::vector<CustomPlotPtr> custom_plots)
     const bool inserted = _session.upsertCustomPlot(custom_plot, &error);
     if (!error.isEmpty())
     {
-      QMessageBox::warning(this, tr("Warning"),
+      QMessageBox::warning(dialogParentWidget(), tr("Warning"),
                            tr("Failed to create the custom timeseries. "
                               "Error:\n\n%1")
                                .arg(error));
@@ -1856,7 +1917,7 @@ void MainWindow::on_pushButtonLoadLayout_clicked(bool)
   QString directory_path =
       settings.value("MainWindow.lastLayoutDirectory", QDir::currentPath()).toString();
   QString filename =
-      QFileDialog::getOpenFileName(this, "Open Layout", directory_path, "*.xml");
+      QFileDialog::getOpenFileName(dialogParentWidget(), "Open Layout", directory_path, "*.xml");
   if (filename.isEmpty())
   {
     return;
@@ -1880,7 +1941,7 @@ void MainWindow::on_pushButtonSaveLayout_clicked(bool)
   QString directory_path =
       settings.value("MainWindow.lastLayoutDirectory", QDir::currentPath()).toString();
 
-  QFileDialog saveDialog(this);
+  QFileDialog saveDialog(dialogParentWidget());
   saveDialog.setOption(QFileDialog::DontUseNativeDialog, true);
 
   QGridLayout* save_layout = static_cast<QGridLayout*>(saveDialog.layout());
@@ -1972,7 +2033,7 @@ void MainWindow::onActionFullscreenTriggered()
   if (first_call && !_minimized)
   {
     first_call = false;
-    QMessageBox::information(this, "Remember!",
+    QMessageBox::information(dialogParentWidget(), "Remember!",
                              "Press F10 to switch back to the normal view");
   }
 
@@ -2006,7 +2067,7 @@ void MainWindow::on_actionClearRecentLayout_triggered(bool)
 
 void MainWindow::on_actionDeleteAllData_triggered(bool)
 {
-  QMessageBox msgBox(this);
+  QMessageBox msgBox(dialogParentWidget());
   msgBox.setWindowTitle("Warning. Can't be undone.");
   msgBox.setText(tr("Do you want to remove the previously loaded data?\n"));
   msgBox.addButton(QMessageBox::No);
@@ -2027,7 +2088,7 @@ void MainWindow::on_actionPreferences_triggered(bool)
   QSettings settings;
   QString prev_style = settings.value("Preferences::theme", "light").toString();
 
-  PreferencesDialog dialog;
+  PreferencesDialog dialog(dialogParentWidget());
   dialog.exec();
 
   QString theme = settings.value("Preferences::theme").toString();
@@ -2051,7 +2112,7 @@ void MainWindow::on_actionLoadStyleSheet_triggered(bool)
       settings.value("MainWindow.loadStyleSheetDirectory", QDir::currentPath())
           .toString();
 
-  QString fileName = QFileDialog::getOpenFileName(this, tr("Load StyleSheet"),
+  QString fileName = QFileDialog::getOpenFileName(dialogParentWidget(), tr("Load StyleSheet"),
                                                   directory_path, tr("(*.qss)"));
   if (fileName.isEmpty())
   {
@@ -2185,6 +2246,58 @@ QStringList MainWindow::readAllCurvesFromXML(QDomElement root_node)
 
   // start recursion
   recursiveXmlStream(0, root_node);
+
+  return curves.values();
+}
+
+QStringList MainWindow::readAllCurvesFromLayout(const LayoutModel& layout) const
+{
+  QSet<QString> curves;
+
+  std::function<void(const cabana::pj_layout::LayoutNode&)> recursive_visit;
+  recursive_visit = [&](const cabana::pj_layout::LayoutNode& node) {
+    if (node.kind == cabana::pj_layout::LayoutNode::Kind::Splitter)
+    {
+      for (const auto& child : node.children)
+      {
+        recursive_visit(child);
+      }
+      return;
+    }
+
+    for (const auto& plot : node.plots)
+    {
+      for (const auto& curve : plot.curves)
+      {
+        if (!curve.name.isEmpty())
+        {
+          curves.insert(curve.name);
+        }
+        if (!curve.curve_x.isEmpty())
+        {
+          curves.insert(curve.curve_x);
+        }
+        if (!curve.curve_y.isEmpty())
+        {
+          curves.insert(curve.curve_y);
+        }
+      }
+    }
+  };
+
+  for (const auto& widget : layout.tabbed_widgets)
+  {
+    for (const auto& tab : widget.tabs)
+    {
+      for (const auto& container : tab.containers)
+      {
+        if (container.has_root)
+        {
+          recursive_visit(container.root);
+        }
+      }
+    }
+  }
 
   return curves.values();
 }

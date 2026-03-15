@@ -12,6 +12,7 @@
 #include "PlotJuggler/plotdata.h"
 #include "plotwidget.h"
 #include "plot_docker_toolbar.h"
+#include "tools/cabana/pj_layout/layout_model.h"
 
 class DockWidget : public ads::CDockWidget
 {
@@ -25,8 +26,11 @@ public:
   ~DockWidget() override;
 
   PlotWidget* plotWidget();
+  PlotWidget* takePlotWidget();
 
   DockToolbar* toolBar();
+  QString title() const;
+  void setTitle(const QString& title);
 
 public slots:
   DockWidget* splitHorizontal();
@@ -60,6 +64,9 @@ public:
 
   void setName(QString name);
 
+  cabana::pj_layout::TabModel saveStateModel() const;
+  bool loadStateModel(const cabana::pj_layout::TabModel& tab_model);
+
   QDomElement xmlSaveState(QDomDocument& doc) const;
 
   bool xmlLoadState(QDomElement& tab_element);
@@ -67,6 +74,11 @@ public:
   int plotCount() const;
 
   PlotWidget* plotAt(int index);
+  DockWidget* createDockWidget();
+  DockWidget* splitDockWidget(DockWidget* source, Qt::Orientation orientation);
+  bool closeDockWidget(DockWidget* dock_widget);
+  void setDockTitle(DockWidget* dock_widget, const QString& title);
+  void toggleDockFullscreen(DockWidget* dock_widget);
 
   void setHorizontalLink(bool enabled);
 

@@ -28,11 +28,8 @@ PlotwidgetEditor::PlotwidgetEditor(PlotWidget* plotwidget, QWidget* parent)
 
   //  setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
 
-  QDomDocument doc;
-  auto saved_state = plotwidget->xmlSaveState(doc);
-
   _plotwidget = new PlotWidget(plotwidget->datamap(), this);
-  _plotwidget->xmlLoadState(saved_state);
+  _plotwidget->loadPlotModel(plotwidget->savePlotModel());
   _plotwidget->on_changeTimeOffset(plotwidget->timeOffset());
   _plotwidget->setContextMenuEnabled(false);
 
@@ -317,10 +314,8 @@ void PlotwidgetEditor::on_pushButtonCancel_pressed()
 
 void PlotwidgetEditor::on_pushButtonSave_pressed()
 {
-  QDomDocument doc;
   _plotwidget->setZoomRectangle(_bounding_rect_original, false);
-  auto elem = _plotwidget->xmlSaveState(doc);
-  _plotwidget_origin->xmlLoadState(elem);
+  _plotwidget_origin->loadPlotModel(_plotwidget->savePlotModel());
   this->accept();
 }
 

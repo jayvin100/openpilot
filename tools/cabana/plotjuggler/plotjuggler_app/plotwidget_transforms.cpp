@@ -22,11 +22,9 @@ DialogTransformEditor::DialogTransformEditor(PlotWidget* plotwidget)
 {
   ui->setupUi(this);
 
-  QDomDocument doc;
-  auto saved_state = plotwidget->xmlSaveState(doc);
   _plotwidget = new PlotWidget(plotwidget->datamap(), this);
   _plotwidget->on_changeTimeOffset(plotwidget->timeOffset());
-  _plotwidget->xmlLoadState(saved_state);
+  _plotwidget->loadPlotModel(plotwidget->savePlotModel());
 
   auto layout = new QVBoxLayout();
   ui->framePlotPreview->setLayout(layout);
@@ -245,9 +243,7 @@ void DialogTransformEditor::on_pushButtonSave_clicked()
 
   QSettings settings;
   bool autozoom_filter_applied = settings.value("Preferences::autozoom_filter_applied",true).toBool();
-  QDomDocument doc;
-  auto elem = _plotwidget->xmlSaveState(doc);
-  _plotwidget_origin->xmlLoadState(elem,autozoom_filter_applied);
+  _plotwidget_origin->loadPlotModel(_plotwidget->savePlotModel(), autozoom_filter_applied);
 
   if(autozoom_filter_applied)
   {

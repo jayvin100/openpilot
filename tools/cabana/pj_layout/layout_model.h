@@ -169,6 +169,8 @@ QString ToXmlString(const LayoutModel &layout, int indent = 1);
 LayoutStats ComputeLayoutStats(const LayoutModel &layout);
 XmlElement FromDomElement(const QDomElement &element);
 QDomElement ToDomElement(const XmlElement &element, QDomDocument *document);
+bool ParsePlotElement(const QDomElement &element, PlotModel *plot, QString *error = nullptr);
+QDomElement ToPlotDomElement(const PlotModel &plot, QDomDocument *document);
 
 }  // namespace pj_layout
 }  // namespace cabana

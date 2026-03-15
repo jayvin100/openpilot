@@ -47,6 +47,7 @@
 #include "plotzoomer.h"
 #include "plotmagnifier.h"
 #include "plotlegend.h"
+#include "curve_drag.h"
 
 #include "PlotJuggler/svg_util.h"
 #include "point_series_xy.h"
@@ -74,6 +75,42 @@ namespace {
 bool isEmbeddedPlotJuggler()
 {
   return qApp->property("PlotJugglerEmbedded").toBool();
+}
+
+QString curveStyleToString(PlotWidgetBase::CurveStyle style)
+{
+  switch (style)
+  {
+    case PlotWidgetBase::LINES:
+      return "Lines";
+    case PlotWidgetBase::LINES_AND_DOTS:
+      return "LinesAndDots";
+    case PlotWidgetBase::DOTS:
+      return "Dots";
+    case PlotWidgetBase::STICKS:
+      return "Sticks";
+  }
+  return "Lines";
+}
+
+void applyCurveStyle(PlotWidget* plotwidget, const QString& style)
+{
+  if (style == "Lines")
+  {
+    plotwidget->changeCurvesStyle(PlotWidgetBase::LINES);
+  }
+  else if (style == "LinesAndDots")
+  {
+    plotwidget->changeCurvesStyle(PlotWidgetBase::LINES_AND_DOTS);
+  }
+  else if (style == "Dots")
+  {
+    plotwidget->changeCurvesStyle(PlotWidgetBase::DOTS);
+  }
+  else if (style == "Sticks")
+  {
+    plotwidget->changeCurvesStyle(PlotWidgetBase::STICKS);
+  }
 }
 
 bool curveNeedsRefresh(const PlotWidget::CurveInfo& curve_info,
@@ -491,26 +528,21 @@ void PlotWidget::removeAllCurves()
 
 void PlotWidget::onDragEnterEvent(QDragEnterEvent* event)
 {
-  const QMimeData* mimeData = event->mimeData();
-  QStringList mimeFormats = mimeData->formats();
-
   _dragging.mode = DragInfo::NONE;
   _dragging.curves.clear();
   _dragging.source = event->source();
 
-  auto& format = mimeFormats.first();
-  QByteArray encoded = mimeData->data(format);
-  QDataStream stream(&encoded, QIODevice::ReadOnly);
-
-  while (!stream.atEnd())
+  CurveDragPayload payload = DecodeCurveDragPayload(event->mimeData());
+  if (!payload.isValid())
   {
-    QString curve_name;
-    stream >> curve_name;
+    event->ignore();
+    return;
+  }
+
+  for (const auto& curve_name : payload.curves)
+  {
     auto name = curve_name.toStdString();
-    if (!curve_name.isEmpty())
-    {
-      _dragging.curves.push_back(curve_name);
-    }
+    _dragging.curves.push_back(curve_name);
     if (_mapped_data.numeric.count(name) == 0 && _mapped_data.scatter_xy.count(name) == 0)
     {
       event->ignore();
@@ -524,13 +556,13 @@ void PlotWidget::onDragEnterEvent(QDragEnterEvent* event)
     return;
   }
 
-  if (format == "curveslist/add_curve")
+  if (payload.mode == CurveDragMode::AddCurves)
   {
     _dragging.mode = DragInfo::CURVES;
     event->acceptProposedAction();
   }
 
-  if (format == "curveslist/new_XY_axis")
+  if (payload.mode == CurveDragMode::NewXYAxis)
   {
     if (_dragging.curves.size() != 2)
     {
@@ -545,9 +577,10 @@ void PlotWidget::onDragEnterEvent(QDragEnterEvent* event)
   }
 }
 
-void PlotWidget::onDragLeaveEvent(QDragLeaveEvent* event){
-    _dragging.mode = DragInfo::NONE;
-    _dragging.curves.clear();
+void PlotWidget::onDragLeaveEvent(QDragLeaveEvent* event)
+{
+  _dragging.mode = DragInfo::NONE;
+  _dragging.curves.clear();
 }
 
 void PlotWidget::onDropEvent(QDropEvent*)
@@ -655,108 +688,92 @@ void PlotWidget::on_panned(int, int)
 
 QDomElement PlotWidget::xmlSaveState(QDomDocument& doc) const
 {
-  QDomElement plot_el = doc.createElement("plot");
+  return cabana::pj_layout::ToPlotDomElement(savePlotModel(), &doc);
+}
 
-  QDomElement range_el = doc.createElement("range");
-  QRectF rect = currentBoundingRect();
-  range_el.setAttribute("bottom", QString::number(rect.bottom(), 'f', 6));
-  range_el.setAttribute("top", QString::number(rect.top(), 'f', 6));
-  range_el.setAttribute("left", QString::number(rect.left(), 'f', 6));
-  range_el.setAttribute("right", QString::number(rect.right(), 'f', 6));
-  plot_el.appendChild(range_el);
+cabana::pj_layout::PlotModel PlotWidget::savePlotModel() const
+{
+  cabana::pj_layout::PlotModel plot_model;
+  plot_model.style = curveStyleToString(curveStyle());
+  plot_model.mode = isXYPlot() ? "XYPlot" : "TimeSeries";
+  plot_model.flip_x = isXYPlot() && _flip_x->isChecked();
+  plot_model.flip_y = _flip_y->isChecked();
 
-  QDomElement limitY_el = doc.createElement("limitY");
+  const QRectF rect = currentBoundingRect();
+  plot_model.range.bottom = rect.bottom();
+  plot_model.range.top = rect.top();
+  plot_model.range.left = rect.left();
+  plot_model.range.right = rect.right();
+
   if (_custom_Y_limits.min > -MAX_DOUBLE)
   {
-    limitY_el.setAttribute("min", QString::number(_custom_Y_limits.min));
+    plot_model.has_limit_y = true;
+    plot_model.limit_y.has_min = true;
+    plot_model.limit_y.min = _custom_Y_limits.min;
   }
   if (_custom_Y_limits.max < MAX_DOUBLE)
   {
-    limitY_el.setAttribute("max", QString::number(_custom_Y_limits.max));
-  }
-  plot_el.appendChild(limitY_el);
-
-  if (curveStyle() == PlotWidgetBase::LINES)
-  {
-    plot_el.setAttribute("style", "Lines");
-  }
-  else if (curveStyle() == PlotWidgetBase::LINES_AND_DOTS)
-  {
-    plot_el.setAttribute("style", "LinesAndDots");
-  }
-  else if (curveStyle() == PlotWidgetBase::DOTS)
-  {
-    plot_el.setAttribute("style", "Dots");
-  }
-  else if (curveStyle() == PlotWidgetBase::STICKS)
-  {
-    plot_el.setAttribute("style", "Sticks");
+    plot_model.has_limit_y = true;
+    plot_model.limit_y.has_max = true;
+    plot_model.limit_y.max = _custom_Y_limits.max;
   }
 
-  for (auto& it : curveList())
+  QDomDocument doc;
+  for (const auto& it : curveList())
   {
-    auto& name = it.src_name;
-    QwtPlotCurve* curve = it.curve;
-    QDomElement curve_el = doc.createElement("curve");
-    curve_el.setAttribute("name", QString::fromStdString(name));
-    curve_el.setAttribute("color", curve->pen().color().name());
-
-    plot_el.appendChild(curve_el);
+    cabana::pj_layout::CurveBinding curve_binding;
+    curve_binding.name = QString::fromStdString(it.src_name);
+    curve_binding.color = it.curve->pen().color().name();
 
     if (isXYPlot())
     {
-      if (auto xy = dynamic_cast<PointSeriesXY*>(curve->data()))
+      if (auto xy = dynamic_cast<PointSeriesXY*>(it.curve->data()))
       {
-        curve_el.setAttribute("curve_x", QString::fromStdString(xy->dataX()->plotName()));
-        curve_el.setAttribute("curve_y", QString::fromStdString(xy->dataY()->plotName()));
+        curve_binding.curve_x = QString::fromStdString(xy->dataX()->plotName());
+        curve_binding.curve_y = QString::fromStdString(xy->dataY()->plotName());
       }
     }
-    else
+    else if (auto ts = dynamic_cast<TransformedTimeseries*>(it.curve->data());
+             ts && ts->transform())
     {
-      auto ts = dynamic_cast<TransformedTimeseries*>(curve->data());
-      if (ts && ts->transform())
+      curve_binding.has_transform = true;
+      curve_binding.transform.name = ts->transformName();
+      curve_binding.transform.alias = ts->alias();
+
+      QDomElement transform_el = doc.createElement("transform");
+      ts->transform()->xmlSaveState(doc, transform_el);
+      for (QDomElement child = transform_el.firstChildElement(); !child.isNull();
+           child = child.nextSiblingElement())
       {
-        QDomElement transform_el = doc.createElement("transform");
-        transform_el.setAttribute("name", ts->transformName());
-        transform_el.setAttribute("alias", ts->alias());
-        ts->transform()->xmlSaveState(doc, transform_el);
-        curve_el.appendChild(transform_el);
+        curve_binding.transform.children.push_back(cabana::pj_layout::FromDomElement(child));
       }
     }
+    plot_model.curves.push_back(std::move(curve_binding));
   }
 
-  plot_el.setAttribute("mode", isXYPlot() ? "XYPlot" : "TimeSeries");
-
-  plot_el.setAttribute("flip_x", isXYPlot() && _flip_x->isChecked() ? "true" : "false");
-  plot_el.setAttribute("flip_y", _flip_y->isChecked() ? "true" : "false");
-
-  return plot_el;
+  return plot_model;
 }
 
-bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
+bool PlotWidget::loadPlotModel(const cabana::pj_layout::PlotModel& plot_model, bool autozoom)
 {
   std::set<std::string> added_curve_names;
 
-  QString mode = plot_widget.attribute("mode");
-  setModeXY(mode == "XYPlot");
+  setModeXY(plot_model.mode == "XYPlot");
 
-  _flip_x->setChecked(plot_widget.attribute("flip_x") == "true");
-  _flip_y->setChecked(plot_widget.attribute("flip_y") == "true");
-
-  QDomElement limitY_el = plot_widget.firstChildElement("limitY");
+  _flip_x->setChecked(plot_model.flip_x);
+  _flip_y->setChecked(plot_model.flip_y);
 
   _custom_Y_limits.min = -MAX_DOUBLE;
   _custom_Y_limits.max = +MAX_DOUBLE;
-
-  if (!limitY_el.isNull())
+  if (plot_model.has_limit_y)
   {
-    if (limitY_el.hasAttribute("min"))
+    if (plot_model.limit_y.has_min)
     {
-      _custom_Y_limits.min = limitY_el.attribute("min").toDouble();
+      _custom_Y_limits.min = plot_model.limit_y.min;
     }
-    if (limitY_el.hasAttribute("max"))
+    if (plot_model.limit_y.has_max)
     {
-      _custom_Y_limits.max = limitY_el.attribute("max").toDouble();
+      _custom_Y_limits.max = plot_model.limit_y.max;
     }
   }
 
@@ -772,17 +789,16 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
 
   // insert curves
   QStringList missing_curves;
-  for (QDomElement curve_element = plot_widget.firstChildElement("curve");
-       !curve_element.isNull(); curve_element = curve_element.nextSiblingElement("curve"))
+  for (const auto& curve_binding : plot_model.curves)
   {
     bool is_merged_xy =
-        curve_element.hasAttribute("curve_x") && curve_element.hasAttribute("curve_y");
+        !curve_binding.curve_x.isEmpty() && !curve_binding.curve_y.isEmpty();
     bool is_timeseries = !isXYPlot();
     bool is_scatter_xy = !is_timeseries && !is_merged_xy;
 
-    QString curve_name = curve_element.attribute("name");
+    QString curve_name = curve_binding.name;
     std::string curve_name_std = curve_name.toStdString();
-    QColor color(curve_element.attribute("color"));
+    QColor color(curve_binding.color);
 
     //-----------------
     if (is_timeseries || is_scatter_xy)
@@ -810,13 +826,20 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
         added_curve_names.insert(curve_name_std);
 
         auto ts = dynamic_cast<TransformedTimeseries*>(curve->data());
-        QDomElement transform_el = curve_element.firstChildElement("transform");
-        if (ts && transform_el.isNull() == false)
+        if (ts && curve_binding.has_transform)
         {
-          ts->setTransform(transform_el.attribute("name"));
+          ts->setTransform(curve_binding.transform.name);
+          QDomDocument doc;
+          QDomElement transform_el = doc.createElement("transform");
+          transform_el.setAttribute("name", curve_binding.transform.name);
+          transform_el.setAttribute("alias", curve_binding.transform.alias);
+          for (const auto& child : curve_binding.transform.children)
+          {
+            transform_el.appendChild(cabana::pj_layout::ToDomElement(child, &doc));
+          }
           ts->transform()->xmlLoadState(transform_el);
           ts->updateCache(true);
-          auto alias = transform_el.attribute("alias");
+          auto alias = curve_binding.transform.alias;
           ts->setAlias(alias);
           curve->setTitle(alias);
         }
@@ -825,8 +848,8 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
     //-----------------
     if (is_merged_xy)
     {
-      std::string curve_x = curve_element.attribute("curve_x").toStdString();
-      std::string curve_y = curve_element.attribute("curve_y").toStdString();
+      std::string curve_x = curve_binding.curve_x.toStdString();
+      std::string curve_y = curve_binding.curve_y.toStdString();
       if (isEmbeddedPlotJuggler())
       {
         if (_mapped_data.numeric.find(curve_x) == _mapped_data.numeric.end())
@@ -877,39 +900,17 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
   emit curveListChanged();
 
   //-----------------------------------------
-
-  QDomElement rectangle = plot_widget.firstChildElement("range");
-
-  if (!rectangle.isNull() && autozoom)
+  if (autozoom)
   {
     QRectF rect;
-    rect.setBottom(rectangle.attribute("bottom").toDouble());
-    rect.setTop(rectangle.attribute("top").toDouble());
-    rect.setLeft(rectangle.attribute("left").toDouble());
-    rect.setRight(rectangle.attribute("right").toDouble());
+    rect.setBottom(plot_model.range.bottom);
+    rect.setTop(plot_model.range.top);
+    rect.setLeft(plot_model.range.left);
+    rect.setRight(plot_model.range.right);
     this->setZoomRectangle(rect, false);
   }
 
-  if (plot_widget.hasAttribute("style"))
-  {
-    QString style = plot_widget.attribute("style");
-    if (style == "Lines")
-    {
-      changeCurvesStyle(PlotWidgetBase::LINES);
-    }
-    else if (style == "LinesAndDots")
-    {
-      changeCurvesStyle(PlotWidgetBase::LINES_AND_DOTS);
-    }
-    else if (style == "Dots")
-    {
-      changeCurvesStyle(PlotWidgetBase::DOTS);
-    }
-    else if (style == "Sticks")
-    {
-      changeCurvesStyle(PlotWidgetBase::STICKS);
-    }
-  }
+  applyCurveStyle(this, plot_model.style);
 
   if(autozoom)
   {
@@ -917,6 +918,18 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
   }
   replot();
   return true;
+}
+
+bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
+{
+  cabana::pj_layout::PlotModel plot_model;
+  QString error;
+  if (!cabana::pj_layout::ParsePlotElement(plot_widget, &plot_model, &error))
+  {
+    qWarning().noquote() << QString("Failed to parse plot model: %1").arg(error);
+    return false;
+  }
+  return loadPlotModel(plot_model, autozoom);
 }
 
 void PlotWidget::rescaleEqualAxisScaling()
@@ -1476,7 +1489,7 @@ void PlotWidget::on_copyAction_triggered()
 {
   QDomDocument doc;
   auto root = doc.createElement("PlotWidgetClipBoard");
-  auto el = xmlSaveState(doc);
+  auto el = cabana::pj_layout::ToPlotDomElement(savePlotModel(), &doc);
   doc.appendChild(root);
   root.appendChild(el);
 
@@ -1502,8 +1515,15 @@ void PlotWidget::on_pasteAction_triggered()
   }
   else
   {
-    auto el = root.firstChildElement();
-    xmlLoadState(el);
+    auto el = root.firstChildElement("plot");
+    cabana::pj_layout::PlotModel plot_model;
+    QString error;
+    if (!cabana::pj_layout::ParsePlotElement(el, &plot_model, &error))
+    {
+      qWarning().noquote() << QString("Failed to parse plot clipboard contents: %1").arg(error);
+      return;
+    }
+    loadPlotModel(plot_model);
     emit undoableChange();
   }
 }

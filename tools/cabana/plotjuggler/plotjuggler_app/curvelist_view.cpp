@@ -12,6 +12,7 @@
 #include <QDebug>
 #include <QScrollBar>
 #include "curvelist_panel.h"
+#include "curve_drag.h"
 
 CurveTableView::CurveTableView(CurveListPanel* parent)
   : QTableWidget(parent), CurvesView(parent)
@@ -257,25 +258,11 @@ bool CurvesView::eventFilterBase(QObject* object, QEvent* event)
     {
       _dragging = true;
       QDrag* drag = new QDrag(table_widget);
-      QMimeData* mimeData = new QMimeData;
-
-      QByteArray mdata;
-      QDataStream stream(&mdata, QIODevice::WriteOnly);
 
       auto selected_names = _parent_panel->getSelectedNames();
 
       std::sort(selected_names.begin(), selected_names.end());
-
-      for (const auto& curve_name : selected_names)
-      {
-        stream << QString::fromStdString(curve_name);
-      }
-
-      if (!_newX_modifier)
-      {
-        mimeData->setData("curveslist/add_curve", mdata);
-      }
-      else
+      if (_newX_modifier)
       {
         if (selected_names.size() != 2)
         {
@@ -289,8 +276,6 @@ bool CurvesView::eventFilterBase(QObject* object, QEvent* event)
           }
           return true;
         }
-        mimeData->setData("curveslist/new_XY_axis", mdata);
-
         QPixmap cursor(QSize(80, 30));
         cursor.fill(Qt::transparent);
 
@@ -307,7 +292,13 @@ bool CurvesView::eventFilterBase(QObject* object, QEvent* event)
 
         drag->setDragCursor(cursor, Qt::MoveAction);
       }
-
+      CurveDragMode mode = _newX_modifier ? CurveDragMode::NewXYAxis : CurveDragMode::AddCurves;
+      QMimeData* mimeData = EncodeCurveDragPayload(selected_names, mode);
+      if (!mimeData)
+      {
+        delete drag;
+        return true;
+      }
       drag->setMimeData(mimeData);
       drag->exec(Qt::CopyAction | Qt::MoveAction);
     }

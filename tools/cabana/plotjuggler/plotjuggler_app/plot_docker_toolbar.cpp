@@ -6,6 +6,7 @@
 
 #include "plot_docker_toolbar.h"
 #include "PlotJuggler/svg_util.h"
+#include "curve_drag.h"
 
 DockToolbar::DockToolbar(ads::CDockWidget* parent)
   : QWidget(parent)
@@ -124,46 +125,20 @@ void DockToolbar::on_stylesheetChanged(QString theme)
 
 void DockToolbar::dragEnterEvent(QDragEnterEvent* event)
 {
-  const QMimeData* mimeData = event->mimeData();
-  QStringList mimeFormats = mimeData->formats();
-
-  bool has_curve = false;
-  for (const QString& format : mimeFormats)
+  CurveDragPayload payload = DecodeCurveDragPayload(event->mimeData());
+  if (payload.mode != CurveDragMode::AddCurves || payload.curves.size() != 1)
   {
-    QByteArray encoded = mimeData->data(format);
-    QDataStream stream(&encoded, QIODevice::ReadOnly);
+    _dragging_curve.clear();
+    event->ignore();
+    return;
+  }
 
-    if (format == "curveslist/add_curve")
-    {
-      while (!stream.atEnd())
-      {
-        QString curve_name;
-        stream >> curve_name;
-        if (!curve_name.isEmpty())
-        {
-          if (!has_curve)
-          {
-            has_curve = true;
-            _dragging_curve = curve_name;
-          }
-          else
-          {
-            // multiple curves, discard
-            _dragging_curve.clear();
-            return;
-          }
-        }
-      }
-    }
-  }
-  if (has_curve)
-  {
-    event->accept();
-    ui->buttonFullscreen->setVisible(true);
-    ui->buttonBackground->setVisible(true);
-    ui->buttonSplitHorizontal->setVisible(!_fullscreen_mode);
-    ui->buttonSplitVertical->setVisible(!_fullscreen_mode);
-  }
+  _dragging_curve = payload.curves.front();
+  event->acceptProposedAction();
+  ui->buttonFullscreen->setVisible(true);
+  ui->buttonBackground->setVisible(true);
+  ui->buttonSplitHorizontal->setVisible(!_fullscreen_mode);
+  ui->buttonSplitVertical->setVisible(!_fullscreen_mode);
 }
 
 void DockToolbar::dragLeaveEvent(QDragLeaveEvent*)
@@ -183,6 +158,7 @@ void DockToolbar::dropEvent(QDropEvent* event)
   {
     emit backgroundColorRequest(_dragging_curve);
     _dragging_curve.clear();
+    event->acceptProposedAction();
   }
 }
 
