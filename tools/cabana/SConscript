@@ -5,7 +5,10 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import libusb
+try:
+  import libusb as libusb_package
+except ImportError:
+  libusb_package = None
 
 Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal')
 
@@ -157,8 +160,12 @@ else:
   base_libs += ['Qt5Charts', '-lGL']
 
 cabana_env = qt_env.Clone()
-cabana_env['CPPPATH'] += [libusb.INCLUDE_DIR]
-cabana_env['LIBPATH'] += [libusb.LIB_DIR]
+if libusb_package is not None:
+  cabana_env['CPPPATH'] += [libusb_package.INCLUDE_DIR]
+  cabana_env['LIBPATH'] += [libusb_package.LIB_DIR]
+elif arch == "Darwin":
+  cabana_env['CPPPATH'] += [f"{brew_prefix}/include"]
+  cabana_env['LIBPATH'] += [f"{brew_prefix}/lib"]
 
 pj_env = make_qt_env(pj_qt_modules, autoscan=False)
 pj_env['CXXFLAGS'] += ['-fPIC']
