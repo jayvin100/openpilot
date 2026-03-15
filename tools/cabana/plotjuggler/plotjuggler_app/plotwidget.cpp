@@ -211,21 +211,29 @@ void PlotWidget::buildActions()
   QIcon iconDeleteList;
 
   _action_edit = new QAction("&Edit curves...", this);
-  connect(_action_edit, &QAction::triggered, this, [=]() {
+  connect(_action_edit, &QAction::triggered, this, [this]() {
     auto editor_dialog = new PlotwidgetEditor(this, qwtPlot());
-    editor_dialog->exec();
+    int res = editor_dialog->exec();
+    if (res == QDialog::Accepted)
+    {
+      applyPlotModelEdit(editor_dialog->editedPlotModel());
+    }
     editor_dialog->deleteLater();
   });
 
   _action_formula = new QAction("&Apply filter to data...", this);
-  connect(_action_formula, &QAction::triggered, this, [=]() {
+  connect(_action_formula, &QAction::triggered, this, [this]() {
     auto editor_dialog = new DialogTransformEditor(this);
     int res = editor_dialog->exec();
-    editor_dialog->deleteLater();
     if (res == QDialog::Accepted)
     {
-      emit undoableChange();
+      QSettings settings;
+      bool autozoom_filter_applied =
+          settings.value("Preferences::autozoom_filter_applied", true).toBool();
+      applyPlotModelEdit(editor_dialog->editedPlotModel(), autozoom_filter_applied,
+                         autozoom_filter_applied);
     }
+    editor_dialog->deleteLater();
   });
 
   _action_split_horizontal = new QAction("&Split Horizontally", this);
@@ -920,6 +928,21 @@ bool PlotWidget::loadPlotModel(const cabana::pj_layout::PlotModel& plot_model, b
   return true;
 }
 
+bool PlotWidget::applyPlotModelEdit(const cabana::pj_layout::PlotModel& plot_model,
+                                    bool autozoom, bool zoom_out_after_apply)
+{
+  if (!loadPlotModel(plot_model, autozoom))
+  {
+    return false;
+  }
+  if (zoom_out_after_apply)
+  {
+    zoomOut(false);
+  }
+  emit undoableChange();
+  return true;
+}
+
 bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
 {
   cabana::pj_layout::PlotModel plot_model;
@@ -1523,8 +1546,7 @@ void PlotWidget::on_pasteAction_triggered()
       qWarning().noquote() << QString("Failed to parse plot clipboard contents: %1").arg(error);
       return;
     }
-    loadPlotModel(plot_model);
-    emit undoableChange();
+    applyPlotModelEdit(plot_model);
   }
 }
 

@@ -18,7 +18,7 @@
 #include <qwt_text.h>
 
 DialogTransformEditor::DialogTransformEditor(PlotWidget* plotwidget)
-  : QDialog(plotwidget), ui(new Ui::plotwidget_transforms), _plotwidget_origin(plotwidget)
+  : QDialog(plotwidget), ui(new Ui::plotwidget_transforms)
 {
   ui->setupUi(this);
 
@@ -240,17 +240,12 @@ void DialogTransformEditor::on_pushButtonCancel_clicked()
 void DialogTransformEditor::on_pushButtonSave_clicked()
 {
   on_lineEditAlias_editingFinished();
-
-  QSettings settings;
-  bool autozoom_filter_applied = settings.value("Preferences::autozoom_filter_applied",true).toBool();
-  _plotwidget_origin->loadPlotModel(_plotwidget->savePlotModel(), autozoom_filter_applied);
-
-  if(autozoom_filter_applied)
-  {
-    _plotwidget_origin->zoomOut(false);
-  }
-
   this->accept();
+}
+
+cabana::pj_layout::PlotModel DialogTransformEditor::editedPlotModel() const
+{
+  return _plotwidget->savePlotModel();
 }
 
 void DialogTransformEditor::on_lineEditAlias_editingFinished()

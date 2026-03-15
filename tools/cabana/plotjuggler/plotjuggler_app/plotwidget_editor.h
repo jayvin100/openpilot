@@ -50,6 +50,7 @@ class PlotwidgetEditor : public QDialog
 public:
   explicit PlotwidgetEditor(PlotWidget* plotwidget, QWidget* parent = nullptr);
   ~PlotwidgetEditor();
+  cabana::pj_layout::PlotModel editedPlotModel() const;
 
 public slots:
   void onColorChanged(QColor c);
@@ -86,7 +87,6 @@ private:
   Ui::PlotWidgetEditor* ui;
 
   PlotWidget* _plotwidget;
-  PlotWidget* _plotwidget_origin;
   QRectF _bounding_rect_original;
 
   std::set<QWidget*> _connected_transform_widgets;

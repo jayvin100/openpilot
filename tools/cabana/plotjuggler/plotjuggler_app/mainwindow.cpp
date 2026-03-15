@@ -198,8 +198,9 @@ MainWindow::MainWindow(const MainWindowConfig& config, QWidget* parent)
 
   _main_tabbed_widget =
       new TabbedPlotWidget(
-          "Main Window", this, _mapped_plot_data,
+          "Main Window", _mapped_plot_data,
           [this](const PlotDataXY* series) { return _session.snapshotFor(series); }, this);
+  registerTabbedWidget(_main_tabbed_widget);
 
   ui->plottingLayout->insertWidget(0, _main_tabbed_widget, 1);
   ui->leftLayout->addWidget(_curvelist_widget, 1);
@@ -315,6 +316,60 @@ MainWindow::MainWindow(const MainWindowConfig& config, QWidget* parent)
 MainWindow::~MainWindow()
 {
   delete ui;
+}
+
+void MainWindow::registerTabbedWidget(TabbedPlotWidget* widget)
+{
+  if (!widget)
+  {
+    return;
+  }
+
+  _tabbed_widgets[widget->name()] = widget;
+  connect(widget, &TabbedPlotWidget::destroyed, this, &MainWindow::on_tabbedAreaDestroyed);
+  connect(widget, &TabbedPlotWidget::tabAdded, this, &MainWindow::onPlotTabAdded);
+  connect(widget, &TabbedPlotWidget::undoableChange, this, &MainWindow::onUndoableChange);
+
+  auto* tabs = widget->tabWidget();
+  for (int i = 0; i < tabs->count(); ++i)
+  {
+    if (auto* docker = qobject_cast<PlotDocker*>(tabs->widget(i)))
+    {
+      registerPlotDocker(docker);
+      for (int index = 0; index < docker->plotCount(); ++index)
+      {
+        if (auto* plot = docker->plotAt(index))
+        {
+          onPlotAdded(plot);
+        }
+      }
+    }
+  }
+}
+
+void MainWindow::registerPlotDocker(PlotDocker* docker)
+{
+  if (!docker)
+  {
+    return;
+  }
+
+  connect(docker, &PlotDocker::plotWidgetAdded, this, &MainWindow::onPlotAdded);
+  docker->on_stylesheetChanged(_current_theme);
+}
+
+TabbedPlotWidget* MainWindow::findTabbedWidget(const QString& name) const
+{
+  auto it = _tabbed_widgets.find(name);
+  return (it != _tabbed_widgets.end()) ? it->second : nullptr;
+}
+
+void MainWindow::forEachTabbedWidget(std::function<void(TabbedPlotWidget*)> op) const
+{
+  for (const auto& [_, widget] : _tabbed_widgets)
+  {
+    op(widget);
+  }
 }
 
 QWidget* MainWindow::takeEmbeddedPane()
@@ -666,11 +721,7 @@ void MainWindow::onPlotZoomChanged(PlotWidget* modified_plot, QRectF new_range)
 
 void MainWindow::onPlotTabAdded(PlotDocker* docker)
 {
-  connect(docker, &PlotDocker::plotWidgetAdded, this, &MainWindow::onPlotAdded);
-  docker->on_stylesheetChanged(_current_theme);
-
-  // TODO  connect(matrix, &PlotMatrix::undoableChange, this,
-  // &MainWindow::onUndoableChange);
+  registerPlotDocker(docker);
 }
 
 QDomDocument MainWindow::saveUiStateDom() const
@@ -681,10 +732,9 @@ QDomDocument MainWindow::saveUiStateDom() const
 LayoutModel MainWindow::saveUiStateModel() const
 {
   LayoutModel layout;
-  for (const auto& [_, widget] : TabbedPlotWidget::instances())
-  {
+  forEachTabbedWidget([&](TabbedPlotWidget* widget) {
     layout.tabbed_widgets.push_back(widget->saveStateModel());
-  }
+  });
   layout.has_relative_time_offset = true;
   layout.use_relative_time_offset = ui->pushButtonRemoveTimeOffset->isChecked();
   return layout;
@@ -832,13 +882,13 @@ bool MainWindow::loadUiStateModel(const LayoutModel& layout)
   for (const auto& [name, widget_model] : tabbed_widgets_with_name)
   {
     Q_UNUSED(widget_model);
-    if (TabbedPlotWidget::instance(name) == nullptr)
+    if (findTabbedWidget(name) == nullptr)
     {
       // TODO createTabbedDialog(name, nullptr);
     }
   }
 
-  for (const auto& [name, widget] : TabbedPlotWidget::instances())
+  for (const auto& [name, widget] : _tabbed_widgets)
   {
     if (tabbed_widgets_with_name.count(name) == 0)
     {
@@ -850,7 +900,7 @@ bool MainWindow::loadUiStateModel(const LayoutModel& layout)
 
   for (const auto& widget_model : layout.tabbed_widgets)
   {
-    if (auto* tabwidget = TabbedPlotWidget::instance(widget_model.name))
+    if (auto* tabwidget = findTabbedWidget(widget_model.name))
     {
       tabwidget->loadStateModel(widget_model);
     }
@@ -1380,9 +1430,8 @@ void MainWindow::linkedZoomOut()
 {
   if (ui->pushButtonLink->isChecked())
   {
-    for (const auto& it : TabbedPlotWidget::instances())
-    {
-      auto tabs = it.second->tabWidget();
+    forEachTabbedWidget([&](TabbedPlotWidget* widget) {
+      auto tabs = widget->tabWidget();
       for (int t = 0; t < tabs->count(); t++)
       {
         if (PlotDocker* matrix = dynamic_cast<PlotDocker*>(tabs->widget(t)))
@@ -1427,7 +1476,7 @@ void MainWindow::linkedZoomOut()
           }
         }
       }
-    }
+    });
   }
   else
   {
@@ -1437,6 +1486,17 @@ void MainWindow::linkedZoomOut()
 
 void MainWindow::on_tabbedAreaDestroyed(QObject* object)
 {
+  for (auto it = _tabbed_widgets.begin(); it != _tabbed_widgets.end();)
+  {
+    if (it->second == object)
+    {
+      it = _tabbed_widgets.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
   this->setFocus();
 }
 
@@ -1460,10 +1520,7 @@ void MainWindow::forEachWidget(
     }
   };
 
-  for (const auto& it : TabbedPlotWidget::instances())
-  {
-    func(it.second->tabWidget());
-  }
+  forEachTabbedWidget([&](TabbedPlotWidget* widget) { func(widget->tabWidget()); });
 }
 
 void MainWindow::forEachWidget(std::function<void(PlotWidget*)> op)
@@ -2043,10 +2100,9 @@ void MainWindow::onActionFullscreenTriggered()
   //  ui->widgetOptions->setVisible(!_minimized && ui->pushButtonOptions->isChecked());
   ui->widgetTimescale->setVisible(!_minimized);
 
-  for (auto& it : TabbedPlotWidget::instances())
-  {
-    it.second->setControlsVisible(!_minimized);
-  }
+  forEachTabbedWidget([&](TabbedPlotWidget* widget) {
+    widget->setControlsVisible(!_minimized);
+  });
 }
 
 void MainWindow::on_actionClearRecentLayout_triggered(bool)

@@ -19,11 +19,7 @@ class TabbedPlotWidget : public QWidget
   Q_OBJECT
 
 public:
-  typedef struct
-  {
-  } MainWindowArea;
-
-  explicit TabbedPlotWidget(QString name, QMainWindow* main_window,
+  explicit TabbedPlotWidget(QString name,
                             PlotDataMapRef& mapped_data,
                             cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup,
                             QMainWindow* parent);
@@ -53,10 +49,6 @@ public:
     return _name;
   }
 
-  static const std::map<QString, TabbedPlotWidget*>& instances();
-
-  static TabbedPlotWidget* instance(const QString& key);
-
   void setControlsVisible(bool visible);
 
 public slots:
@@ -81,12 +73,6 @@ private slots:
 
   void on_buttonLinkHorizontalScale_toggled(bool checked);
 
-  void on_requestTabMovement(const QString& destination_name);
-
-  void on_moveTabIntoNewWindow();
-
-  // TODO void onMoveWidgetIntoNewTab(QString plot_name);
-
   void paintEvent(QPaintEvent* event) override;
 
 private:
@@ -102,29 +88,20 @@ private:
 
   const QString _name;
 
-  QMainWindow* _main_window;
-
   PlotDataMapRef& _mapped_data;
   cabana::pj_engine::SeriesSnapshotLookup _snapshot_lookup;
 
   bool _horizontal_link;
 
-  QString _parent_type;
-
-  virtual void closeEvent(QCloseEvent* event) override;
-
-  // void printPlotsNames();
+  const QString _parent_type = "main_window";
 
 protected:
   virtual bool eventFilter(QObject* obj, QEvent* event) override;
-
-  static std::map<QString, TabbedPlotWidget*> _instances;
 
 signals:
   void created();
   void undoableChange();
   void tabAdded(PlotDocker*);
-  void sendTabToNewWindow(PlotDocker*);
 };
 
 #endif  // TABBEDPLOTWIDGET_H

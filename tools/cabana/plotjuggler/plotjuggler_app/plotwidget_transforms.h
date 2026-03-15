@@ -22,6 +22,7 @@ class DialogTransformEditor : public QDialog
 public:
   explicit DialogTransformEditor(PlotWidget* plotwidget);
   ~DialogTransformEditor();
+  cabana::pj_layout::PlotModel editedPlotModel() const;
 
 private slots:
 
@@ -39,7 +40,6 @@ private:
   Ui::plotwidget_transforms* ui;
 
   PlotWidget* _plotwidget;
-  PlotWidget* _plotwidget_origin;
 
   std::set<QWidget*> _connected_transform_widgets;
 

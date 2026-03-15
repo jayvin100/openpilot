@@ -156,10 +156,15 @@ private:
   QMenu* _recent_layout_files;
 
   QString _current_theme = "light";
+  std::map<QString, TabbedPlotWidget*> _tabbed_widgets;
 
   void initializeActions();
   void initializeEmbeddedToolboxes();
   void addToolbox(ToolboxPluginPtr toolbox);
+  void registerTabbedWidget(TabbedPlotWidget* widget);
+  void registerPlotDocker(PlotDocker* docker);
+  TabbedPlotWidget* findTabbedWidget(const QString& name) const;
+  void forEachTabbedWidget(std::function<void(TabbedPlotWidget*)> op) const;
 
   void forEachWidget(std::function<void(PlotWidget*, PlotDocker*, int)> op);
   void forEachWidget(std::function<void(PlotWidget*)> op);

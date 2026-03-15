@@ -20,7 +20,7 @@
 const double MAX_DOUBLE = std::numeric_limits<double>::max() / 2;
 
 PlotwidgetEditor::PlotwidgetEditor(PlotWidget* plotwidget, QWidget* parent)
-  : QDialog(parent), ui(new Ui::PlotWidgetEditor), _plotwidget_origin(plotwidget)
+  : QDialog(parent), ui(new Ui::PlotWidgetEditor)
 {
   ui->setupUi(this);
 
@@ -33,7 +33,7 @@ PlotwidgetEditor::PlotwidgetEditor(PlotWidget* plotwidget, QWidget* parent)
   _plotwidget->on_changeTimeOffset(plotwidget->timeOffset());
   _plotwidget->setContextMenuEnabled(false);
 
-  _bounding_rect_original = _plotwidget_origin->currentBoundingRect();
+  _bounding_rect_original = plotwidget->currentBoundingRect();
 
   auto layout = new QVBoxLayout();
   ui->framePlotPreview->setLayout(layout);
@@ -314,9 +314,13 @@ void PlotwidgetEditor::on_pushButtonCancel_pressed()
 
 void PlotwidgetEditor::on_pushButtonSave_pressed()
 {
-  _plotwidget->setZoomRectangle(_bounding_rect_original, false);
-  _plotwidget_origin->loadPlotModel(_plotwidget->savePlotModel());
   this->accept();
+}
+
+cabana::pj_layout::PlotModel PlotwidgetEditor::editedPlotModel() const
+{
+  _plotwidget->setZoomRectangle(_bounding_rect_original, false);
+  return _plotwidget->savePlotModel();
 }
 
 EditorRowWidget::EditorRowWidget(QString text, QColor color) : QWidget()

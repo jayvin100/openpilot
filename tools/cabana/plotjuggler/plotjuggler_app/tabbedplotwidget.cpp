@@ -23,34 +23,14 @@
 #include "tab_widget.h"
 #include "PlotJuggler/svg_util.h"
 
-std::map<QString, TabbedPlotWidget*> TabbedPlotWidget::_instances;
-
-TabbedPlotWidget::TabbedPlotWidget(QString name, QMainWindow* mainwindow,
+TabbedPlotWidget::TabbedPlotWidget(QString name,
                                    PlotDataMapRef& mapped_data,
                                    cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup,
                                    QMainWindow* parent)
-  : QWidget(parent), _name(name), _main_window(mainwindow), _mapped_data(mapped_data),
+  : QWidget(parent), _name(name), _mapped_data(mapped_data),
     _snapshot_lookup(std::move(snapshot_lookup))
 {
-  MainWindow* main_window = dynamic_cast<MainWindow*>(_main_window);
-
   setContentsMargins(0, 0, 0, 0);
-
-  if (main_window == parent)
-  {
-    _parent_type = "main_window";
-  }
-  else
-  {
-    _parent_type = "floating_window";
-  }
-
-  if (TabbedPlotWidget::_instances.count(_name) > 0)
-  {
-    throw std::runtime_error("This is not supposed to happen");
-  }
-  // register this instance
-  _instances[_name] = this;
 
   _horizontal_link = true;
 
@@ -81,15 +61,6 @@ TabbedPlotWidget::TabbedPlotWidget(QString name, QMainWindow* mainwindow,
   //  _tab_menu->addSeparator();
   //  //_tab_menu->addAction(_action_savePlots);
   //  _tab_menu->addSeparator();
-
-  connect(this, &TabbedPlotWidget::destroyed, main_window,
-          &MainWindow::on_tabbedAreaDestroyed);
-  connect(this, &TabbedPlotWidget::tabAdded, main_window, &MainWindow::onPlotTabAdded);
-  connect(this, &TabbedPlotWidget::undoableChange, main_window,
-          &MainWindow::onUndoableChange);
-
-  // TODO connect(_tabWidget, &TabWidget::movingPlotWidgetToTab, this,
-  // &TabbedPlotWidget::onMoveWidgetIntoNewTab);
 
   this->addTab({});
 
@@ -421,24 +392,6 @@ void TabbedPlotWidget::on_buttonLinkHorizontalScale_toggled(bool checked)
   }
 }
 
-void TabbedPlotWidget::on_requestTabMovement(const QString& destination_name)
-{
-  TabbedPlotWidget* destination_widget = TabbedPlotWidget::_instances[destination_name];
-
-  PlotDocker* tab_to_move = currentTab();
-  int index = tabWidget()->tabBar()->currentIndex();
-
-  const QString& tab_name = this->tabWidget()->tabText(index);
-
-  destination_widget->tabWidget()->addTab(tab_to_move, tab_name);
-  emit undoableChange();
-}
-
-void TabbedPlotWidget::on_moveTabIntoNewWindow()
-{
-  emit sendTabToNewWindow(currentTab());
-}
-
 bool TabbedPlotWidget::eventFilter(QObject* obj, QEvent* event)
 {
   QTabBar* tab_bar = tabWidget()->tabBar();
@@ -460,68 +413,13 @@ bool TabbedPlotWidget::eventFilter(QObject* obj, QEvent* event)
         // QSignalMapper* signalMapper = new QSignalMapper(submenu);
 
         //-----------------------------------
-        //        QAction* action_new_window = submenu->addAction("New Window");
-        //        submenu->addSeparator();
-        //        connect(action_new_window, &QAction::triggered, this,
-        //        &TabbedPlotWidget::on_moveTabIntoNewWindow);
-
-        //        //-----------------------------------
-        //        for (auto& it : TabbedPlotWidget::_instances)
-        //        {
-        //          QString name = it.first;
-        //          TabbedPlotWidget* tabbed_menu = it.second;
-        //          if (tabbed_menu != this)
-        //          {
-        //            QAction* action = submenu->addAction(name);
-        //            connect(action, SIGNAL(triggered()), signalMapper, SLOT(map()));
-        //            signalMapper->setMapping(action, name);
-        //          }
-        //        }
-
-        //        connect(signalMapper, SIGNAL(mapped(QString)), this,
-        //        SLOT(on_requestTabMovement(QString)));
-
-        //        //-------------------------------
-        ////        QIcon iconSave;
-        ////        iconSave.addFile(tr(":/%1/save.png").arg(theme), QSize(26, 26));
-        ////        _action_savePlots->setIcon(iconSave);
-
-        ////        QIcon iconNewWin;
-        ////        iconNewWin.addFile(tr(":/%1/stacks.png").arg(theme), QSize(16, 16));
-        ////        action_new_window->setIcon(iconNewWin);
-
-        //        _tab_menu->exec(mouse_event->globalPos());
-        //        //-------------------------------
-        //        submenu->deleteLater();
+        // Reserved for future tab context actions.
       }
     }
   }
 
   // Standard event processing
   return QObject::eventFilter(obj, event);
-}
-
-void TabbedPlotWidget::closeEvent(QCloseEvent* event)
-{
-  TabbedPlotWidget::_instances.erase(name());
-}
-
-const std::map<QString, TabbedPlotWidget*>& TabbedPlotWidget::instances()
-{
-  return TabbedPlotWidget::_instances;
-}
-
-TabbedPlotWidget* TabbedPlotWidget::instance(const QString& key)
-{
-  auto it = TabbedPlotWidget::_instances.find(key);
-  if (it == TabbedPlotWidget::_instances.end())
-  {
-    return nullptr;
-  }
-  else
-  {
-    return it->second;
-  }
 }
 
 void TabbedPlotWidget::setControlsVisible(bool visible)

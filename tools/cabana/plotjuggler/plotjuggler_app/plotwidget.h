@@ -47,6 +47,8 @@ public:
 
   cabana::pj_layout::PlotModel savePlotModel() const;
   bool loadPlotModel(const cabana::pj_layout::PlotModel& plot_model, bool autozoom = true);
+  bool applyPlotModelEdit(const cabana::pj_layout::PlotModel& plot_model,
+                          bool autozoom = true, bool zoom_out_after_apply = false);
 
   QDomElement xmlSaveState(QDomDocument& doc) const;
 
