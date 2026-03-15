@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import concurrent.futures
 import json
 import os
+import platform
 import subprocess
 import sys
 import tempfile
@@ -46,16 +48,21 @@ def compare_contract(expected: dict, actual: dict) -> list[str]:
 
 
 def run_runtime_capture(
-    repo_root: Path, wrapper: Path, layout: Path, output_png: Path, delay_ms: int, timeout_s: int
+    repo_root: Path, binary: Path, layout: Path, output_png: Path, delay_ms: int, timeout_s: int
 ) -> tuple[int, str, bool]:
   env = os.environ.copy()
   env["CABANA_PJ_SCREENSHOT"] = str(output_png)
   env["CABANA_PJ_SCREENSHOT_EXIT"] = "1"
-  env["CABANA_PJ_SCREENSHOT_DELAY_MS"] = str(delay_ms)
+  if delay_ms > 0:
+    env["CABANA_PJ_SCREENSHOT_DELAY_MS"] = str(delay_ms)
+  lib_var = "DYLD_LIBRARY_PATH" if platform.system() == "Darwin" else "LD_LIBRARY_PATH"
+  lib_dir = str(binary.parent)
+  existing_lib_path = env.get(lib_var, "")
+  env[lib_var] = f"{lib_dir}:{existing_lib_path}" if existing_lib_path else lib_dir
   cmd = [
       "xvfb-run",
       "-a",
-      str(wrapper),
+      str(binary),
       "--pj",
       "--demo",
       "--pj-layout",
@@ -101,8 +108,10 @@ def main() -> int:
   parser.add_argument("--runtime", action="store_true", help="Run headless screenshot smoke validation for each layout.")
   parser.add_argument("--layout", action="append", default=[], help="Limit validation to specific layout filenames.")
   parser.add_argument("--output-dir", default="", help="Directory for generated screenshots and summary JSON.")
-  parser.add_argument("--screenshot-delay-ms", type=int, default=12000)
+  parser.add_argument("--screenshot-delay-ms", type=int, default=0)
   parser.add_argument("--timeout-sec", type=int, default=30)
+  parser.add_argument("--runtime-jobs", type=int, default=2,
+                      help="Number of parallel runtime screenshot jobs to run.")
   args = parser.parse_args()
 
   repo_root = Path(__file__).resolve().parents[3]
@@ -124,8 +133,9 @@ def main() -> int:
     build_targets = ["tools/cabana/_cabana"]
     if args.model:
       build_targets.append("tools/cabana/pj_validation/pj_layout_test")
+    build_jobs = max(1, (os.cpu_count() or 2) // 2)
     subprocess.run(
-        ["scons", "-j1", *build_targets],
+        ["scons", f"-j{build_jobs}", *build_targets],
         cwd=repo_root,
         check=True,
     )
@@ -136,7 +146,7 @@ def main() -> int:
   else:
     output_dir = Path(tempfile.mkdtemp(prefix="cabana_pj_layouts_"))
 
-  wrapper = repo_root / "tools/cabana/cabana"
+  binary = repo_root / "tools/cabana/_cabana"
   summary = {
       "contract": str(contract_path.relative_to(repo_root)),
       "output_dir": str(output_dir),
@@ -156,6 +166,30 @@ def main() -> int:
       failures += 1
     print(f"pj_layout_model: {'ok' if exit_code == 0 else 'fail'}")
 
+  runtime_results = {}
+  if args.runtime:
+    runtime_jobs = max(1, args.runtime_jobs)
+
+    def run_one_runtime(layout_name: str) -> tuple[str, dict]:
+      layout_path = layout_dir / layout_name
+      screenshot_path = output_dir / f"{layout_path.stem}.png"
+      exit_code, output, timed_out = run_runtime_capture(
+          repo_root, binary, layout_path, screenshot_path, args.screenshot_delay_ms, args.timeout_sec
+      )
+      return layout_name, {
+          "runtime_ok": exit_code == 0 and screenshot_path.exists(),
+          "runtime_exit_code": exit_code,
+          "runtime_timed_out": timed_out,
+          "runtime_log": output,
+          "screenshot": str(screenshot_path),
+      }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=runtime_jobs) as executor:
+      futures = [executor.submit(run_one_runtime, layout_name) for layout_name in layout_names]
+      for future in concurrent.futures.as_completed(futures):
+        layout_name, runtime_result = future.result()
+        runtime_results[layout_name] = runtime_result
+
   for layout_name in layout_names:
     layout_path = layout_dir / layout_name
     expected = expected_by_layout[layout_name]
@@ -169,15 +203,7 @@ def main() -> int:
     }
 
     if args.runtime:
-      screenshot_path = output_dir / f"{layout_path.stem}.png"
-      exit_code, output, timed_out = run_runtime_capture(
-          repo_root, wrapper, layout_path, screenshot_path, args.screenshot_delay_ms, args.timeout_sec
-      )
-      result["runtime_ok"] = exit_code == 0 and screenshot_path.exists()
-      result["runtime_exit_code"] = exit_code
-      result["runtime_timed_out"] = timed_out
-      result["runtime_log"] = output
-      result["screenshot"] = str(screenshot_path)
+      result.update(runtime_results[layout_name])
       if not result["runtime_ok"]:
         failures += 1
     if mismatches:

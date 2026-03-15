@@ -53,7 +53,7 @@ public:
   };
 
   Impl(CabanaPlotJugglerWidget *parent, const QString &dbc_name, const QString &layout_path)
-      : dbc_name(dbc_name), layout_path(layout_path) {
+      : owner(parent), dbc_name(dbc_name), layout_path(layout_path) {
     auto *layout = new QVBoxLayout(parent);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
@@ -82,6 +82,8 @@ public:
       append_timer.start();
       pj_controller->appendExternalData(std::move(batch->data_map));
       engine->noteBatchConsumed(*batch, append_timer.elapsed());
+      batches_applied++;
+      scheduleCaptureReady();
     });
 
     if (qEnvironmentVariableIsSet("CABANA_PJ_DEBUG")) {
@@ -129,6 +131,18 @@ public:
     engine->queueSegments(segments, route_start_nanos);
   }
 
+  void scheduleCaptureReady() {
+    if (capture_ready_emitted || !layout_loaded || batches_applied <= 0) {
+      return;
+    }
+    capture_ready_emitted = true;
+    QTimer::singleShot(150, owner, [this]() {
+      if (owner) {
+        owner->emitCaptureReady();
+      }
+    });
+  }
+
   void resizeTo(const QSize &size) {
     if (!pj_pane) return;
     pj_pane->resize(size);
@@ -147,12 +161,15 @@ public:
         .arg(engine_summary);
   }
 
+  CabanaPlotJugglerWidget *owner = nullptr;
   MainWindow *pj_controller = nullptr;
   QWidget *pj_pane = nullptr;
   std::unique_ptr<cabana::pj_engine::ReplayEngine> engine;
   QString dbc_name;
   QString layout_path;
   bool layout_loaded = false;
+  bool capture_ready_emitted = false;
+  int batches_applied = 0;
   PerfStats perf;
 };
 
@@ -164,6 +181,8 @@ CabanaPlotJugglerWidget::~CabanaPlotJugglerWidget() = default;
 
 void CabanaPlotJugglerWidget::clearData() {
   impl_->layout_loaded = false;
+  impl_->capture_ready_emitted = false;
+  impl_->batches_applied = 0;
   impl_->engine->clear();
   impl_->pj_controller->clearExternalData();
   impl_->refreshLayoutOnce();
@@ -203,4 +222,8 @@ void CabanaPlotJugglerWidget::resizeEvent(QResizeEvent *event) {
 
 QString CabanaPlotJugglerWidget::perfSummary() const {
   return impl_->perfSummary();
+}
+
+void CabanaPlotJugglerWidget::emitCaptureReady() {
+  emit captureReady();
 }

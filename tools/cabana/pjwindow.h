@@ -36,4 +36,5 @@ private:
   double pending_tracker_sec = 0.0;
   bool tracker_update_pending = false;
   bool playback_paused_ = false;
+  bool screenshot_captured_ = false;
 };

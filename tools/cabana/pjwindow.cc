@@ -65,11 +65,14 @@ PlotJugglerWindow::PlotJugglerWindow(AbstractStream *stream, const QString &dbc_
   bool screenshot_delay_ok = false;
   const int screenshot_delay_ms =
       qEnvironmentVariableIntValue("CABANA_PJ_SCREENSHOT_DELAY_MS", &screenshot_delay_ok);
-  const int capture_delay_ms = screenshot_delay_ok ? screenshot_delay_ms : 20000;
   const bool exit_after_screenshot = qEnvironmentVariableIsSet("CABANA_PJ_SCREENSHOT_EXIT");
   const QString screenshot_path = qEnvironmentVariable("CABANA_PJ_SCREENSHOT");
   if (!screenshot_path.isEmpty()) {
-    QTimer::singleShot(capture_delay_ms, this, [this, screenshot_path, exit_after_screenshot]() {
+    auto capture = [this, screenshot_path, exit_after_screenshot]() {
+      if (screenshot_captured_) {
+        return;
+      }
+      screenshot_captured_ = true;
       grab().save(screenshot_path);
       if (exit_after_screenshot) {
         std::thread([]() {
@@ -78,7 +81,13 @@ PlotJugglerWindow::PlotJugglerWindow(AbstractStream *stream, const QString &dbc_
         }).detach();
         qApp->exit(0);
       }
-    });
+    };
+    if (screenshot_delay_ok) {
+      QTimer::singleShot(screenshot_delay_ms, this, capture);
+    } else {
+      connect(pj_widget, &CabanaPlotJugglerWidget::captureReady, this,
+              [this, capture]() { QTimer::singleShot(100, this, capture); });
+    }
   }
 }
 

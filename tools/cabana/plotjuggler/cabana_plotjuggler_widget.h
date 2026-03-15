@@ -18,10 +18,14 @@ public:
   void setCurrentTime(double relative_sec);
   void setPlaybackPaused(bool paused);
   QString perfSummary() const;
+  Q_INVOKABLE void emitCaptureReady();
 
 private:
   void resizeEvent(QResizeEvent *event) override;
 
   class Impl;
   std::unique_ptr<Impl> impl_;
+
+signals:
+  void captureReady();
 };
