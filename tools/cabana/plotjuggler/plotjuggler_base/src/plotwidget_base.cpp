@@ -313,8 +313,12 @@ void PlotWidgetBase::setModeXY(bool enable)
   _xy_mode = enable;
 }
 
-PlotWidgetBase::PlotWidgetBase(QWidget* parent)
-  : _xy_mode(false), _keep_aspect_ratio(false)
+PlotWidgetBase::PlotWidgetBase(QWidget* parent,
+                               cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup)
+  : QWidget(parent)
+  , _xy_mode(false)
+  , _keep_aspect_ratio(false)
+  , _snapshot_lookup(std::move(snapshot_lookup))
 {
   auto onViewResized = [this](const QRectF& r) {
     emit viewResized(r);
@@ -424,7 +428,8 @@ PlotWidgetBase::CurveInfo* PlotWidgetBase::addCurve(const std::string& name,
     }
     else
     {
-      plot_qwt = new QwtSeriesWrapper(&data);
+      plot_qwt = new QwtSeriesWrapper(&data, _snapshot_lookup);
+      plot_qwt->updateCache(true);
     }
 
     curve->setPaintAttribute(QwtPlotCurve::ClipPolygons, true);
@@ -433,7 +438,14 @@ PlotWidgetBase::CurveInfo* PlotWidgetBase::addCurve(const std::string& name,
   }
   catch (std::exception& ex)
   {
-    QMessageBox::warning(qwtPlot(), "Exception!", ex.what());
+    if (qApp->property("PlotJugglerEmbedded").toBool())
+    {
+      qWarning() << "PlotWidgetBase exception:" << ex.what();
+    }
+    else
+    {
+      QMessageBox::warning(qwtPlot(), "Exception!", ex.what());
+    }
     return nullptr;
   }
 
@@ -504,7 +516,7 @@ std::list<PlotWidgetBase::CurveInfo>& PlotWidgetBase::curveList()
 QwtSeriesWrapper* PlotWidgetBase::createTimeSeries(const PlotData* data,
                                                    const QString& transform_ID)
 {
-  TransformedTimeseries* output = new TransformedTimeseries(data);
+  TransformedTimeseries* output = new TransformedTimeseries(data, _snapshot_lookup);
   output->setTransform(transform_ID);
   output->updateCache(true);
   return output;

@@ -18,7 +18,9 @@ class DockWidget : public ads::CDockWidget
   Q_OBJECT
 
 public:
-  DockWidget(PlotDataMapRef& datamap, QWidget* parent = nullptr);
+  DockWidget(PlotDataMapRef& datamap,
+             cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup = {},
+             QWidget* parent = nullptr);
 
   ~DockWidget() override;
 
@@ -37,6 +39,7 @@ private:
   DockToolbar* _toolbar;
 
   PlotDataMapRef& _datamap;
+  cabana::pj_engine::SeriesSnapshotLookup _snapshot_lookup;
 
 signals:
   void undoableChange();
@@ -47,7 +50,9 @@ class PlotDocker : public ads::CDockManager
   Q_OBJECT
 
 public:
-  PlotDocker(QString name, PlotDataMapRef& datamap, QWidget* parent = nullptr);
+  PlotDocker(QString name, PlotDataMapRef& datamap,
+             cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup = {},
+             QWidget* parent = nullptr);
 
   ~PlotDocker();
 
@@ -79,6 +84,7 @@ private:
   QString _name;
 
   PlotDataMapRef& _datamap;
+  cabana::pj_engine::SeriesSnapshotLookup _snapshot_lookup;
 
 signals:
 

@@ -11,11 +11,16 @@
 #include <QPushButton>
 #include <QString>
 
+#include <algorithm>
+
 RangeOpt QwtSeriesWrapper::getVisualizationRangeY(Range range_x)
 {
-  if (range_x.min <= std::numeric_limits<double>::lowest() &&
+  if (_snapshot && _snapshot->range_y &&
+      range_x.min <= std::numeric_limits<double>::lowest() &&
       range_x.min <= std::numeric_limits<double>::max())
-    return _data->rangeY();
+  {
+    return _snapshot->range_y;
+  }
 
   double min_y = (std::numeric_limits<double>::max());
   double max_y = (std::numeric_limits<double>::lowest());
@@ -31,25 +36,34 @@ RangeOpt QwtSeriesWrapper::getVisualizationRangeY(Range range_x)
 
 RangeOpt QwtTimeseries::getVisualizationRangeY(Range range_X)
 {
-  int first_index = _ts_data->getIndexFromX(range_X.min + _time_offset);
-  int last_index = _ts_data->getIndexFromX(range_X.max + _time_offset);
-
-  if (first_index > last_index || first_index < 0 || last_index < 0)
+  if (!_snapshot || _snapshot->points.empty())
   {
     return {};
   }
 
-  if (first_index == 0 && last_index == plotData()->size() - 1)
+  const double raw_min = range_X.min + _time_offset;
+  const double raw_max = range_X.max + _time_offset;
+  auto first = std::lower_bound(_snapshot->points.begin(), _snapshot->points.end(), raw_min,
+                                [](const QPointF& point, double value) { return point.x() < value; });
+  auto last = std::upper_bound(_snapshot->points.begin(), _snapshot->points.end(), raw_max,
+                               [](double value, const QPointF& point) { return value < point.x(); });
+
+  if (first == _snapshot->points.end() || first >= last)
   {
-    return _ts_data->rangeY();
+    return {};
+  }
+
+  if (first == _snapshot->points.begin() && last == _snapshot->points.end())
+  {
+    return _snapshot->range_y;
   }
 
   double min_y = (std::numeric_limits<double>::max());
   double max_y = (std::numeric_limits<double>::lowest());
 
-  for (size_t i = first_index; i < last_index; i++)
+  for (auto it = first; it != last; ++it)
   {
-    const double Y = sample(i).y();
+    const double Y = it->y();
     min_y = std::min(min_y, Y);
     max_y = std::max(max_y, Y);
   }
@@ -58,17 +72,31 @@ RangeOpt QwtTimeseries::getVisualizationRangeY(Range range_X)
 
 std::optional<QPointF> QwtTimeseries::sampleFromTime(double t)
 {
-  int index = _ts_data->getIndexFromX(t);
-  if (index < 0)
+  if (!_snapshot || _snapshot->points.empty())
   {
     return {};
   }
-  const auto& p = plotData()->at(size_t(index));
-  return QPointF(p.x, p.y);
+
+  auto lower = std::lower_bound(_snapshot->points.begin(), _snapshot->points.end(), t,
+                                [](const QPointF& point, double value) { return point.x() < value; });
+  if (lower == _snapshot->points.end())
+  {
+    lower = std::prev(_snapshot->points.end());
+  }
+  else if (lower != _snapshot->points.begin())
+  {
+    auto prev = std::prev(lower);
+    if (std::abs(prev->x() - t) < std::abs(lower->x() - t))
+    {
+      lower = prev;
+    }
+  }
+  return QPointF(lower->x() - _time_offset, lower->y());
 }
 
-TransformedTimeseries::TransformedTimeseries(const PlotData* source_data)
-  : QwtTimeseries(&_dst_data)
+TransformedTimeseries::TransformedTimeseries(const PlotData* source_data,
+                                             cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup)
+  : QwtTimeseries(&_dst_data, std::move(snapshot_lookup))
   , _dst_data(source_data->plotName(), {})
   , _src_data(source_data)
 {
@@ -117,6 +145,16 @@ void TransformedTimeseries::updateCache(bool reset_old_data)
   }
   else
   {
+    if (_snapshot_lookup)
+    {
+      auto cached_snapshot = _snapshot_lookup(_src_data);
+      if (cached_snapshot)
+      {
+        setSnapshot(std::move(cached_snapshot));
+        return;
+      }
+    }
+
     // TODO: optimize ??
     _dst_data.clear();
     for (size_t i = 0; i < _src_data->size(); i++)
@@ -124,6 +162,7 @@ void TransformedTimeseries::updateCache(bool reset_old_data)
       _dst_data.pushBack(_src_data->at(i));
     }
   }
+  setSnapshot(cabana::pj_engine::BuildSeriesSnapshot(_dst_data));
 }
 
 QString TransformedTimeseries::transformName()
@@ -141,14 +180,19 @@ void TransformedTimeseries::setAlias(QString alias)
   _alias = alias;
 }
 
+const PlotDataXY* TransformedTimeseries::plotData() const
+{
+  return _transform ? &_dst_data : _src_data;
+}
+
 QRectF QwtSeriesWrapper::boundingRect() const
 {
-  if (size() == 0)
+  if (!_snapshot || size() == 0 || !_snapshot->range_x || !_snapshot->range_y)
   {
     return {};
   }
-  auto range_x = plotData()->rangeX().value();
-  auto range_y = plotData()->rangeY().value();
+  auto range_x = _snapshot->range_x.value();
+  auto range_y = _snapshot->range_y.value();
 
   QRectF box;
   box.setLeft(range_x.min);
@@ -160,12 +204,12 @@ QRectF QwtSeriesWrapper::boundingRect() const
 
 QRectF QwtTimeseries::boundingRect() const
 {
-  if (size() == 0)
+  if (!_snapshot || size() == 0 || !_snapshot->range_x || !_snapshot->range_y)
   {
     return {};
   }
-  auto range_x = plotData()->rangeX().value();
-  auto range_y = plotData()->rangeY().value();
+  auto range_x = _snapshot->range_x.value();
+  auto range_y = _snapshot->range_y.value();
 
   QRectF box;
   box.setLeft(range_x.min - _time_offset);
@@ -177,19 +221,64 @@ QRectF QwtTimeseries::boundingRect() const
 
 QPointF QwtSeriesWrapper::sample(size_t i) const
 {
+  if (_snapshot && i < _snapshot->points.size())
+  {
+    return _snapshot->points[i];
+  }
   const auto& p = _data->at(i);
   return QPointF(p.x, p.y);
 }
 
 QPointF QwtTimeseries::sample(size_t i) const
 {
+  if (_snapshot && i < _snapshot->points.size())
+  {
+    const auto& p = _snapshot->points[i];
+    return QPointF(p.x() - _time_offset, p.y());
+  }
   const auto& p = _ts_data->at(i);
   return QPointF(p.x - _time_offset, p.y);
 }
 
 size_t QwtSeriesWrapper::size() const
 {
+  if (_snapshot)
+  {
+    return _snapshot->points.size();
+  }
   return _data->size();
+}
+
+void QwtSeriesWrapper::updateCache(bool)
+{
+  if (_snapshot_lookup)
+  {
+    if (auto cached_snapshot = _snapshot_lookup(plotData()))
+    {
+      _snapshot = std::move(cached_snapshot);
+      return;
+    }
+  }
+  if (_data)
+  {
+    _snapshot = cabana::pj_engine::BuildSeriesSnapshot(*_data);
+  }
+}
+
+void QwtTimeseries::updateCache(bool)
+{
+  if (_snapshot_lookup)
+  {
+    if (auto cached_snapshot = _snapshot_lookup(_ts_data))
+    {
+      _snapshot = std::move(cached_snapshot);
+      return;
+    }
+  }
+  if (_ts_data)
+  {
+    _snapshot = cabana::pj_engine::BuildSeriesSnapshot(*_ts_data);
+  }
 }
 
 void QwtTimeseries::setTimeOffset(double offset)
@@ -199,30 +288,34 @@ void QwtTimeseries::setTimeOffset(double offset)
 
 RangeOpt QwtSeriesWrapper::getVisualizationRangeX()
 {
-  if (this->size() < 2)
+  if (!_snapshot || this->size() < 2)
   {
     return {};
   }
-  else
-  {
-    return _data->rangeX();
-  }
+  return _snapshot->range_x;
 }
 
 RangeOpt QwtTimeseries::getVisualizationRangeX()
 {
-  if (this->size() < 2)
+  if (!_snapshot || this->size() < 2 || !_snapshot->range_x)
   {
     return {};
   }
-  else
-  {
-    auto range = _ts_data->rangeX().value();
-    return RangeOpt({ range.min - _time_offset, range.max - _time_offset });
-  }
+  auto range = _snapshot->range_x.value();
+  return RangeOpt({ range.min - _time_offset, range.max - _time_offset });
 }
 
 const PlotDataBase<double, double>* QwtSeriesWrapper::plotData() const
 {
   return _data;
+}
+
+void QwtSeriesWrapper::setSnapshot(cabana::pj_engine::SeriesSnapshotPtr snapshot)
+{
+  _snapshot = std::move(snapshot);
+}
+
+const cabana::pj_engine::SeriesSnapshotPtr& QwtSeriesWrapper::snapshot() const
+{
+  return _snapshot;
 }

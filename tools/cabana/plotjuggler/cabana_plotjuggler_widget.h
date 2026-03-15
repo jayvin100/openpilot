@@ -17,6 +17,7 @@ public:
   void appendSegments(const SegmentMap &segments, uint64_t route_start_nanos);
   void setCurrentTime(double relative_sec);
   void setPlaybackPaused(bool paused);
+  QString perfSummary() const;
 
 private:
   void resizeEvent(QResizeEvent *event) override;

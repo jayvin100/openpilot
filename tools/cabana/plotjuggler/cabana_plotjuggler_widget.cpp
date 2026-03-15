@@ -1,13 +1,12 @@
 #include "cabana_plotjuggler_widget.h"
 
-#include <QFutureWatcher>
+#include <QElapsedTimer>
 #include <QSizePolicy>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QApplication>
-#include <QtConcurrent/QtConcurrentRun>
 
-#include <deque>
+#include <algorithm>
 
 #include "plotjuggler_app/mainwindow.h"
 #include "plotjuggler_app/transforms/absolute_transform.h"
@@ -17,8 +16,8 @@
 #include "plotjuggler_app/transforms/moving_rms.h"
 #include "plotjuggler_app/transforms/outlier_removal.h"
 #include "plotjuggler_app/transforms/scale_transform.h"
-#include "plotjuggler_plugins/DataLoadRlog/rlog_parser.hpp"
 #include "PlotJuggler/transform_function.h"
+#include "tools/cabana/pj_engine/replay_engine.h"
 
 void initPlotJugglerResources() {
   static bool initialized = false;
@@ -44,45 +43,15 @@ void initPlotJugglerTransforms() {
   initialized = true;
 }
 
-struct SegmentTask {
-  int seg_num = -1;
-  std::shared_ptr<Segment> segment;
-};
-
-struct ParsedBatch {
-  uint64_t generation = 0;
-  std::vector<int> segment_numbers;
-  PJ::PlotDataMapRef data_map;
-};
-
-using ParsedBatchPtr = std::shared_ptr<ParsedBatch>;
-
-ParsedBatchPtr parseSegmentBatch(std::vector<SegmentTask> tasks, uint64_t generation) {
-  auto batch = std::make_shared<ParsedBatch>();
-  batch->generation = generation;
-  RlogMessageParser parser("", batch->data_map);
-
-  for (const auto &task : tasks) {
-    batch->segment_numbers.push_back(task.seg_num);
-    if (!task.segment || !task.segment->log) {
-      continue;
-    }
-
-    for (const auto &event : task.segment->log->events) {
-      try {
-        capnp::FlatArrayMessageReader reader(event.data);
-        auto dynamic_event = reader.getRoot<capnp::DynamicStruct>(parser.getSchema());
-        parser.parseMessageCereal(dynamic_event);
-      } catch (const kj::Exception &) {
-      }
-    }
-  }
-
-  return batch;
-}
-
 class CabanaPlotJugglerWidget::Impl {
 public:
+  struct PerfStats {
+    bool enabled = qEnvironmentVariableIsSet("CABANA_PJ_PERF");
+    mutable qint64 tracker_calls = 0;
+    mutable qint64 tracker_total_ms = 0;
+    mutable qint64 tracker_max_ms = 0;
+  };
+
   Impl(CabanaPlotJugglerWidget *parent, const QString &dbc_name, const QString &layout_path)
       : dbc_name(dbc_name), layout_path(layout_path) {
     auto *layout = new QVBoxLayout(parent);
@@ -105,6 +74,18 @@ public:
     layout->addWidget(pj_window, 1);
     pj_window->show();
 
+    engine = std::make_unique<cabana::pj_engine::ReplayEngine>();
+    engine->setBatchReadyHandler([this](const cabana::pj_engine::ParsedBatchPtr &batch) {
+      if (!batch || batch->data_map.getAllNames().empty()) {
+        return;
+      }
+
+      QElapsedTimer append_timer;
+      append_timer.start();
+      pj_window->appendExternalData(std::move(batch->data_map));
+      engine->noteBatchConsumed(*batch, append_timer.elapsed());
+    });
+
     if (qEnvironmentVariableIsSet("CABANA_PJ_DEBUG")) {
       QTimer::singleShot(3000, parent, [this, parent]() {
         qInfo() << "CabanaPlotJugglerWidget geom" << parent->geometry() << "visible" << parent->isVisible();
@@ -113,27 +94,6 @@ public:
         pj_window->dumpObjectTree();
       });
     }
-
-    QObject::connect(&watcher, &QFutureWatcher<ParsedBatchPtr>::finished, parent, [this]() {
-      auto batch = watcher.result();
-      if (!batch) {
-        startNextBatch();
-        return;
-      }
-
-      for (int seg_num : batch->segment_numbers) {
-        queued_segments.erase(seg_num);
-        if (batch->generation == generation) {
-          loaded_segments.insert(seg_num);
-        }
-      }
-
-      if (batch->generation == generation && !batch->data_map.getAllNames().empty()) {
-        pj_window->appendExternalData(std::move(batch->data_map));
-      }
-
-      startNextBatch();
-    });
 
     if (!dbc_name.isEmpty()) {
       qputenv("DBC_NAME", dbc_name.toUtf8());
@@ -146,14 +106,7 @@ public:
   }
 
   ~Impl() {
-    ++generation;
-    loaded_segments.clear();
-    queued_segments.clear();
-    pending_segments.clear();
-    QObject::disconnect(&watcher, nullptr, nullptr, nullptr);
-    if (watcher.isRunning()) {
-      watcher.waitForFinished();
-    }
+    engine.reset();
   }
 
   void refreshLayoutOnce() {
@@ -165,32 +118,8 @@ public:
   }
 
   void queueSegments(const SegmentMap &segments, uint64_t route_start_nanos) {
-    route_start_sec = route_start_nanos / 1e9;
     refreshLayoutOnce();
-
-    for (const auto &[seg_num, segment] : segments) {
-      if (!segment || !segment->log || loaded_segments.count(seg_num) != 0 || queued_segments.count(seg_num) != 0) {
-        continue;
-      }
-      queued_segments.insert(seg_num);
-      pending_segments.push_back({seg_num, segment});
-    }
-
-    startNextBatch();
-  }
-
-  void startNextBatch() {
-    if (watcher.isRunning() || pending_segments.empty()) {
-      return;
-    }
-
-    std::vector<SegmentTask> batch;
-    constexpr size_t kSegmentsPerBatch = 4;
-    while (!pending_segments.empty() && batch.size() < kSegmentsPerBatch) {
-      batch.push_back(std::move(pending_segments.front()));
-      pending_segments.pop_front();
-    }
-    watcher.setFuture(QtConcurrent::run(parseSegmentBatch, std::move(batch), generation));
+    engine->queueSegments(segments, route_start_nanos);
   }
 
   void resizeTo(const QSize &size) {
@@ -199,16 +128,24 @@ public:
     pj_window->updateGeometry();
   }
 
+  QString perfSummary() const {
+    if (!perf.enabled) return {};
+    const auto avg = [](qint64 total, qint64 calls) -> qint64 { return calls > 0 ? total / calls : 0; };
+    const QString engine_summary = engine ? engine->perfSummary() : QString();
+    return QString("trk %1/%2ms max %3%4%5")
+        .arg(perf.tracker_calls)
+        .arg(avg(perf.tracker_total_ms, perf.tracker_calls))
+        .arg(perf.tracker_max_ms)
+        .arg(engine_summary.isEmpty() ? QString() : " | ")
+        .arg(engine_summary);
+  }
+
   MainWindow *pj_window = nullptr;
-  std::set<int> loaded_segments;
-  std::set<int> queued_segments;
-  std::deque<SegmentTask> pending_segments;
+  std::unique_ptr<cabana::pj_engine::ReplayEngine> engine;
   QString dbc_name;
   QString layout_path;
   bool layout_loaded = false;
-  double route_start_sec = 0.0;
-  uint64_t generation = 0;
-  QFutureWatcher<ParsedBatchPtr> watcher;
+  PerfStats perf;
 };
 
 CabanaPlotJugglerWidget::CabanaPlotJugglerWidget(const QString &dbc_name, const QString &layout_path, QWidget *parent)
@@ -218,12 +155,8 @@ CabanaPlotJugglerWidget::CabanaPlotJugglerWidget(const QString &dbc_name, const 
 CabanaPlotJugglerWidget::~CabanaPlotJugglerWidget() = default;
 
 void CabanaPlotJugglerWidget::clearData() {
-  ++impl_->generation;
-  impl_->loaded_segments.clear();
-  impl_->queued_segments.clear();
-  impl_->pending_segments.clear();
   impl_->layout_loaded = false;
-  impl_->route_start_sec = 0.0;
+  impl_->engine->clear();
   impl_->pj_window->clearExternalData();
   impl_->refreshLayoutOnce();
 }
@@ -233,7 +166,22 @@ void CabanaPlotJugglerWidget::appendSegments(const SegmentMap &segments, uint64_
 }
 
 void CabanaPlotJugglerWidget::setCurrentTime(double relative_sec) {
-  impl_->pj_window->setExternalTrackerTime(impl_->route_start_sec + relative_sec);
+  QElapsedTimer timer;
+  if (impl_->perf.enabled) {
+    timer.start();
+  }
+  impl_->pj_window->setExternalTrackerTime(impl_->engine->routeStartSec() + relative_sec);
+  if (impl_->perf.enabled) {
+    const qint64 elapsed = timer.elapsed();
+    impl_->perf.tracker_calls++;
+    impl_->perf.tracker_total_ms += elapsed;
+    impl_->perf.tracker_max_ms = std::max(impl_->perf.tracker_max_ms, elapsed);
+    if (elapsed >= 16) {
+      qInfo().noquote() << QString("CABANA_PJ_PERF tracker_sync=%1ms t=%2")
+                               .arg(elapsed)
+                               .arg(relative_sec, 0, 'f', 3);
+    }
+  }
 }
 
 void CabanaPlotJugglerWidget::setPlaybackPaused(bool paused) {
@@ -243,4 +191,8 @@ void CabanaPlotJugglerWidget::setPlaybackPaused(bool paused) {
 void CabanaPlotJugglerWidget::resizeEvent(QResizeEvent *event) {
   QWidget::resizeEvent(event);
   impl_->resizeTo(event->size());
+}
+
+QString CabanaPlotJugglerWidget::perfSummary() const {
+  return impl_->perfSummary();
 }

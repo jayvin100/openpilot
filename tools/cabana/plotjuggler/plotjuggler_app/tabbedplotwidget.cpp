@@ -26,8 +26,11 @@
 std::map<QString, TabbedPlotWidget*> TabbedPlotWidget::_instances;
 
 TabbedPlotWidget::TabbedPlotWidget(QString name, QMainWindow* mainwindow,
-                                   PlotDataMapRef& mapped_data, QMainWindow* parent)
-  : QWidget(parent), _mapped_data(mapped_data), _name(name), _main_window(mainwindow)
+                                   PlotDataMapRef& mapped_data,
+                                   cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup,
+                                   QMainWindow* parent)
+  : QWidget(parent), _name(name), _main_window(mainwindow), _mapped_data(mapped_data),
+    _snapshot_lookup(std::move(snapshot_lookup))
 {
   MainWindow* main_window = dynamic_cast<MainWindow*>(_main_window);
 
@@ -136,7 +139,7 @@ PlotDocker* TabbedPlotWidget::addTab(QString tab_name)
     tab_name = QString("tab%1").arg(tab_suffix_count++);
   }
 
-  auto docker = new PlotDocker(tab_name, _mapped_data, this);
+  auto docker = new PlotDocker(tab_name, _mapped_data, _snapshot_lookup, this);
   connect(docker, &PlotDocker::undoableChange, this, &TabbedPlotWidget::undoableChange);
 
   tabWidget()->addTab(docker, tab_name);

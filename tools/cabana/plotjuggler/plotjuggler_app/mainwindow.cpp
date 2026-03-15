@@ -52,6 +52,59 @@
 
 #include "preferences_dialog.h"
 
+using cabana::pj_layout::LayoutModel;
+using cabana::pj_layout::PluginState;
+using cabana::pj_layout::SnippetModel;
+
+namespace {
+
+SnippetModel ToSnippetModel(const SnippetData& snippet)
+{
+  return {
+    .name = snippet.alias_name,
+    .global_vars = snippet.global_vars,
+    .function = snippet.function,
+    .linked_source = snippet.linked_source,
+    .additional_sources = snippet.additional_sources,
+  };
+}
+
+SnippetData ToSnippetData(const SnippetModel& snippet)
+{
+  return {
+    .alias_name = snippet.name,
+    .global_vars = snippet.global_vars,
+    .function = snippet.function,
+    .linked_source = snippet.linked_source,
+    .additional_sources = snippet.additional_sources,
+  };
+}
+
+PluginState ToPluginStateModel(const QDomElement& element)
+{
+  PluginState state;
+  state.id = element.attribute("ID");
+  for (QDomElement child = element.firstChildElement(); !child.isNull();
+       child = child.nextSiblingElement())
+  {
+    state.children.push_back(cabana::pj_layout::FromDomElement(child));
+  }
+  return state;
+}
+
+QDomElement ToPluginDomElement(const PluginState& plugin_state, QDomDocument* document)
+{
+  auto plugin_element = document->createElement("plugin");
+  plugin_element.setAttribute("ID", plugin_state.id);
+  for (const auto& child : plugin_state.children)
+  {
+    plugin_element.appendChild(cabana::pj_layout::ToDomElement(child, document));
+  }
+  return plugin_element;
+}
+
+}  // namespace
+
 MainWindow::MainWindow(const MainWindowConfig& config, QWidget* parent)
   : QMainWindow(parent)
   , ui(new Ui::MainWindow)
@@ -60,6 +113,8 @@ MainWindow::MainWindow(const MainWindowConfig& config, QWidget* parent)
   , _fullscreen_shortcut(Qt::Key_F10, this)
   , _playback_shotcut(Qt::Key_Space, this)
   , _minimized(false)
+  , _mapped_plot_data(_session.plotData())
+  , _transform_functions(_session.transforms())
   , _disable_undo_logging(false)
   , _tracker_time(0)
   , _tracker_param(CurveTracker::VALUE)
@@ -142,7 +197,9 @@ MainWindow::MainWindow(const MainWindowConfig& config, QWidget* parent)
           [this]() { ui->playbackStep->clearFocus(); });
 
   _main_tabbed_widget =
-      new TabbedPlotWidget("Main Window", this, _mapped_plot_data, this);
+      new TabbedPlotWidget(
+          "Main Window", this, _mapped_plot_data,
+          [this](const PlotDataXY* series) { return _session.snapshotFor(series); }, this);
 
   ui->plottingLayout->insertWidget(0, _main_tabbed_widget, 1);
   ui->leftLayout->addWidget(_curvelist_widget, 1);
@@ -246,9 +303,6 @@ MainWindow::MainWindow(const MainWindowConfig& config, QWidget* parent)
 
 MainWindow::~MainWindow()
 {
-  // important: avoid problems with plugins
-  _mapped_plot_data.user_defined.clear();
-
   delete ui;
 }
 
@@ -256,7 +310,7 @@ void MainWindow::clearExternalData()
 {
   deleteAllData();
   forEachWidget([](PlotWidget* plot) {
-    plot->reloadPlotData();
+    plot->updateCurves(nullptr, true);
     plot->replot();
   });
   updateTimeSlider();
@@ -264,20 +318,21 @@ void MainWindow::clearExternalData()
 
 void MainWindow::appendExternalData(PlotDataMapRef&& new_data)
 {
-  auto previous_names = _mapped_plot_data.getAllNames();
-  importPlotDataMap(new_data, false);
-
-  for (const auto& name : _mapped_plot_data.getAllNames())
+  const auto previous_curve_count = _mapped_plot_data.getAllNames().size();
+  const auto refresh = _session.importAndRefresh(new_data, false, _tracker_time);
+  for (const auto& added_curve : refresh.added_curves)
   {
-    if (previous_names.count(name) == 0)
-    {
-      _curvelist_widget->addCurve(name);
-    }
+    _curvelist_widget->addCurve(added_curve);
   }
-
-  _curvelist_widget->updateFilter();
-  _curvelist_widget->refreshColumns();
-  updateDataAndReplot(true);
+  if (refresh.curves_updated)
+  {
+    _curvelist_widget->refreshColumns();
+  }
+  if (_mapped_plot_data.getAllNames().size() != previous_curve_count)
+  {
+    _curvelist_widget->updateFilter();
+  }
+  updateDataAndReplot(refresh.updated_curves, true);
 
   if (qEnvironmentVariableIsSet("CABANA_PJ_DEBUG"))
   {
@@ -341,7 +396,7 @@ void MainWindow::onUndoableChange()
 
   while (_undo_states.size() >= 100)
     _undo_states.pop_front();
-  _undo_states.push_back(xmlSaveState());
+  _undo_states.push_back(saveUiStateModel());
   _redo_states.clear();
   // qDebug() << "undo " << _undo_states.size();
 }
@@ -351,13 +406,13 @@ void MainWindow::onRedoInvoked()
   _disable_undo_logging = true;
   if (_redo_states.size() > 0)
   {
-    QDomDocument state_document = _redo_states.back();
+    LayoutModel state_layout = _redo_states.back();
     while (_undo_states.size() >= 100)
       _undo_states.pop_front();
-    _undo_states.push_back(state_document);
+    _undo_states.push_back(state_layout);
     _redo_states.pop_back();
 
-    xmlLoadState(state_document);
+    loadUiStateModel(state_layout);
   }
   // qDebug() << "undo " << _undo_states.size();
   _disable_undo_logging = false;
@@ -368,14 +423,14 @@ void MainWindow::onUndoInvoked()
   _disable_undo_logging = true;
   if (_undo_states.size() > 1)
   {
-    QDomDocument state_document = _undo_states.back();
+    LayoutModel state_layout = _undo_states.back();
     while (_redo_states.size() >= 100)
       _redo_states.pop_front();
-    _redo_states.push_back(state_document);
+    _redo_states.push_back(state_layout);
     _undo_states.pop_back();
-    state_document = _undo_states.back();
+    state_layout = _undo_states.back();
 
-    xmlLoadState(state_document);
+    loadUiStateModel(state_layout);
   }
   // qDebug() << "undo " << _undo_states.size();
   _disable_undo_logging = false;
@@ -576,7 +631,7 @@ void MainWindow::onPlotTabAdded(PlotDocker* docker)
   // &MainWindow::onUndoableChange);
 }
 
-QDomDocument MainWindow::xmlSaveState() const
+QDomDocument MainWindow::saveUiStateDom() const
 {
   QDomDocument doc;
   QDomProcessingInstruction instr = doc.createProcessingInstruction("xml", "version='1.0'"
@@ -600,6 +655,24 @@ QDomDocument MainWindow::xmlSaveState() const
   root.appendChild(relative_time);
 
   return doc;
+}
+
+LayoutModel MainWindow::saveUiStateModel() const
+{
+  const QDomDocument legacy_doc = saveUiStateDom();
+
+  LayoutModel layout;
+  QString error;
+  if (!cabana::pj_layout::ParseLayoutXml(legacy_doc.toString(), &layout, &error))
+  {
+    qWarning().noquote() << QString("Failed to convert UI state through pj_layout: %1").arg(error);
+  }
+  return layout;
+}
+
+QDomDocument MainWindow::xmlSaveState() const
+{
+  return cabana::pj_layout::ToXmlDocument(saveUiStateModel());
 }
 
 void MainWindow::checkAllCurvesFromLayout(const QDomElement& root)
@@ -659,7 +732,7 @@ void MainWindow::checkAllCurvesFromLayout(const QDomElement& root)
   }
 }
 
-bool MainWindow::xmlLoadState(QDomDocument state_document)
+bool MainWindow::loadUiStateDom(const QDomDocument& state_document)
 {
   QDomElement root = state_document.namedItem("root").toElement();
   if (root.isNull())
@@ -719,36 +792,30 @@ bool MainWindow::xmlLoadState(QDomDocument state_document)
   return true;
 }
 
+bool MainWindow::loadUiStateModel(const LayoutModel& layout)
+{
+  return loadUiStateDom(cabana::pj_layout::ToXmlDocument(layout));
+}
+
+bool MainWindow::xmlLoadState(QDomDocument state_document)
+{
+  LayoutModel layout;
+  QString error;
+  if (!cabana::pj_layout::ParseLayoutXml(state_document.toString(), &layout, &error))
+  {
+    qWarning().noquote() << QString("Failed to parse layout state through pj_layout: %1").arg(error);
+    return false;
+  }
+  return loadUiStateModel(layout);
+}
+
 void MainWindow::onDeleteMultipleCurves(const std::vector<std::string>& curve_names)
 {
-  std::set<std::string> to_be_deleted;
-  for (auto& name : curve_names)
-  {
-    to_be_deleted.insert(name);
-  }
-  // add to the list of curves to delete the derived transforms
-  size_t prev_size = 0;
-  while (prev_size < to_be_deleted.size())
-  {
-    prev_size = to_be_deleted.size();
-    for (auto& [trans_name, transform] : _transform_functions)
-    {
-      for (const auto& source : transform->dataSources())
-      {
-        if (to_be_deleted.count(source->plotName()) > 0)
-        {
-          to_be_deleted.insert(trans_name);
-        }
-      }
-    }
-  }
-
-  for (const auto& curve_name : to_be_deleted)
+  const auto deleted_curves = _session.deleteCurvesWithDependencies(curve_names);
+  for (const auto& curve_name : deleted_curves)
   {
     forEachWidget([&](PlotWidget* plot) { plot->onDataSourceRemoved(curve_name); });
     _curvelist_widget->removeCurve(curve_name);
-    _mapped_plot_data.erase(curve_name);
-    _transform_functions.erase(curve_name);
   }
   updateTimeOffset();
   forEachWidget([](PlotWidget* plot) { plot->replot(); });
@@ -801,8 +868,7 @@ void MainWindow::deleteAllData()
 {
   forEachWidget([](PlotWidget* plot) { plot->removeAllCurves(); });
 
-  _mapped_plot_data.clear();
-  _transform_functions.clear();
+  _session.clearAll();
   _curvelist_widget->clear();
   _undo_states.clear();
   _redo_states.clear();
@@ -810,33 +876,14 @@ void MainWindow::deleteAllData()
 
 void MainWindow::importPlotDataMap(PlotDataMapRef& new_data, bool remove_old)
 {
-  if (remove_old)
-  {
-    auto ClearOldSeries = [](auto& prev_plot_data, auto& new_plot_data) {
-      for (auto& it : prev_plot_data)
-      {
-        // timeseries in both
-        if (new_plot_data.count(it.first) != 0)
-        {
-          it.second.clear();
-        }
-      }
-    };
+  const auto import_result = _session.importPlotDataMap(new_data, remove_old);
 
-    ClearOldSeries(_mapped_plot_data.scatter_xy, new_data.scatter_xy);
-    ClearOldSeries(_mapped_plot_data.numeric, new_data.numeric);
-    ClearOldSeries(_mapped_plot_data.strings, new_data.strings);
-  }
-
-  auto [added_curves, curve_updated, data_pushed] =
-      MoveData(new_data, _mapped_plot_data, remove_old);
-
-  for (const auto& added_curve : added_curves)
+  for (const auto& added_curve : import_result.added_curves)
   {
     _curvelist_widget->addCurve(added_curve);
   }
 
-  if (curve_updated)
+  if (import_result.curves_updated)
   {
     _curvelist_widget->refreshColumns();
   }
@@ -883,23 +930,11 @@ void MainWindow::updateDerivedSeries()
 
 void MainWindow::updateReactivePlots()
 {
-  std::unordered_set<std::string> updated_curves;
-
+  const auto reactive_update = _session.updateReactiveTransforms(_tracker_time);
   bool curve_added = false;
-  for (auto& it : _transform_functions)
+  for (const auto& name : reactive_update.added_curves)
   {
-    if (auto reactive_function =
-            std::dynamic_pointer_cast<PJ::ReactiveLuaFunction>(it.second))
-    {
-      reactive_function->setTimeTracker(_tracker_time);
-      reactive_function->calculate();
-
-      for (auto& name : reactive_function->createdCurves())
-      {
-        curve_added |= _curvelist_widget->addCurve(name);
-        updated_curves.insert(name);
-      }
-    }
+    curve_added |= _curvelist_widget->addCurve(name);
   }
   if (curve_added)
   {
@@ -907,12 +942,9 @@ void MainWindow::updateReactivePlots()
   }
 
   forEachWidget([&](PlotWidget* plot) {
-    for (auto& curve : plot->curveList())
+    if (plot->updateCurves(&reactive_update.updated_curves, false))
     {
-      if (updated_curves.count(curve.src_name) != 0)
-      {
-        plot->replot();
-      }
+      plot->replot();
     }
   });
 }
@@ -977,44 +1009,46 @@ void MainWindow::on_stylesheetChanged(QString theme)
   ui->pushButtonLegend->setIcon(LoadSvg(":/resources/svg/legend.svg", theme));
 }
 
-void MainWindow::loadPluginState(const QDomElement& root)
+void MainWindow::loadPluginState(const LayoutModel& layout)
 {
-  QDomElement plugins = root.firstChildElement("Plugins");
-
-  for (QDomElement plugin_elem = plugins.firstChildElement();
-       plugin_elem.isNull() == false; plugin_elem = plugin_elem.nextSiblingElement())
+  for (const auto& plugin_state : layout.plugins)
   {
-    const QString plugin_name = plugin_elem.attribute("ID");
+    const QString plugin_name = plugin_state.id;
 
-    if (plugin_elem.nodeName() != "plugin" || plugin_name.isEmpty())
+    if (plugin_name.isEmpty())
     {
       QMessageBox::warning(this, tr("Error loading Plugin State from Layout"),
                            tr("The method xmlSaveState() must return a node like this "
                               "<plugin ID=\"PluginName\" "));
+      continue;
     }
 
     if (_toolboxes.find(plugin_name) != _toolboxes.end())
     {
+      QDomDocument document;
+      QDomElement plugin_elem = ToPluginDomElement(plugin_state, &document);
+      document.appendChild(plugin_elem);
       _toolboxes[plugin_name]->xmlLoadState(plugin_elem);
     }
   }
 }
 
-QDomElement MainWindow::savePluginState(QDomDocument& doc)
+std::vector<PluginState> MainWindow::savePluginStateModel() const
 {
-  QDomElement list_plugins = doc.createElement("Plugins");
+  std::vector<PluginState> plugin_states;
+  plugin_states.reserve(_toolboxes.size());
 
-  auto AddPlugins = [&](auto& plugins) {
-    for (auto& [name, plugin] : plugins)
+  auto AddPlugins = [&](auto& toolbox_map) {
+    for (auto& [name, plugin] : toolbox_map)
     {
+      QDomDocument doc;
       QDomElement elem = plugin->xmlSaveState(doc);
-      list_plugins.appendChild(elem);
+      plugin_states.push_back(ToPluginStateModel(elem));
     }
   };
 
   AddPlugins(_toolboxes);
-
-  return list_plugins;
+  return plugin_states;
 }
 
 std::tuple<double, double, int> MainWindow::calculateVisibleRangeX()
@@ -1075,29 +1109,22 @@ std::tuple<double, double, int> MainWindow::calculateVisibleRangeX()
 
 bool MainWindow::loadLayoutFromFile(QString filename)
 {
-  QSettings settings;
-
-  QFile file(filename);
-  if (!file.open(QFile::ReadOnly | QFile::Text))
+  LayoutModel layout;
+  QString error;
+  if (!cabana::pj_layout::LoadLayoutFile(filename, &layout, &error))
   {
     QMessageBox::warning(
-        this, tr("Layout"),
-        tr("Cannot read file %1:\n%2.").arg(filename).arg(file.errorString()));
+        this, tr("Layout"), tr("Cannot load layout %1:\n%2.").arg(filename).arg(error));
     return false;
   }
 
-  QString errorStr;
-  int errorLine, errorColumn;
+  return loadLayoutModel(layout);
+}
 
-  QDomDocument domDocument;
-
-  if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn))
-  {
-    QMessageBox::information(
-        window(), tr("XML Layout"),
-        tr("Parse error at line %1:\n%2").arg(errorLine).arg(errorStr));
-    return false;
-  }
+bool MainWindow::loadLayoutModel(const LayoutModel& layout)
+{
+  const QDomDocument domDocument = cabana::pj_layout::ToXmlDocument(layout);
+  QSettings settings;
 
   //-------------------------------------------------
   // refresh plugins
@@ -1113,11 +1140,8 @@ bool MainWindow::loadLayoutFromFile(QString filename)
       {
         continue;
       }
-      if (_mapped_plot_data.numeric.count(curve_name) == 0 &&
-          _mapped_plot_data.strings.count(curve_name) == 0 &&
-          _mapped_plot_data.scatter_xy.count(curve_name) == 0)
+      if (_session.ensureNumericPlaceholder(curve_name))
       {
-        _mapped_plot_data.addNumeric(curve_name);
         added_placeholders.insert(curve_name);
       }
     }
@@ -1131,30 +1155,26 @@ bool MainWindow::loadLayoutFromFile(QString filename)
     }
   }
 
-  loadPluginState(root);
+  loadPluginState(layout);
   //-------------------------------------------------
-  auto custom_equations = root.firstChildElement("customMathEquations");
-
-  if (!custom_equations.isNull())
+  if (layout.custom_math_present)
   {
-    using SnippetPair = std::pair<SnippetData, QDomElement>;
-    std::vector<SnippetPair> snippets;
-
-    for (QDomElement custom_eq = custom_equations.firstChildElement("snippet");
-         custom_eq.isNull() == false; custom_eq = custom_eq.nextSiblingElement("snippet"))
+    std::vector<SnippetData> snippets;
+    snippets.reserve(layout.custom_math_snippets.size());
+    for (const auto& snippet_model : layout.custom_math_snippets)
     {
-      snippets.push_back({ GetSnippetFromXML(custom_eq), custom_eq });
+      snippets.push_back(ToSnippetData(snippet_model));
     }
     // A custom plot may depend on other custom plots.
     // Reorder them to respect the mutual depencency.
-    auto DependOn = [](const SnippetPair& a, const SnippetPair& b) {
-      if (b.first.linked_source == a.first.alias_name)
+    auto DependOn = [](const SnippetData& a, const SnippetData& b) {
+      if (b.linked_source == a.alias_name)
       {
         return true;
       }
-      for (const auto& source : b.first.additional_sources)
+      for (const auto& source : b.additional_sources)
       {
-        if (source == a.first.alias_name)
+        if (source == a.alias_name)
         {
           return true;
         }
@@ -1163,25 +1183,57 @@ bool MainWindow::loadLayoutFromFile(QString filename)
     };
     std::sort(snippets.begin(), snippets.end(), DependOn);
 
-    for (const auto& [snippet, custom_eq] : snippets)
+    if (_embedded_mode)
+    {
+      auto ensure_placeholder = [this](const QString& source_name) {
+        if (source_name.isEmpty())
+        {
+          return;
+        }
+        _session.ensureNumericPlaceholder(source_name.toStdString());
+      };
+
+      for (const auto& snippet : snippets)
+      {
+        ensure_placeholder(snippet.linked_source);
+        for (const auto& source : snippet.additional_sources)
+        {
+          ensure_placeholder(source);
+        }
+      }
+    }
+
+    for (const auto& snippet : snippets)
     {
       try
       {
         CustomPlotPtr new_custom_plot = std::make_shared<LuaCustomFunction>(snippet);
-        new_custom_plot->xmlLoadState(custom_eq);
-
-        new_custom_plot->calculateAndAdd(_mapped_plot_data);
         const auto& alias_name = new_custom_plot->aliasName();
-        _curvelist_widget->addCustom(alias_name);
-
-        _transform_functions.insert({ alias_name.toStdString(), new_custom_plot });
+        QString error;
+        const bool inserted = _session.upsertCustomPlot(new_custom_plot, &error);
+        if (!error.isEmpty())
+        {
+          throw std::runtime_error(error.toStdString());
+        }
+        if (inserted)
+        {
+          _curvelist_widget->addCustom(alias_name);
+        }
       }
       catch (std::runtime_error& err)
       {
-        QMessageBox::warning(this, tr("Exception"),
-                             tr("Failed to load customMathEquation [%1] \n\n %2\n")
-                                 .arg(snippet.alias_name)
-                                 .arg(err.what()));
+        const QString message =
+            tr("Failed to load customMathEquation [%1] \n\n %2\n")
+                .arg(snippet.alias_name)
+                .arg(err.what());
+        if (_embedded_mode)
+        {
+          qWarning().noquote() << message;
+        }
+        else
+        {
+          QMessageBox::warning(this, tr("Exception"), message);
+        }
       }
     }
     _curvelist_widget->refreshColumns();
@@ -1190,11 +1242,16 @@ bool MainWindow::loadLayoutFromFile(QString filename)
   QByteArray snippets_saved_xml =
       settings.value("AddCustomPlotDialog.savedXML", QByteArray()).toByteArray();
 
-  auto snippets_element = root.firstChildElement("snippets");
-  if (!snippets_element.isNull())
+  if (layout.snippets_present)
   {
     auto snippets_previous = GetSnippetsFromXML(snippets_saved_xml);
-    auto snippets_layout = GetSnippetsFromXML(snippets_element);
+    SnippetsMap snippets_layout;
+    for (const auto& snippet_model : layout.snippets)
+    {
+      const auto snippet = ToSnippetData(snippet_model);
+      SnippetsMap::value_type value(snippet.alias_name, snippet);
+      snippets_layout.insert(value);
+    }
 
     bool snippets_are_different = false;
     for (const auto& snippet_it : snippets_layout)
@@ -1237,13 +1294,25 @@ bool MainWindow::loadLayoutFromFile(QString filename)
 
   ///--------------------------------------------------
 
-  xmlLoadState(domDocument);
+  loadUiStateModel(layout);
 
   linkedZoomOut();
 
   _undo_states.clear();
-  _undo_states.push_back(domDocument);
+  _undo_states.push_back(saveUiStateModel());
   return true;
+}
+
+bool MainWindow::loadLayoutDocument(const QDomDocument& domDocument)
+{
+  LayoutModel layout;
+  QString error;
+  if (!cabana::pj_layout::ParseLayoutXml(domDocument.toString(), &layout, &error))
+  {
+    qWarning().noquote() << QString("Failed to parse layout document through pj_layout: %1").arg(error);
+    return false;
+  }
+  return loadLayoutModel(layout);
 }
 
 void MainWindow::linkedZoomOut()
@@ -1371,37 +1440,40 @@ void MainWindow::updateTimeOffset()
 
 void MainWindow::updateDataAndReplot(bool replot_hidden_tabs)
 {
+  Q_UNUSED(replot_hidden_tabs);
   _replot_timer->stop();
-
-  //--------------------------------
-  std::vector<TransformFunction*> transforms;
-  transforms.reserve(_transform_functions.size());
-  for (auto& [id, function] : _transform_functions)
-  {
-    transforms.push_back(function.get());
-  }
-  std::sort(
-      transforms.begin(), transforms.end(),
-      [](TransformFunction* a, TransformFunction* b) { return a->order() < b->order(); });
 
   // Update the reactive plots
   updateReactivePlots();
 
-  // update all transforms, but not the ReactiveLuaFunction
-  for (auto& function : transforms)
-  {
-    if (dynamic_cast<ReactiveLuaFunction*>(function) == nullptr)
-    {
-      function->calculate();
-    }
-  }
+  const auto derived_updates = _session.updateDerivedTransforms();
 
-  forEachWidget([](PlotWidget* plot) { plot->updateCurves(false); });
+  const std::unordered_set<std::string> updated_curves(derived_updates.begin(),
+                                                       derived_updates.end());
+  forEachWidget([&](PlotWidget* plot) { plot->updateCurves(&updated_curves, false); });
 
   //--------------------------------
   updateTimeOffset();
   updateTimeSlider();
   //--------------------------------
+  linkedZoomOut();
+}
+
+void MainWindow::updateDataAndReplot(const std::unordered_set<std::string>& updated_curves,
+                                     bool replot_hidden_tabs)
+{
+  Q_UNUSED(replot_hidden_tabs);
+  _replot_timer->stop();
+
+  forEachWidget([&](PlotWidget* plot) {
+    if (plot->updateCurves(&updated_curves, false))
+    {
+      plot->replot();
+    }
+  });
+
+  updateTimeOffset();
+  updateTimeSlider();
   linkedZoomOut();
 }
 
@@ -1482,28 +1554,10 @@ void MainWindow::on_pushButtonPlay_toggled(bool checked)
 
 void MainWindow::on_actionClearBuffer_triggered(bool)
 {
-  for (auto& it : _mapped_plot_data.numeric)
-  {
-    it.second.clear();
-  }
-
-  for (auto& it : _mapped_plot_data.strings)
-  {
-    it.second.clear();
-  }
-
-  for (auto& it : _mapped_plot_data.user_defined)
-  {
-    it.second.clear();
-  }
-
-  for (auto& it : _transform_functions)
-  {
-    it.second->reset();
-  }
+  _session.clearBuffers();
 
   forEachWidget([](PlotWidget* plot) {
-    plot->reloadPlotData();
+    plot->updateCurves(nullptr, true);
     plot->replot();
   });
 }
@@ -1605,28 +1659,30 @@ void MainWindow::onAddCustomPlot(const std::string& plot_name)
 void MainWindow::onEditCustomPlot(const std::string& plot_name)
 {
   ui->widgetStack->setCurrentIndex(1);
-  auto custom_it = _transform_functions.find(plot_name);
-  if (custom_it == _transform_functions.end())
+  auto custom_plot = _session.findCustomPlot(plot_name);
+  if (!custom_plot)
   {
     qWarning("failed to find custom equation");
     return;
   }
-  _function_editor->editExistingPlot(
-      std::dynamic_pointer_cast<LuaCustomFunction>(custom_it->second));
+  _function_editor->editExistingPlot(custom_plot);
 }
 
 void MainWindow::onRefreshCustomPlot(const std::string& plot_name)
 {
   try
   {
-    auto custom_it = _transform_functions.find(plot_name);
-    if (custom_it == _transform_functions.end())
+    auto custom_plot = _session.findCustomPlot(plot_name);
+    if (!custom_plot)
     {
       qWarning("failed to find custom equation");
       return;
     }
-    CustomPlotPtr ce = std::dynamic_pointer_cast<LuaCustomFunction>(custom_it->second);
-    ce->calculateAndAdd(_mapped_plot_data);
+    QString error;
+    if (!_session.upsertCustomPlot(custom_plot, &error))
+    {
+      throw std::runtime_error(error.toStdString());
+    }
 
     onUpdateLeftTableValues();
     updateDataAndReplot(true);
@@ -1673,38 +1729,25 @@ void MainWindow::onPlaybackLoop()
 void MainWindow::onCustomPlotCreated(std::vector<CustomPlotPtr> custom_plots)
 {
   std::set<PlotWidget*> widget_to_replot;
+  std::unordered_set<std::string> dirty_curves;
 
   for (auto custom_plot : custom_plots)
   {
     const std::string& curve_name = custom_plot->aliasName().toStdString();
-    // clear already existing data first
-    auto data_it = _mapped_plot_data.numeric.find(curve_name);
-    if (data_it != _mapped_plot_data.numeric.end())
-    {
-      data_it->second.clear();
-    }
-    try
-    {
-      custom_plot->calculateAndAdd(_mapped_plot_data);
-    }
-    catch (std::exception& ex)
+    dirty_curves.insert(curve_name);
+    QString error;
+    const bool inserted = _session.upsertCustomPlot(custom_plot, &error);
+    if (!error.isEmpty())
     {
       QMessageBox::warning(this, tr("Warning"),
                            tr("Failed to create the custom timeseries. "
                               "Error:\n\n%1")
-                               .arg(ex.what()));
+                               .arg(error));
     }
 
-    // keep data for reference
-    auto custom_it = _transform_functions.find(curve_name);
-    if (custom_it == _transform_functions.end())
+    if (inserted)
     {
-      _transform_functions.insert({ curve_name, custom_plot });
       _curvelist_widget->addCustom(QString::fromStdString(curve_name));
-    }
-    else
-    {
-      custom_it->second = custom_plot;
     }
 
     forEachWidget([&](PlotWidget* plot) {
@@ -1721,7 +1764,7 @@ void MainWindow::onCustomPlotCreated(std::vector<CustomPlotPtr> custom_plots)
 
   for (auto plot : widget_to_replot)
   {
-    plot->updateCurves(true);
+    plot->updateCurves(&dirty_curves, true);
     plot->replot();
   }
   _curvelist_widget->clearSelections();
@@ -1830,7 +1873,7 @@ void MainWindow::on_pushButtonLoadLayout_clicked(bool)
 
 void MainWindow::on_pushButtonSaveLayout_clicked(bool)
 {
-  QDomDocument doc = xmlSaveState();
+  LayoutModel saved_layout = saveUiStateModel();
 
   QSettings settings;
 
@@ -1888,39 +1931,38 @@ void MainWindow::on_pushButtonSaveLayout_clicked(bool)
   settings.setValue("MainWindow.lastLayoutDirectory", directory_path);
   settings.setValue("MainWindow.saveLayoutSnippets", checkbox_snippets->isChecked());
 
-  QDomElement root = doc.namedItem("root").toElement();
+  saved_layout.plugins_present = true;
+  saved_layout.plugins = savePluginStateModel();
 
-  root.appendChild(doc.createComment(" - - - - - - - - - - - - - - "));
-
-  root.appendChild(doc.createComment(" - - - - - - - - - - - - - - "));
-
-  root.appendChild(savePluginState(doc));
-
-  root.appendChild(doc.createComment(" - - - - - - - - - - - - - - "));
-  root.appendChild(doc.createComment(" - - - - - - - - - - - - - - "));
+  saved_layout.custom_math_present = checkbox_snippets->isChecked();
+    saved_layout.custom_math_snippets.clear();
+    saved_layout.snippets_present = checkbox_snippets->isChecked();
+    saved_layout.snippets.clear();
   if (checkbox_snippets->isChecked())
   {
-    QDomElement custom_equations = doc.createElement("customMathEquations");
     for (const auto& custom_it : _transform_functions)
     {
-      const auto& custom_plot = custom_it.second;
-      custom_plot->xmlSaveState(doc, custom_equations);
+      if (auto custom_plot = std::dynamic_pointer_cast<CustomFunction>(custom_it.second))
+      {
+        saved_layout.custom_math_snippets.push_back(ToSnippetModel(custom_plot->snippet()));
+      }
     }
-    root.appendChild(custom_equations);
 
     QByteArray snippets_xml_text =
         settings.value("AddCustomPlotDialog.savedXML", QByteArray()).toByteArray();
     auto snipped_saved = GetSnippetsFromXML(snippets_xml_text);
-    auto snippets_root = ExportSnippets(snipped_saved, doc);
-    root.appendChild(snippets_root);
+    for (const auto& [_, snippet] : snipped_saved)
+    {
+      saved_layout.snippets.push_back(ToSnippetModel(snippet));
+    }
   }
-  root.appendChild(doc.createComment(" - - - - - - - - - - - - - - "));
-  //------------------------------------
+  const QDomDocument normalized_doc = cabana::pj_layout::ToXmlDocument(saved_layout);
+
   QFile file(fileName);
   if (file.open(QIODevice::WriteOnly))
   {
     QTextStream stream(&file);
-    stream << doc.toString() << Qt::endl;
+    stream << normalized_doc.toString() << Qt::endl;
   }
 }
 

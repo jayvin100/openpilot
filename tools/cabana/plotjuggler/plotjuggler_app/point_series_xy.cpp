@@ -19,7 +19,7 @@ PointSeriesXY::PointSeriesXY(const PlotData* x_axis, const PlotData* y_axis)
 
 size_t PointSeriesXY::size() const
 {
-  return _cached_curve.size();
+  return QwtSeriesWrapper::size();
 }
 
 std::optional<QPointF> PointSeriesXY::sampleFromTime(double t)
@@ -45,6 +45,7 @@ RangeOpt PointSeriesXY::getVisualizationRangeY(Range)
 
 void PointSeriesXY::updateCache(bool reset_old_data)
 {
+  Q_UNUSED(reset_old_data);
   _cached_curve.clear();
 
   if (_x_axis == nullptr)
@@ -71,6 +72,8 @@ void PointSeriesXY::updateCache(bool reset_old_data)
     const QPointF p(_x_axis->at(i).y, _y_axis->at(i).y);
     _cached_curve.pushBack({ p.x(), p.y() });
   }
+
+  setSnapshot(cabana::pj_engine::BuildSeriesSnapshot(_cached_curve));
 }
 
 RangeOpt PointSeriesXY::getVisualizationRangeX()

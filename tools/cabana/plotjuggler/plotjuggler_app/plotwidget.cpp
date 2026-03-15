@@ -70,8 +70,38 @@ const double MAX_DOUBLE = std::numeric_limits<double>::max() / 2;
 
 static bool if_xy_plot_failed_show_dialog = true;
 
-PlotWidget::PlotWidget(PlotDataMapRef& datamap, QWidget* parent)
-  : PlotWidgetBase(parent)
+namespace {
+bool isEmbeddedPlotJuggler()
+{
+  return qApp->property("PlotJugglerEmbedded").toBool();
+}
+
+bool curveNeedsRefresh(const PlotWidget::CurveInfo& curve_info,
+                       const std::unordered_set<std::string>* dirty_curves)
+{
+  if (!dirty_curves || dirty_curves->empty())
+  {
+    return true;
+  }
+
+  if (dirty_curves->count(curve_info.src_name) != 0)
+  {
+    return true;
+  }
+
+  if (auto xy_series = dynamic_cast<PointSeriesXY*>(curve_info.curve->data()))
+  {
+    return dirty_curves->count(xy_series->dataX()->plotName()) != 0 ||
+           dirty_curves->count(xy_series->dataY()->plotName()) != 0;
+  }
+
+  return false;
+}
+}
+
+PlotWidget::PlotWidget(PlotDataMapRef& datamap, QWidget* parent,
+                       cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup)
+  : PlotWidgetBase(parent, std::move(snapshot_lookup))
   , _mapped_data(datamap)
   , _tracker(nullptr)
   , _use_date_time_scale(false)
@@ -757,6 +787,12 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
     //-----------------
     if (is_timeseries || is_scatter_xy)
     {
+      if (is_timeseries && _mapped_data.numeric.count(curve_name_std) == 0 &&
+          isEmbeddedPlotJuggler())
+      {
+        _mapped_data.addNumeric(curve_name_std);
+      }
+
       if ((is_timeseries && _mapped_data.numeric.count(curve_name_std) == 0) ||
           (!is_timeseries && _mapped_data.scatter_xy.count(curve_name_std) == 0))
       {
@@ -791,6 +827,17 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
     {
       std::string curve_x = curve_element.attribute("curve_x").toStdString();
       std::string curve_y = curve_element.attribute("curve_y").toStdString();
+      if (isEmbeddedPlotJuggler())
+      {
+        if (_mapped_data.numeric.find(curve_x) == _mapped_data.numeric.end())
+        {
+          _mapped_data.addNumeric(curve_x);
+        }
+        if (_mapped_data.numeric.find(curve_y) == _mapped_data.numeric.end())
+        {
+          _mapped_data.addNumeric(curve_y);
+        }
+      }
       if (_mapped_data.numeric.find(curve_x) == _mapped_data.numeric.end() ||
           _mapped_data.numeric.find(curve_y) == _mapped_data.numeric.end())
       {
@@ -813,10 +860,17 @@ bool PlotWidget::xmlLoadState(QDomElement& plot_widget, bool autozoom)
 
   if (missing_curves.size() > 0 && !warning_message_shown)
   {
-    QMessageBox::warning(qwtPlot(), "Warning",
-                         tr("Can't find one or more curves.\n"
-                            "This message will be shown only once.\n%1")
-                             .arg(missing_curves.join(",\n")));
+    const QString message =
+        tr("Can't find one or more curves.\nThis message will be shown only once.\n%1")
+            .arg(missing_curves.join(",\n"));
+    if (isEmbeddedPlotJuggler())
+    {
+      qWarning().noquote() << message;
+    }
+    else
+    {
+      QMessageBox::warning(qwtPlot(), "Warning", message);
+    }
     warning_message_shown = true;
   }
 
@@ -923,12 +977,22 @@ void PlotWidget::setZoomRectangle(QRectF rect, bool emit_signal)
 
 void PlotWidget::reloadPlotData()
 {
+  reloadPlotData(nullptr);
+}
+
+void PlotWidget::reloadPlotData(const std::unordered_set<std::string>* dirty_curves)
+{
   // TODO: this needs MUCH more testing
 
   int visible = 0;
 
   for (auto& it : curveList())
   {
+    if (!curveNeedsRefresh(it, dirty_curves))
+    {
+      continue;
+    }
+
     if (it.curve->isVisible())
     {
       visible++;
@@ -1080,16 +1144,31 @@ Range PlotWidget::getVisualizationRangeY(Range range_X) const
   return Range({ bottom, top });
 }
 
-void PlotWidget::updateCurves(bool reset_older_data)
+bool PlotWidget::updateCurves(bool reset_older_data)
 {
+  return updateCurves(nullptr, reset_older_data);
+}
+
+bool PlotWidget::updateCurves(const std::unordered_set<std::string>* dirty_curves,
+                              bool reset_older_data)
+{
+  bool updated = false;
   for (auto& it : curveList())
   {
+    if (!curveNeedsRefresh(it, dirty_curves))
+    {
+      continue;
+    }
     auto series = dynamic_cast<QwtSeriesWrapper*>(it.curve->data());
     series->updateCache(reset_older_data);
+    updated = true;
   }
-  updateMaximumZoomArea();
-
-  updateStatistics(true);
+  if (updated || !dirty_curves || dirty_curves->empty())
+  {
+    updateMaximumZoomArea();
+    updateStatistics(true);
+  }
+  return updated;
 }
 
 void PlotWidget::updateStatistics(bool forceUpdate)
@@ -1629,7 +1708,7 @@ QwtSeriesWrapper* PlotWidget::createCurveXY(const PlotData* data_x,
 QwtSeriesWrapper* PlotWidget::createTimeSeries(const PlotData* data,
                                                const QString& transform_ID)
 {
-  TransformedTimeseries* output = new TransformedTimeseries(data);
+  TransformedTimeseries* output = new TransformedTimeseries(data, _snapshot_lookup);
   output->setTransform(transform_ID);
   output->setTimeOffset(_time_offset);
   output->updateCache(true);

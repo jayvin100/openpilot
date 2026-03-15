@@ -27,6 +27,8 @@
 #include "transforms/custom_function.h"
 #include "transforms/function_editor.h"
 #include "utils.h"
+#include "tools/cabana/pj_engine/session.h"
+#include "tools/cabana/pj_layout/layout_model.h"
 
 #include "ui_mainwindow.h"
 
@@ -76,6 +78,8 @@ public slots:
   void on_tabbedAreaDestroyed(QObject* object);
 
   void updateDataAndReplot(bool replot_hidden_tabs);
+  void updateDataAndReplot(const std::unordered_set<std::string>& updated_curves,
+                           bool replot_hidden_tabs);
 
   void onUpdateLeftTableValues();
 
@@ -94,6 +98,7 @@ public slots:
   void linkedZoomOut();
 
 private:
+  cabana::pj_engine::PlotJugglerSession _session;
   Ui::MainWindow* ui;
 
   TabbedPlotWidget* _main_tabbed_widget;
@@ -107,13 +112,13 @@ private:
 
   CurveListPanel* _curvelist_widget;
 
-  PlotDataMapRef _mapped_plot_data;
+  PlotDataMapRef& _mapped_plot_data;
 
-  TransformsMap _transform_functions;
+  TransformsMap& _transform_functions;
   std::map<QString, ToolboxPluginPtr> _toolboxes;
 
-  std::deque<QDomDocument> _undo_states;
-  std::deque<QDomDocument> _redo_states;
+  std::deque<cabana::pj_layout::LayoutModel> _undo_states;
+  std::deque<cabana::pj_layout::LayoutModel> _redo_states;
   QElapsedTimer _undo_timer;
   bool _disable_undo_logging;
 
@@ -159,8 +164,14 @@ private:
 
   void rearrangeGridLayout();
 
+  cabana::pj_layout::LayoutModel saveUiStateModel() const;
+  bool loadUiStateModel(const cabana::pj_layout::LayoutModel& layout);
   QDomDocument xmlSaveState() const;
   bool xmlLoadState(QDomDocument state_document);
+  QDomDocument saveUiStateDom() const;
+  bool loadUiStateDom(const QDomDocument& state_document);
+  bool loadLayoutModel(const cabana::pj_layout::LayoutModel& layout);
+  bool loadLayoutDocument(const QDomDocument& dom_document);
 
   void checkAllCurvesFromLayout(const QDomElement& root);
 
@@ -168,8 +179,8 @@ private:
 
   void closeEvent(QCloseEvent* event);
 
-  void loadPluginState(const QDomElement& root);
-  QDomElement savePluginState(QDomDocument& doc);
+  void loadPluginState(const cabana::pj_layout::LayoutModel& layout);
+  std::vector<cabana::pj_layout::PluginState> savePluginStateModel() const;
 
   std::tuple<double, double, int> calculateVisibleRangeX();
 

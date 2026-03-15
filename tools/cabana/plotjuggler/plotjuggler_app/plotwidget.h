@@ -9,6 +9,7 @@
 
 #include <map>
 #include <deque>
+#include <unordered_set>
 #include <QObject>
 #include <QTextEdit>
 #include <QDomDocument>
@@ -36,7 +37,8 @@ class PlotWidget : public PlotWidgetBase
   Q_OBJECT
 
 public:
-  PlotWidget(PlotDataMapRef& datamap, QWidget* parent);
+  PlotWidget(PlotDataMapRef& datamap, QWidget* parent,
+             cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup = {});
 
   void setContextMenuEnabled(bool enabled);
 
@@ -51,6 +53,7 @@ public:
   void setZoomRectangle(QRectF rect, bool emit_signal);
 
   void reloadPlotData();
+  void reloadPlotData(const std::unordered_set<std::string>* dirty_curves);
 
   double timeOffset() const
   {
@@ -100,7 +103,9 @@ signals:
 
 public slots:
 
-  void updateCurves(bool reset_older_data);
+  bool updateCurves(bool reset_older_data);
+  bool updateCurves(const std::unordered_set<std::string>* dirty_curves,
+                    bool reset_older_data);
 
   void onDataSourceRemoved(const std::string& src_name);
 

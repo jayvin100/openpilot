@@ -10,17 +10,22 @@
 #include "qwt_series_data.h"
 #include "PlotJuggler/plotdata.h"
 #include "PlotJuggler/transform_function.h"
+#include "tools/cabana/pj_engine/series_snapshot.h"
 
 using namespace PJ;
 
 // wrapper to Timeseries inclduing a time offset
 class QwtSeriesWrapper : public QwtSeriesData<QPointF>
 {
-private:
+protected:
   const PlotDataXY* _data;
+  cabana::pj_engine::SeriesSnapshotPtr _snapshot;
+  cabana::pj_engine::SeriesSnapshotLookup _snapshot_lookup;
 
 public:
-  QwtSeriesWrapper(const PlotDataXY* data) : _data(data)
+  QwtSeriesWrapper(const PlotDataXY* data,
+                   cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup = {})
+    : _data(data), _snapshot_lookup(std::move(snapshot_lookup))
   {
   }
 
@@ -36,15 +41,19 @@ public:
 
   virtual RangeOpt getVisualizationRangeY(Range range_X);
 
-  virtual void updateCache(bool reset_old_data)
-  {
-  }
+  virtual void updateCache(bool reset_old_data);
+
+protected:
+  void setSnapshot(cabana::pj_engine::SeriesSnapshotPtr snapshot);
+  const cabana::pj_engine::SeriesSnapshotPtr& snapshot() const;
 };
 
 class QwtTimeseries : public QwtSeriesWrapper
 {
 public:
-  QwtTimeseries(const PlotData* data) : QwtSeriesWrapper(data), _ts_data(data)
+  QwtTimeseries(const PlotData* data,
+                cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup = {})
+    : QwtSeriesWrapper(data, std::move(snapshot_lookup)), _ts_data(data)
   {
   }
 
@@ -60,9 +69,7 @@ public:
 
   virtual std::optional<QPointF> sampleFromTime(double t);
 
-  void updateCache(bool) override
-  {
-  }
+  void updateCache(bool) override;
 
 protected:
   const PlotData* _ts_data;
@@ -74,7 +81,8 @@ protected:
 class TransformedTimeseries : public QwtTimeseries
 {
 public:
-  TransformedTimeseries(const PlotData* source_data);
+  TransformedTimeseries(const PlotData* source_data,
+                       cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup = {});
 
   TransformFunction::Ptr transform();
 
@@ -87,6 +95,8 @@ public:
   QString alias() const;
 
   void setAlias(QString alias);
+
+  const PlotDataXY* plotData() const override;
 
 protected:
   QString _alias;

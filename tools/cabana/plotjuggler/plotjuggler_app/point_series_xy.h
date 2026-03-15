@@ -16,8 +16,7 @@ public:
 
   virtual QPointF sample(size_t i) const override
   {
-    const auto& p = _cached_curve.at(i);
-    return QPointF(p.x, p.y);
+    return QwtSeriesWrapper::sample(i);
   }
 
   size_t size() const override;

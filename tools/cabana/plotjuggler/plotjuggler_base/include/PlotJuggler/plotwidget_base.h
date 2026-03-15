@@ -10,6 +10,7 @@
 #include <QWidget>
 #include "plotdata.h"
 #include "timeseries_qwt.h"
+#include "tools/cabana/pj_engine/series_snapshot.h"
 
 class QwtPlot;
 class QwtPlotCurve;
@@ -42,7 +43,8 @@ public:
     QwtPlotMarker* marker;
   };
 
-  PlotWidgetBase(QWidget* parent);
+  PlotWidgetBase(QWidget* parent,
+                 cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup = {});
 
   virtual ~PlotWidgetBase();
 
@@ -121,6 +123,7 @@ signals:
 protected:
   class QwtPlotPimpl;
   QwtPlotPimpl* p = nullptr;
+  cabana::pj_engine::SeriesSnapshotLookup _snapshot_lookup;
 
   static void setStyle(QwtPlotCurve* curve, CurveStyle style);
 

@@ -44,6 +44,8 @@ cabana_root = Path(Dir('.').abspath)
 plotjuggler_root = cabana_root / 'plotjuggler'
 plotjuggler_gen_root = plotjuggler_root / '.gen'
 plotjuggler_ui_root = plotjuggler_gen_root / 'ui'
+pj_layout_root = cabana_root / 'pj_layout'
+pj_engine_root = cabana_root / 'pj_engine'
 
 
 def repo_rel(path):
@@ -403,6 +405,12 @@ lua_objects = build_objects(lua_env, 'lua_static', [repo_rel(path) for path in l
 lua_static = lua_env.Library(repo_rel(plotjuggler_gen_root / 'lib' / 'lua_static'), lua_objects)
 
 plotjuggler_base = build_static_library('plotjuggler_base', base_cpp, base_headers)
+pj_layout_cpp = walk_files(pj_layout_root, {'.cpp'}, recursive=True)
+pj_layout_headers = walk_files(pj_layout_root, {'.h'}, recursive=True)
+pj_layout_lib = build_static_library('pj_layout', pj_layout_cpp, pj_layout_headers)
+pj_engine_cpp = walk_files(pj_engine_root, {'.cpp'}, recursive=True)
+pj_engine_headers = walk_files(pj_engine_root, {'.h'}, recursive=True)
+pj_engine_lib = build_static_library('pj_engine', pj_engine_cpp, pj_engine_headers)
 plotjuggler_openpilot_common = build_static_library(
   'plotjuggler_openpilot_common',
   [plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog/rlog_parser.cpp'],
@@ -426,6 +434,8 @@ cabana_plotjuggler = build_shared_library(
   [plotjuggler_root / 'cabana_plotjuggler_widget.h'],
   [
     plotjuggler_app_core,
+    pj_layout_lib,
+    pj_engine_lib,
     plotjuggler_toolbox_lua_editor,
     plotjuggler_openpilot_common,
     qt_advanced_docking,
@@ -469,6 +479,12 @@ cabana_program = cabana_env.Program('_cabana', ['cabana.cc', cabana_lib, assets]
 if GetOption('extras'):
   cabana_env.Program('tests/test_cabana', ['tests/test_runner.cc', 'tests/test_cabana.cc', cabana_lib],
                      LIBS=[cabana_libs])
+
+pj_layout_test_env = pj_env.Clone()
+pj_layout_test_env['LIBS'] = [pj_layout_lib] + pj_qt_libs
+pj_layout_test_env.Program('pj_validation/pj_layout_test',
+                           ['pj_validation/pj_layout_test.cc'],
+                           FRAMEWORKS=pj_frameworks)
 
 output_json_file = 'tools/cabana/dbc/car_fingerprint_to_dbc.json'
 generate_dbc = cabana_env.Command('#' + output_json_file,

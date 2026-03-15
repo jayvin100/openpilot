@@ -28,15 +28,18 @@ public:
   }
 };
 
-PlotDocker::PlotDocker(QString name, PlotDataMapRef& datamap, QWidget* parent)
-  : ads::CDockManager(parent), _name(name), _datamap(datamap)
+PlotDocker::PlotDocker(QString name, PlotDataMapRef& datamap,
+                       cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup,
+                       QWidget* parent)
+  : ads::CDockManager(parent), _name(name), _datamap(datamap),
+    _snapshot_lookup(std::move(snapshot_lookup))
 {
   ads::CDockComponentsFactory::setFactory(new SplittableComponentsFactory());
 
   auto CreateFirstWidget = [&]() {
     if (dockAreaCount() == 0)
     {
-      DockWidget* widget = new DockWidget(datamap, this);
+      DockWidget* widget = new DockWidget(datamap, _snapshot_lookup, this);
 
       auto area = addDockWidget(ads::TopDockWidgetArea, widget);
       area->setAllowedAreas(ads::OuterDockAreas);
@@ -278,14 +281,17 @@ void PlotDocker::on_stylesheetChanged(QString theme)
   }
 }
 
-DockWidget::DockWidget(PlotDataMapRef& datamap, QWidget* parent)
-  : ads::CDockWidget("Plot", parent), _datamap(datamap)
+DockWidget::DockWidget(PlotDataMapRef& datamap,
+                       cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup,
+                       QWidget* parent)
+  : ads::CDockWidget("Plot", parent), _datamap(datamap),
+    _snapshot_lookup(std::move(snapshot_lookup))
 {
   setFrameShape(QFrame::NoFrame);
 
   static int plot_count = 0;
   QString plot_name = QString("_plot_%1_").arg(plot_count++);
-  _plot_widget = new PlotWidget(datamap, this);
+  _plot_widget = new PlotWidget(datamap, this, _snapshot_lookup);
   setWidget(_plot_widget);
   setFeature(ads::CDockWidget::DockWidgetFloatable, false);
   setFeature(ads::CDockWidget::DockWidgetDeleteOnClose, true);
@@ -344,7 +350,7 @@ DockWidget::~DockWidget()
 DockWidget* DockWidget::splitHorizontal()
 {
   // create a sibling (same parent)
-  auto new_widget = new DockWidget(_datamap, qobject_cast<QWidget*>(parent()));
+  auto new_widget = new DockWidget(_datamap, _snapshot_lookup, qobject_cast<QWidget*>(parent()));
 
   PlotDocker* parent_docker = static_cast<PlotDocker*>(dockManager());
   auto area = parent_docker->addDockWidget(ads::RightDockWidgetArea, new_widget,
@@ -363,7 +369,7 @@ DockWidget* DockWidget::splitHorizontal()
 
 DockWidget* DockWidget::splitVertical()
 {
-  auto new_widget = new DockWidget(_datamap, qobject_cast<QWidget*>(parent()));
+  auto new_widget = new DockWidget(_datamap, _snapshot_lookup, qobject_cast<QWidget*>(parent()));
 
   PlotDocker* parent_docker = static_cast<PlotDocker*>(dockManager());
 

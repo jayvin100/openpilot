@@ -23,7 +23,9 @@ public:
   } MainWindowArea;
 
   explicit TabbedPlotWidget(QString name, QMainWindow* main_window,
-                            PlotDataMapRef& mapped_data, QMainWindow* parent);
+                            PlotDataMapRef& mapped_data,
+                            cabana::pj_engine::SeriesSnapshotLookup snapshot_lookup,
+                            QMainWindow* parent);
 
   PlotDocker* currentTab();
 
@@ -96,6 +98,7 @@ private:
   QMainWindow* _main_window;
 
   PlotDataMapRef& _mapped_data;
+  cabana::pj_engine::SeriesSnapshotLookup _snapshot_lookup;
 
   bool _horizontal_link;
 
