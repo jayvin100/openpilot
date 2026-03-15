@@ -98,6 +98,10 @@ public:
   QByteArray saveHeaderState() const { return view->header()->saveState(); }
   bool restoreHeaderState(const QByteArray &state) const { return view->header()->restoreState(state); }
   void suppressHighlighted();
+  MessageView *messageView() const { return view; }
+  MessageViewHeader *messageHeader() const { return header; }
+  MessageListModel *messageModel() const { return model; }
+  std::optional<MessageId> currentMessageId() const { return current_msg_id; }
 
 signals:
   void msgSelectionChanged(const MessageId &message_id);

@@ -98,3 +98,22 @@ cabana
 ## Additional Information
 
 For more information, see the [openpilot wiki](https://github.com/commaai/openpilot/wiki/Cabana)
+
+## Smoke Test
+
+Cabana includes a fast local smoke test runner:
+
+```bash
+./.venv/bin/python tools/cabana/smoke_test.py --timeout 90 --update-baseline
+./.venv/bin/python tools/cabana/smoke_test.py --timeout 90
+```
+
+By default, the smoke test uses only the first segment of the demo route for faster iteration. Pass `--route` to override that, or `--data-dir` to point at a local route cache.
+
+Cabana also includes a broader local validation suite:
+
+```bash
+./.venv/bin/python tools/cabana/validation_suite.py --continue-on-failure
+```
+
+For the full validation workflow and artifact layout, see [VALIDATION.md](VALIDATION.md).

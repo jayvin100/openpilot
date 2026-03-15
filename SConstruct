@@ -47,7 +47,7 @@ pkgs = [importlib.import_module(name) for name in pkg_names]
 # be distributed with all Linux distros and macOS, or
 # vendored in commaai/dependencies.
 allowed_system_libs = {
-  "EGL", "GLESv2", "GL", "Qt5Charts", "Qt5Core", "Qt5Gui", "Qt5Widgets",
+  "EGL", "GLESv2", "GL",
   "dl", "drm", "gbm", "m", "pthread",
 }
 

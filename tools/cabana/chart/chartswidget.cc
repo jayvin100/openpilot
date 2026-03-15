@@ -15,6 +15,7 @@ const int MAX_COLUMN_COUNT = 4;
 const int CHART_SPACING = 4;
 
 ChartsWidget::ChartsWidget(QWidget *parent) : QFrame(parent) {
+  setObjectName("ChartsWidget");
   align_timer = new QTimer(this);
   auto_scroll_timer = new QTimer(this);
   setFrameStyle(QFrame::StyledPanel | QFrame::Plain);
@@ -24,14 +25,18 @@ ChartsWidget::ChartsWidget(QWidget *parent) : QFrame(parent) {
 
   // toolbar
   toolbar = new QToolBar(tr("Charts"), this);
+  toolbar->setObjectName("ChartsToolbar");
   int icon_size = style()->pixelMetric(QStyle::PM_SmallIconSize);
   toolbar->setIconSize({icon_size, icon_size});
 
   auto new_plot_btn = new ToolButton("file-plus", tr("New Chart"));
   auto new_tab_btn = new ToolButton("window-stack", tr("New Tab"));
+  new_plot_btn->setObjectName("ChartsNewButton");
+  new_tab_btn->setObjectName("ChartsNewTabButton");
   toolbar->addWidget(new_plot_btn);
   toolbar->addWidget(new_tab_btn);
   toolbar->addWidget(title_label = new QLabel());
+  title_label->setObjectName("ChartsTitleLabel");
   title_label->setContentsMargins(0, 0, style()->pixelMetric(QStyle::PM_LayoutHorizontalSpacing), 0);
 
   auto chart_type_action = toolbar->addAction("");
@@ -48,6 +53,7 @@ ChartsWidget::ChartsWidget(QWidget *parent) : QFrame(parent) {
   chart_type_action->setText("Type: " + types[settings.chart_series_type]);
   chart_type_action->setMenu(chart_type_menu);
   qobject_cast<QToolButton *>(toolbar->widgetForAction(chart_type_action))->setPopupMode(QToolButton::InstantPopup);
+  if (auto *w = toolbar->widgetForAction(chart_type_action)) w->setObjectName("ChartsTypeButton");
 
   QMenu *menu = new QMenu(this);
   for (int i = 0; i < MAX_COLUMN_COUNT; ++i) {
@@ -56,13 +62,16 @@ ChartsWidget::ChartsWidget(QWidget *parent) : QFrame(parent) {
   columns_action = toolbar->addAction("");
   columns_action->setMenu(menu);
   qobject_cast<QToolButton*>(toolbar->widgetForAction(columns_action))->setPopupMode(QToolButton::InstantPopup);
+  if (auto *w = toolbar->widgetForAction(columns_action)) w->setObjectName("ChartsColumnsButton");
 
   QWidget *spacer = new QWidget(this);
   spacer->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
   toolbar->addWidget(spacer);
 
   range_lb_action = toolbar->addWidget(range_lb = new QLabel(this));
+  range_lb->setObjectName("ChartsRangeLabel");
   range_slider = new LogSlider(1000, Qt::Horizontal, this);
+  range_slider->setObjectName("ChartsRangeSlider");
   range_slider->setFixedWidth(150 * qApp->devicePixelRatio());
   range_slider->setToolTip(tr("Set the chart range"));
   range_slider->setRange(1, settings.max_cached_minutes * 60);
@@ -74,17 +83,23 @@ ChartsWidget::ChartsWidget(QWidget *parent) : QFrame(parent) {
   zoom_undo_stack = new QUndoStack(this);
   toolbar->addAction(undo_zoom_action = zoom_undo_stack->createUndoAction(this));
   undo_zoom_action->setIcon(utils::icon("arrow-counterclockwise"));
+  if (auto *w = toolbar->widgetForAction(undo_zoom_action)) w->setObjectName("ChartsUndoZoomButton");
   toolbar->addAction(redo_zoom_action = zoom_undo_stack->createRedoAction(this));
   redo_zoom_action->setIcon(utils::icon("arrow-clockwise"));
+  if (auto *w = toolbar->widgetForAction(redo_zoom_action)) w->setObjectName("ChartsRedoZoomButton");
   reset_zoom_action = toolbar->addWidget(reset_zoom_btn = new ToolButton("zoom-out", tr("Reset Zoom")));
+  reset_zoom_btn->setObjectName("ChartsResetZoomButton");
   reset_zoom_btn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 
   toolbar->addWidget(remove_all_btn = new ToolButton("x-square", tr("Remove all charts")));
+  remove_all_btn->setObjectName("ChartsRemoveAllButton");
   toolbar->addWidget(dock_btn = new ToolButton(""));
+  dock_btn->setObjectName("ChartsDockButton");
   main_layout->addWidget(toolbar);
 
   // tabbar
   tabbar = new TabBar(this);
+  tabbar->setObjectName("ChartsTabBar");
   tabbar->setAutoHide(true);
   tabbar->setExpanding(false);
   tabbar->setDrawBase(true);
@@ -95,8 +110,10 @@ ChartsWidget::ChartsWidget(QWidget *parent) : QFrame(parent) {
 
   // charts
   charts_container = new ChartsContainer(this);
+  charts_container->setObjectName("ChartsContainer");
   charts_container->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
   charts_scroll = new QScrollArea(this);
+  charts_scroll->setObjectName("ChartsScrollArea");
   charts_scroll->viewport()->setBackgroundRole(QPalette::Base);
   charts_scroll->setFrameStyle(QFrame::NoFrame);
   charts_scroll->setWidgetResizable(true);
@@ -333,6 +350,15 @@ QStringList ChartsWidget::serializeChartIds() const {
   }
   std::reverse(chart_ids.begin(), chart_ids.end());
   return chart_ids;
+}
+
+std::vector<QRect> ChartsWidget::chartRects() const {
+  std::vector<QRect> rects;
+  rects.reserve(charts.size());
+  for (auto *chart : charts) {
+    rects.emplace_back(chart->mapToGlobal(QPoint(0, 0)), chart->size());
+  }
+  return rects;
 }
 
 void ChartsWidget::restoreChartsFromIds(const QStringList& chart_ids) {

@@ -73,6 +73,8 @@ protected:
   void updateLoadSaveMenus();
   void createDockWidgets();
   void eventsMerged();
+  void maybeFinalizeSmokeTest();
+  void writeValidationSnapshot();
   void saveSessionState();
   void restoreSessionState();
 
@@ -98,6 +100,7 @@ protected:
   QAction *copy_dbc_to_clipboard = nullptr;
   QString car_fingerprint;
   QByteArray default_state;
+  bool smoke_test_ready_scheduled = false;
 };
 
 class HelpOverlay : public QWidget {

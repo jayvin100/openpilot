@@ -814,6 +814,7 @@ dependencies = [
     { name = "pyserial" },
     { name = "pyzmq" },
     { name = "qrcode" },
+    { name = "qt5" },
     { name = "raylib" },
     { name = "requests" },
     { name = "scons" },
@@ -905,6 +906,7 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'testing'", git = "https://github.com/sshane/pytest-xdist?rev=2b4372bd62699fb412c4fe2f95bf9f01bd2018da" },
     { name = "pyzmq" },
     { name = "qrcode" },
+    { name = "qt5", git = "https://github.com/commaai/dependencies.git?subdirectory=qt5&rev=add-gl-headers" },
     { name = "raylib", specifier = ">5.5.0.3" },
     { name = "requests" },
     { name = "ruff", marker = "extra == 'testing'" },
@@ -1353,6 +1355,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/8f/b2/7fc2931bfae0af02d
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dd/b8/d2d6d731733f51684bbf76bf34dab3b70a9148e8f2cef2bb544fccec681a/qrcode-8.2-py3-none-any.whl", hash = "sha256:16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f", size = 45986, upload-time = "2025-05-01T15:44:22.781Z" },
 ]
+
+[[package]]
+name = "qt5"
+version = "5.15.18"
+source = { git = "https://github.com/commaai/dependencies.git?subdirectory=qt5&rev=add-gl-headers#a2384fff7573a44a50048fabce290492e8e08fd3" }
 
 [[package]]
 name = "raylib"

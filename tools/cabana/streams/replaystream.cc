@@ -8,6 +8,7 @@
 
 #include "common/timing.h"
 #include "common/util.h"
+#include "tools/cabana/smoketest.h"
 #include "tools/cabana/streams/routes.h"
 
 ReplayStream::ReplayStream(QObject *parent) : AbstractStream(parent) {
@@ -47,6 +48,7 @@ void ReplayStream::mergeSegments() {
 }
 
 bool ReplayStream::loadRoute(const std::string &route, const std::string &data_dir, uint32_t replay_flags, bool auto_source) {
+  cabana::smoketest::recordRouteLoadStart();
   replay.reset(new Replay(route, {"can", "roadEncodeIdx", "driverEncodeIdx", "wideRoadEncodeIdx", "carParams"},
                           {}, nullptr, replay_flags, data_dir, auto_source));
   replay->setSegmentCacheLimit(settings.max_cached_minutes);
@@ -62,6 +64,7 @@ bool ReplayStream::loadRoute(const std::string &route, const std::string &data_d
   replay->onSegmentsMerged = [this]() { QMetaObject::invokeMethod(this, &ReplayStream::mergeSegments, Qt::BlockingQueuedConnection); };
 
   bool success = replay->load();
+  cabana::smoketest::recordRouteLoadDone(success);
   if (!success) {
     if (replay->lastRouteError() == RouteLoadError::Unauthorized) {
       auto auth_content = util::read_file(util::getenv("HOME") + "/.comma/auth.json");

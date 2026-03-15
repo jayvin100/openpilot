@@ -12,11 +12,13 @@
 // DetailWidget
 
 DetailWidget::DetailWidget(ChartsWidget *charts, QWidget *parent) : charts(charts), QWidget(parent) {
+  setObjectName("DetailWidget");
   QVBoxLayout *main_layout = new QVBoxLayout(this);
   main_layout->setContentsMargins(0, 0, 0, 0);
 
   // tabbar
   tabbar = new TabBar(this);
+  tabbar->setObjectName("DetailTabBar");
   tabbar->setUsesScrollButtons(true);
   tabbar->setAutoHide(true);
   tabbar->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -26,15 +28,20 @@ DetailWidget::DetailWidget(ChartsWidget *charts, QWidget *parent) : charts(chart
 
   // warning
   warning_widget = new QWidget(this);
+  warning_widget->setObjectName("DetailWarningWidget");
   QHBoxLayout *warning_hlayout = new QHBoxLayout(warning_widget);
   warning_hlayout->addWidget(warning_icon = new QLabel(this), 0, Qt::AlignTop);
+  warning_icon->setObjectName("DetailWarningIcon");
   warning_hlayout->addWidget(warning_label = new QLabel(this), 1, Qt::AlignLeft);
+  warning_label->setObjectName("DetailWarningLabel");
   warning_widget->hide();
   main_layout->addWidget(warning_widget);
 
   // msg widget
   splitter = new QSplitter(Qt::Vertical, this);
+  splitter->setObjectName("DetailSplitter");
   splitter->addWidget(binary_view = new BinaryView(this));
+  binary_view->setObjectName("BinaryView");
   splitter->addWidget(signal_view = new SignalView(charts, this));
   binary_view->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
   signal_view->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
@@ -42,6 +49,7 @@ DetailWidget::DetailWidget(ChartsWidget *charts, QWidget *parent) : charts(chart
   splitter->setStretchFactor(1, 1);
 
   tab_widget = new QTabWidget(this);
+  tab_widget->setObjectName("DetailTabWidget");
   tab_widget->setStyleSheet("QTabWidget::pane {border: none; margin-bottom: -2px;}");
   tab_widget->setTabPosition(QTabWidget::South);
   tab_widget->addTab(splitter, utils::icon("file-earmark-ruled"), "&Msg");
@@ -70,9 +78,11 @@ DetailWidget::DetailWidget(ChartsWidget *charts, QWidget *parent) : charts(chart
 
 void DetailWidget::createToolBar() {
   QToolBar *toolbar = new QToolBar(this);
+  toolbar->setObjectName("DetailToolbar");
   int icon_size = style()->pixelMetric(QStyle::PM_SmallIconSize);
   toolbar->setIconSize({icon_size, icon_size});
   toolbar->addWidget(name_label = new ElidedLabel(this));
+  name_label->setObjectName("DetailMessageLabel");
   name_label->setStyleSheet("QLabel{font-weight:bold;}");
 
   QWidget *spacer = new QWidget();
@@ -90,8 +100,10 @@ void DetailWidget::createToolBar() {
 
   // Edit and remove buttons
   toolbar->addSeparator();
-  toolbar->addAction(utils::icon("pencil"), tr("Edit Message"), this, &DetailWidget::editMsg);
+  auto edit_msg_action = toolbar->addAction(utils::icon("pencil"), tr("Edit Message"), this, &DetailWidget::editMsg);
+  if (auto *w = toolbar->widgetForAction(edit_msg_action)) w->setObjectName("EditMessageButton");
   action_remove_msg = toolbar->addAction(utils::icon("x-lg"), tr("Remove Message"), this, &DetailWidget::removeMsg);
+  if (auto *w = toolbar->widgetForAction(action_remove_msg)) w->setObjectName("RemoveMessageButton");
 
   layout()->addWidget(toolbar);
 
@@ -223,22 +235,30 @@ void DetailWidget::removeMsg() {
 
 EditMessageDialog::EditMessageDialog(const MessageId &msg_id, const QString &title, int size, QWidget *parent)
     : original_name(title), msg_id(msg_id), QDialog(parent) {
+  setObjectName("EditMessageDialog");
   setWindowTitle(tr("Edit message: %1").arg(QString::fromStdString(msg_id.toString())));
   QFormLayout *form_layout = new QFormLayout(this);
 
   form_layout->addRow("", error_label = new QLabel);
+  error_label->setObjectName("EditMessageErrorLabel");
   error_label->setVisible(false);
   form_layout->addRow(tr("Name"), name_edit = new QLineEdit(title, this));
+  name_edit->setObjectName("EditMessageNameEdit");
   name_edit->setValidator(new NameValidator(name_edit));
 
   form_layout->addRow(tr("Size"), size_spin = new QSpinBox(this));
+  size_spin->setObjectName("EditMessageSizeSpin");
   size_spin->setRange(1, CAN_MAX_DATA_BYTES);
   size_spin->setValue(size);
 
   form_layout->addRow(tr("Node"), node = new QLineEdit(this));
+  node->setObjectName("EditMessageNodeEdit");
   node->setValidator(new NameValidator(name_edit));
   form_layout->addRow(tr("Comment"), comment_edit = new QTextEdit(this));
+  comment_edit->setObjectName("EditMessageCommentEdit");
   form_layout->addRow(btn_box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel));
+  if (auto *ok = btn_box->button(QDialogButtonBox::Ok)) ok->setObjectName("EditMessageOkButton");
+  if (auto *cancel = btn_box->button(QDialogButtonBox::Cancel)) cancel->setObjectName("EditMessageCancelButton");
 
   if (auto msg = dbc()->msg(msg_id)) {
     node->setText(QString::fromStdString(msg->transmitter));

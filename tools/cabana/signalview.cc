@@ -422,12 +422,16 @@ void SignalItemDelegate::setModelData(QWidget *editor, QAbstractItemModel *model
 // SignalView
 
 SignalView::SignalView(ChartsWidget *charts, QWidget *parent) : charts(charts), QFrame(parent) {
+  setObjectName("SignalView");
   setFrameStyle(QFrame::StyledPanel | QFrame::Plain);
   // title bar
   QWidget *title_bar = new QWidget(this);
+  title_bar->setObjectName("SignalToolbar");
   QHBoxLayout *hl = new QHBoxLayout(title_bar);
   hl->addWidget(signal_count_lb = new QLabel());
+  signal_count_lb->setObjectName("SignalCountLabel");
   filter_edit = new QLineEdit(this);
+  filter_edit->setObjectName("SignalFilterEdit");
   QRegularExpression re("\\S+");
   filter_edit->setValidator(new QRegularExpressionValidator(re, this));
   filter_edit->setClearButtonEnabled(true);
@@ -440,17 +444,21 @@ SignalView::SignalView(ChartsWidget *charts, QWidget *parent) : charts(charts), 
   const int max_range = 30; // 30s
   settings.sparkline_range = std::clamp(settings.sparkline_range, 1, max_range);
   hl->addWidget(sparkline_label = new QLabel());
+  sparkline_label->setObjectName("SparklineRangeLabel");
   hl->addWidget(sparkline_range_slider = new QSlider(Qt::Horizontal, this));
+  sparkline_range_slider->setObjectName("SparklineRangeSlider");
   sparkline_range_slider->setRange(1, max_range);
   sparkline_range_slider->setValue(settings.sparkline_range);
   sparkline_range_slider->setToolTip(tr("Sparkline time range"));
 
   auto collapse_btn = new ToolButton("dash-square", tr("Collapse All"));
+  collapse_btn->setObjectName("SignalCollapseButton");
   collapse_btn->setIconSize({12, 12});
   hl->addWidget(collapse_btn);
 
   // tree view
   tree = new TreeView(this);
+  tree->setObjectName("SignalTree");
   tree->setModel(model = new SignalModel(this));
   tree->setItemDelegate(delegate = new SignalItemDelegate(this));
   tree->setFrameShape(QFrame::NoFrame);
@@ -518,6 +526,8 @@ void SignalView::rowsChanged() {
 
       auto remove_btn = new ToolButton("x", tr("Remove signal"));
       auto plot_btn = new ToolButton("graph-up", "");
+      remove_btn->setObjectName("SignalRemoveButton");
+      plot_btn->setObjectName("SignalPlotButton");
       plot_btn->setCheckable(true);
       h->addWidget(plot_btn);
       h->addWidget(remove_btn);

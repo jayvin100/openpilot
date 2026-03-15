@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QRect>
 #include <unordered_map>
 #include <utility>
 
@@ -45,6 +46,9 @@ public:
   inline bool hasSignal(const MessageId &id, const cabana::Signal *sig) { return findChart(id, sig) != nullptr; }
   QStringList serializeChartIds() const;
   void restoreChartsFromIds(const QStringList &chart_ids);
+  int chartCount() const { return charts.size(); }
+  QString titleText() const { return title_label ? title_label->text() : QString(); }
+  std::vector<QRect> chartRects() const;
 
 public slots:
   void setColumnCount(int n);

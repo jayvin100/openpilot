@@ -2,6 +2,8 @@
 #include <QCommandLineParser>
 
 #include "tools/cabana/mainwin.h"
+#include "tools/cabana/settings.h"
+#include "tools/cabana/smoketest.h"
 #include "tools/cabana/streams/devicestream.h"
 #include "tools/cabana/streams/pandastream.h"
 #include "tools/cabana/streams/replaystream.h"
@@ -10,6 +12,7 @@
 #endif
 
 int main(int argc, char *argv[]) {
+  cabana::smoketest::recordProcessStart();
   QCoreApplication::setApplicationName("Cabana");
   QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
   initApp(argc, argv, false);
@@ -18,6 +21,9 @@ int main(int argc, char *argv[]) {
   app.setWindowIcon(QIcon(":cabana-icon.png"));
 
   UnixSignalHandler signalHandler;
+  if (cabana::smoketest::enabled()) {
+    settings.theme = LIGHT_THEME;
+  }
   utils::setTheme(settings.theme);
 
   QCommandLineParser cmd_parser;

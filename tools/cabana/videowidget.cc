@@ -32,6 +32,7 @@ static Replay *getReplay() {
 }
 
 VideoWidget::VideoWidget(QWidget *parent) : QFrame(parent) {
+  setObjectName("VideoWidget");
   setFrameStyle(QFrame::StyledPanel | QFrame::Plain);
   auto main_layout = new QVBoxLayout(this);
   main_layout->setContentsMargins(0, 0, 0, 0);
@@ -73,14 +74,18 @@ VideoWidget::VideoWidget(QWidget *parent) : QFrame(parent) {
 
 void VideoWidget::createPlaybackController() {
   QToolBar *toolbar = new QToolBar(this);
+  toolbar->setObjectName("PlaybackToolbar");
   layout()->addWidget(toolbar);
 
   int icon_size = style()->pixelMetric(QStyle::PM_SmallIconSize);
   toolbar->setIconSize({icon_size, icon_size});
 
-  toolbar->addAction(utils::icon("rewind"), tr("Seek backward"), []() { can->seekTo(can->currentSec() - 1); });
+  auto seek_backward_action = toolbar->addAction(utils::icon("rewind"), tr("Seek backward"), []() { can->seekTo(can->currentSec() - 1); });
   play_toggle_action = toolbar->addAction(utils::icon("play"), tr("Play"), []() { can->pause(!can->isPaused()); });
-  toolbar->addAction(utils::icon("fast-forward"), tr("Seek forward"), []() { can->seekTo(can->currentSec() + 1); });
+  auto seek_forward_action = toolbar->addAction(utils::icon("fast-forward"), tr("Seek forward"), []() { can->seekTo(can->currentSec() + 1); });
+  if (auto *w = toolbar->widgetForAction(seek_backward_action)) w->setObjectName("PlaybackSeekBackwardButton");
+  if (auto *w = toolbar->widgetForAction(play_toggle_action)) w->setObjectName("PlaybackPlayToggleButton");
+  if (auto *w = toolbar->widgetForAction(seek_forward_action)) w->setObjectName("PlaybackSeekForwardButton");
 
   if (can->liveStreaming()) {
     skip_to_end_action = toolbar->addAction(utils::icon("skip-end"), tr("Skip to the end"), this, [this]() {
@@ -89,6 +94,7 @@ void VideoWidget::createPlaybackController() {
       can->pause(false);
       can->seekTo(can->maxSeconds() + 1);
     });
+    if (auto *w = toolbar->widgetForAction(skip_to_end_action)) w->setObjectName("PlaybackSkipToEndButton");
   }
 
   time_display_action = toolbar->addAction("", this, [this]() {
@@ -96,6 +102,7 @@ void VideoWidget::createPlaybackController() {
     time_display_action->setToolTip(settings.absolute_time ? tr("Elapsed time") : tr("Absolute time"));
     updateState();
   });
+  if (auto *w = toolbar->widgetForAction(time_display_action)) w->setObjectName("PlaybackTimeDisplayButton");
 
   QWidget *spacer = new QWidget();
   spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -113,6 +120,7 @@ void VideoWidget::createPlaybackController() {
 
 void VideoWidget::createSpeedDropdown(QToolBar *toolbar) {
   toolbar->addWidget(speed_btn = new QToolButton(this));
+  speed_btn->setObjectName("PlaybackSpeedButton");
   speed_btn->setMenu(new QMenu(speed_btn));
   speed_btn->setPopupMode(QToolButton::InstantPopup);
   QActionGroup *speed_group = new QActionGroup(this);
@@ -145,6 +153,7 @@ QWidget *VideoWidget::createCameraWidget() {
   l->setSpacing(0);
 
   l->addWidget(camera_tab = new TabBar(w));
+  camera_tab->setObjectName("PlaybackCameraTabBar");
   camera_tab->setAutoHide(true);
   camera_tab->setExpanding(false);
 
@@ -153,6 +162,7 @@ QWidget *VideoWidget::createCameraWidget() {
   cam_widget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::MinimumExpanding);
 
   l->addWidget(slider = new Slider(w));
+  slider->setObjectName("PlaybackSlider");
   slider->setSingleStep(0);
   slider->setTimeRange(can->minSeconds(), can->maxSeconds());
 

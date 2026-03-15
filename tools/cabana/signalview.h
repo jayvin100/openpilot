@@ -107,6 +107,9 @@ public:
   void selectSignal(const cabana::Signal *sig, bool expand = false);
   void rowClicked(const QModelIndex &index);
   SignalModel *model = nullptr;
+  QTreeView *treeView() const { return tree; }
+  QLineEdit *filterEdit() const { return filter_edit; }
+  SignalModel *signalModel() const { return model; }
 
 signals:
   void highlight(const cabana::Signal *sig);

@@ -1,37 +1,130 @@
 #include "tools/cabana/mainwin.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
+#include <QAbstractButton>
+#include <QApplication>
 #include <QClipboard>
+#include <QComboBox>
+#include <QDateTime>
 #include <QDesktopWidget>
+#include <QDialog>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonObject>
+#include <QLineEdit>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProgressDialog>
 #include <QResizeEvent>
 #include <QShortcut>
+#include <QTabBar>
+#include <QTimer>
 #include <QTextDocument>
+#include <QToolBar>
+#include <QToolButton>
 #include <QUndoView>
 #include <QVBoxLayout>
 #include <QWidgetAction>
 
 #include "tools/cabana/commands.h"
+#include "tools/cabana/smoketest.h"
 #include "tools/cabana/streamselector.h"
 #include "tools/cabana/tools/findsignal.h"
 #include "tools/cabana/utils/export.h"
 #include "tools/replay/py_downloader.h"
 #include "tools/replay/util.h"
 
+namespace {
+
+QJsonArray rectToJson(const QRect &rect) {
+  return QJsonArray{rect.x(), rect.y(), rect.width(), rect.height()};
+}
+
+QString messageIdToString(const MessageId &id) {
+  return QString::fromStdString(id.toString());
+}
+
+QString normalizedText(QString text) {
+  return text.remove('&');
+}
+
+QJsonObject describeWidget(QWidget *widget) {
+  QJsonObject obj;
+  obj["object_name"] = widget->objectName();
+  obj["class_name"] = widget->metaObject()->className();
+  obj["visible"] = widget->isVisible();
+  obj["enabled"] = widget->isEnabled();
+  obj["rect"] = rectToJson(QRect(widget->mapToGlobal(QPoint(0, 0)), widget->size()));
+  if (!widget->windowTitle().isEmpty()) obj["window_title"] = widget->windowTitle();
+  if (auto *message_box = qobject_cast<QMessageBox *>(widget)) {
+    obj["text"] = message_box->text();
+    if (!message_box->informativeText().isEmpty()) obj["informative_text"] = message_box->informativeText();
+    if (!message_box->detailedText().isEmpty()) obj["detailed_text"] = message_box->detailedText();
+  } else if (auto *line_edit = qobject_cast<QLineEdit *>(widget)) {
+    obj["text"] = line_edit->text();
+    obj["placeholder_text"] = line_edit->placeholderText();
+  } else if (auto *label = qobject_cast<QLabel *>(widget)) {
+    obj["text"] = label->text();
+  } else if (auto *button = qobject_cast<QAbstractButton *>(widget)) {
+    obj["text"] = button->text();
+    obj["checked"] = button->isCheckable() ? button->isChecked() : false;
+  } else if (auto *combo = qobject_cast<QComboBox *>(widget)) {
+    obj["text"] = combo->currentText();
+  } else if (auto *tab_bar = qobject_cast<QTabBar *>(widget)) {
+    QJsonArray tabs;
+    for (int i = 0; i < tab_bar->count(); ++i) {
+      tabs.append(tab_bar->tabText(i));
+    }
+    obj["tabs"] = tabs;
+    obj["current_index"] = tab_bar->currentIndex();
+  }
+  if (auto *dialog = qobject_cast<QDialog *>(widget)) {
+    obj["modal"] = dialog->isModal();
+  }
+  return obj;
+}
+
+void collectMenuActions(QMenu *menu, const QString &prefix, QJsonArray &actions) {
+  for (auto *action : menu->actions()) {
+    if (action->isSeparator()) continue;
+
+    const QString text = normalizedText(action->text());
+    const QString path = prefix.isEmpty() ? text : prefix + ">" + text;
+    if (auto *submenu = action->menu()) {
+      collectMenuActions(submenu, path, actions);
+      continue;
+    }
+
+    QJsonObject obj;
+    obj["path"] = path;
+    obj["text"] = text;
+    obj["enabled"] = action->isEnabled();
+    obj["visible"] = action->isVisible();
+    obj["checkable"] = action->isCheckable();
+    obj["checked"] = action->isChecked();
+    obj["tooltip"] = action->toolTip();
+    obj["shortcut"] = action->shortcut().toString();
+    actions.append(obj);
+  }
+}
+
+}  // namespace
+
 MainWindow::MainWindow(AbstractStream *stream, const QString &dbc_file) : QMainWindow() {
+  setObjectName("CabanaMainWindow");
   loadFingerprints();
   createDockWindows();
   setCentralWidget(center_widget = new CenterWidget(this));
+  center_widget->setObjectName("CenterWidget");
   createActions();
+  menuBar()->setObjectName("MainMenuBar");
   createStatusBar();
   createShortcuts();
 
@@ -39,11 +132,19 @@ MainWindow::MainWindow(AbstractStream *stream, const QString &dbc_file) : QMainW
   default_state = saveState();
 
   // restore states
-  restoreGeometry(settings.geometry);
-  if (isMaximized()) {
-    setGeometry(QApplication::desktop()->availableGeometry(this));
+  if (cabana::smoketest::enabled()) {
+    if (auto size = cabana::smoketest::forcedWindowSize()) {
+      resize(*size);
+      setMinimumSize(*size);
+      setMaximumSize(*size);
+    }
+  } else {
+    restoreGeometry(settings.geometry);
+    if (isMaximized()) {
+      setGeometry(QApplication::desktop()->availableGeometry(this));
+    }
+    restoreState(settings.window_state);
   }
-  restoreState(settings.window_state);
 
   // install handlers
   static auto static_main_win = this;
@@ -69,6 +170,21 @@ MainWindow::MainWindow(AbstractStream *stream, const QString &dbc_file) : QMainW
   QObject::connect(UndoStack::instance(), &QUndoStack::cleanChanged, this, &MainWindow::undoStackCleanChanged);
   QObject::connect(&settings, &Settings::changed, this, &MainWindow::updateStatus);
 
+  if (cabana::smoketest::enabled()) {
+    auto *ui_tick_timer = new QTimer(this);
+    QObject::connect(ui_tick_timer, &QTimer::timeout, this, []() { cabana::smoketest::noteUiTick(); });
+    ui_tick_timer->start(5);
+    if (!cabana::smoketest::validationStatePath().empty()) {
+      auto *validation_timer = new QTimer(this);
+      QObject::connect(validation_timer, &QTimer::timeout, this, &MainWindow::writeValidationSnapshot);
+      validation_timer->start(50);
+    }
+  }
+
+  QTimer::singleShot(0, this, [this]() {
+    cabana::smoketest::recordWindowShown(this);
+    maybeFinalizeSmokeTest();
+  });
   QTimer::singleShot(0, this, [=]() { stream ? openStream(stream, dbc_file) : selectAndOpenStream(); });
   show();
 }
@@ -198,13 +314,16 @@ void MainWindow::createDockWidgets() {
 
 void MainWindow::createStatusBar() {
   progress_bar = new QProgressBar();
+  progress_bar->setObjectName("DownloadProgressBar");
   progress_bar->setRange(0, 100);
   progress_bar->setTextVisible(true);
   progress_bar->setFixedSize({300, 16});
   progress_bar->setVisible(false);
   statusBar()->addWidget(new QLabel(tr("For Help, Press F1")));
+  statusBar()->setObjectName("MainStatusBar");
   statusBar()->addPermanentWidget(progress_bar);
   statusBar()->addPermanentWidget(status_label = new QLabel(this));
+  status_label->setObjectName("StatusLabel");
   updateStatus();
 }
 
@@ -238,7 +357,18 @@ void MainWindow::DBCFileChanged() {
   }
   setWindowFilePath(title.join(" | "));
 
-  QTimer::singleShot(0, this, &::MainWindow::restoreSessionState);
+  if (cabana::smoketest::enabled()) {
+    if (cabana::smoketest::sessionRestoreEnabled()) {
+      QTimer::singleShot(0, this, [this]() {
+        restoreSessionState();
+        maybeFinalizeSmokeTest();
+      });
+    } else {
+      maybeFinalizeSmokeTest();
+    }
+  } else {
+    QTimer::singleShot(0, this, &::MainWindow::restoreSessionState);
+  }
 }
 
 void MainWindow::selectAndOpenStream() {
@@ -330,16 +460,18 @@ void MainWindow::startStream(AbstractStream *stream, QString dbc_file) {
 
   can = stream;
   can->setParent(this);  // take ownership
-  can->start();
+  smoke_test_ready_scheduled = false;
+  cabana::smoketest::recordRouteName(can->routeName());
+
+  bool has_stream = dynamic_cast<DummyStream *>(can) == nullptr;
+  createDockWidgets();
 
   loadFile(dbc_file);
   statusBar()->showMessage(tr("Stream [%1] started").arg(QString::fromStdString(can->routeName())), 2000);
 
-  bool has_stream = dynamic_cast<DummyStream *>(can) == nullptr;
   close_stream_act->setEnabled(has_stream);
   export_to_csv_act->setEnabled(has_stream);
   tools_menu->setEnabled(has_stream);
-  createDockWidgets();
 
   video_dock->setWindowTitle(QString::fromStdString(can->routeName()));
   if (can->liveStreaming() || video_splitter->sizes()[0] == 0) {
@@ -352,9 +484,18 @@ void MainWindow::startStream(AbstractStream *stream, QString dbc_file) {
   }
 
   QObject::connect(can, &AbstractStream::eventsMerged, this, &MainWindow::eventsMerged);
+  if (cabana::smoketest::enabled()) {
+    QObject::connect(can, &AbstractStream::msgsReceived, this, [this](const std::set<MessageId> *new_msgs, bool) {
+      if (new_msgs != nullptr && !new_msgs->empty()) {
+        cabana::smoketest::recordFirstMsgsReceived();
+        maybeFinalizeSmokeTest();
+      }
+    });
+  }
 
+  QProgressDialog *wait_dlg = nullptr;
   if (has_stream) {
-    auto wait_dlg = new QProgressDialog(
+    wait_dlg = new QProgressDialog(
         can->liveStreaming() ? tr("Waiting for the live stream to start...") : tr("Loading segment data..."),
         tr("&Abort"), 0, 100, this);
     wait_dlg->setWindowModality(Qt::WindowModal);
@@ -365,9 +506,15 @@ void MainWindow::startStream(AbstractStream *stream, QString dbc_file) {
       wait_dlg->setValue((int)((cur / (double)total) * 100));
     });
   }
+
+  can->start();
+  if (wait_dlg != nullptr && !can->allEvents().empty()) {
+    wait_dlg->deleteLater();
+  }
 }
 
 void MainWindow::eventsMerged() {
+  cabana::smoketest::recordFirstEventsMerged();
   if (!can->liveStreaming() && std::exchange(car_fingerprint, QString::fromStdString(can->carFingerprint())) != car_fingerprint) {
     video_dock->setWindowTitle(tr("ROUTE: %1  FINGERPRINT: %2")
                                     .arg(QString::fromStdString(can->routeName()))
@@ -376,6 +523,267 @@ void MainWindow::eventsMerged() {
     if (!dbc()->nonEmptyDBCCount() && fingerprint_to_dbc.object().contains(car_fingerprint)) {
       QTimer::singleShot(0, this, [this]() { loadDBCFromOpendbc(fingerprint_to_dbc[car_fingerprint].toString() + ".dbc"); });
     }
+  }
+  maybeFinalizeSmokeTest();
+}
+
+void MainWindow::maybeFinalizeSmokeTest() {
+  if (!cabana::smoketest::enabled() || smoke_test_ready_scheduled || !can || !cabana::smoketest::readyToFinalize()) {
+    return;
+  }
+
+  if (!dbc()->nonEmptyDBCCount() && !car_fingerprint.isEmpty() && fingerprint_to_dbc.object().contains(car_fingerprint)) {
+    return;
+  }
+
+  smoke_test_ready_scheduled = true;
+  double ready_sec = can->currentSec();
+  if (!can->liveStreaming() && !can->isPaused()) {
+    can->pause(true);
+  }
+  if (!can->liveStreaming()) {
+    ready_sec = can->minSeconds();
+    can->seekTo(ready_sec);
+  }
+  cabana::smoketest::recordAutoPaused(ready_sec);
+
+  QTimer::singleShot(120, this, [this, ready_sec]() {
+    if (messages_widget) messages_widget->repaint();
+    if (charts_widget) charts_widget->repaint();
+    if (video_widget) video_widget->repaint();
+    if (center_widget) center_widget->repaint();
+    repaint();
+    QCoreApplication::processEvents();
+    const auto screenshot_path = cabana::smoketest::screenshotPath();
+    if (!screenshot_path.empty()) {
+      grab().save(QString::fromStdString(screenshot_path));
+    }
+    cabana::smoketest::markReady(can ? can->currentSec() : ready_sec);
+  });
+}
+
+void MainWindow::writeValidationSnapshot() {
+  const std::string output_path = cabana::smoketest::validationStatePath();
+  if (output_path.empty()) return;
+
+  QJsonObject root;
+  root["snapshot_time_ms"] = QString::number(QDateTime::currentMSecsSinceEpoch());
+  root["ready"] = cabana::smoketest::isReady();
+  root["window_title"] = windowTitle();
+  root["window_file_path"] = windowFilePath();
+  root["route_name"] = can ? QString::fromStdString(can->routeName()) : "";
+  root["car_fingerprint"] = car_fingerprint;
+  root["has_stream"] = can && dynamic_cast<DummyStream *>(can) == nullptr;
+  root["live_streaming"] = can ? can->liveStreaming() : false;
+  root["paused"] = can ? can->isPaused() : true;
+  root["current_sec"] = can ? can->currentSec() : 0.0;
+  root["min_sec"] = can ? can->minSeconds() : 0.0;
+  root["max_sec"] = can ? can->maxSeconds() : 0.0;
+  if (can && can->timeRange().has_value()) {
+    root["time_range_start"] = can->timeRange()->first;
+    root["time_range_end"] = can->timeRange()->second;
+  }
+  root["status_message"] = statusBar() ? statusBar()->currentMessage() : "";
+  root["status_label"] = status_label ? status_label->text() : "";
+  root["max_ui_gap_ms"] = cabana::smoketest::maxUiGapMs();
+  root["ui_gaps_over_16ms"] = cabana::smoketest::uiGapsOver16Ms();
+  root["ui_gaps_over_33ms"] = cabana::smoketest::uiGapsOver33Ms();
+  root["ui_gaps_over_50ms"] = cabana::smoketest::uiGapsOver50Ms();
+  root["ui_gaps_over_100ms"] = cabana::smoketest::uiGapsOver100Ms();
+
+  QJsonArray actions;
+  if (menuBar()) {
+    for (auto *action : menuBar()->actions()) {
+      if (auto *menu = action->menu()) {
+        collectMenuActions(menu, normalizedText(menu->title()), actions);
+      }
+    }
+  }
+  root["actions"] = actions;
+
+  QJsonObject widgets;
+  for (QWidget *widget : qApp->allWidgets()) {
+    if (widget == nullptr || widget->objectName().isEmpty()) continue;
+    widgets[widget->objectName()] = describeWidget(widget);
+  }
+  root["widgets"] = widgets;
+
+  QJsonArray dialogs;
+  for (QWidget *widget : qApp->topLevelWidgets()) {
+    auto *dialog = qobject_cast<QDialog *>(widget);
+    if (!dialog || !dialog->isVisible()) continue;
+    dialogs.append(describeWidget(dialog));
+  }
+  root["dialogs"] = dialogs;
+
+  if (messages_widget != nullptr) {
+    QJsonObject messages;
+    auto *view = messages_widget->messageView();
+    auto *header = messages_widget->messageHeader();
+    auto *model = messages_widget->messageModel();
+    messages["row_count"] = model ? model->rowCount() : 0;
+    if (auto current = messages_widget->currentMessageId()) {
+      messages["current_message_id"] = messageIdToString(*current);
+    }
+    messages["current_row"] = view ? view->currentIndex().row() : -1;
+
+    QJsonObject filters;
+    if (header != nullptr && model != nullptr) {
+      for (auto it = header->editors.cbegin(); it != header->editors.cend(); ++it) {
+        if (!it.value()) continue;
+        QString key = it.value()->objectName();
+        if (key.isEmpty()) {
+          key = normalizedText(model->headerData(it.key(), Qt::Horizontal, Qt::DisplayRole).toString());
+        }
+        filters[key] = it.value()->text();
+      }
+    }
+    messages["filters"] = filters;
+
+    QJsonArray rows;
+    if (view != nullptr && model != nullptr) {
+      const int row_limit = std::min(model->rowCount(), 25);
+      for (int row = 0; row < row_limit; ++row) {
+        const QModelIndex index = model->index(row, 0);
+        if (!index.isValid()) continue;
+
+        QJsonObject item;
+        if (row < static_cast<int>(model->items_.size())) {
+          const auto &entry = model->items_[row];
+          item["message_id"] = messageIdToString(entry.id);
+          item["name"] = entry.name;
+          item["node"] = entry.node;
+          item["address"] = QString::number(entry.id.address, 16).toUpper();
+          item["source"] = entry.id.source;
+        }
+
+        const QRect local_rect = view->visualRect(index);
+        item["rect"] = rectToJson(QRect(view->viewport()->mapToGlobal(local_rect.topLeft()), local_rect.size()));
+        item["selected"] = view->selectionModel() && view->selectionModel()->currentIndex().row() == row;
+        rows.append(item);
+      }
+    }
+    messages["rows"] = rows;
+    root["messages"] = messages;
+  }
+
+  QJsonArray dbc_files;
+  for (auto *dbc_file : dbc()->allDBCFiles()) {
+    if (dbc_file == nullptr || dbc_file->isEmpty()) continue;
+    QJsonObject dbc_obj;
+    dbc_obj["name"] = QString::fromStdString(dbc_file->name());
+    dbc_obj["filename"] = QString::fromStdString(dbc_file->filename);
+    dbc_obj["sources"] = QString::fromStdString(toString(dbc()->sources(dbc_file)));
+    dbc_files.append(dbc_obj);
+  }
+  root["dbc_files"] = dbc_files;
+
+  if (auto *detail = center_widget ? center_widget->getDetailWidget() : nullptr) {
+    QJsonObject detail_obj;
+    detail_obj["current_message_id"] = messageIdToString(detail->currentMessageId());
+    detail_obj["message_label"] = detail->messageLabel();
+    detail_obj["warning_visible"] = detail->warningVisible();
+    detail_obj["warning_text"] = detail->warningText();
+
+    if (auto *signal_view = detail->signalView()) {
+      auto *tree = signal_view->treeView();
+      auto *model = signal_view->signalModel();
+      detail_obj["signal_filter"] = signal_view->filterEdit() ? signal_view->filterEdit()->text() : "";
+      detail_obj["signal_count"] = model ? model->rowCount() : 0;
+
+      QJsonArray signal_rows;
+      if (tree != nullptr && model != nullptr) {
+        const int row_limit = std::min(model->rowCount(), 25);
+        for (int row = 0; row < row_limit; ++row) {
+          const QModelIndex label_index = model->index(row, 0);
+          const QModelIndex actions_index = model->index(row, 1);
+          if (!label_index.isValid()) continue;
+
+          auto *item = model->getItem(label_index);
+          if (!item || item->sig == nullptr) continue;
+
+          QJsonObject row_obj;
+          row_obj["row"] = row;
+          row_obj["name"] = QString::fromStdString(item->sig->name);
+          row_obj["value"] = item->sig_val;
+          row_obj["expanded"] = tree->isExpanded(label_index);
+
+          const QRect row_rect = tree->visualRect(label_index);
+          row_obj["rect"] = rectToJson(QRect(tree->viewport()->mapToGlobal(row_rect.topLeft()), row_rect.size()));
+
+          if (QWidget *actions_widget = tree->indexWidget(actions_index)) {
+            auto *plot_btn = actions_widget->findChild<QToolButton *>("SignalPlotButton");
+            auto *remove_btn = actions_widget->findChild<QToolButton *>("SignalRemoveButton");
+            if (plot_btn) {
+              row_obj["plot_checked"] = plot_btn->isChecked();
+              row_obj["plot_rect"] = rectToJson(QRect(plot_btn->mapToGlobal(QPoint(0, 0)), plot_btn->size()));
+            }
+            if (remove_btn) {
+              row_obj["remove_rect"] = rectToJson(QRect(remove_btn->mapToGlobal(QPoint(0, 0)), remove_btn->size()));
+            }
+          }
+
+          signal_rows.append(row_obj);
+        }
+      }
+      detail_obj["signal_rows"] = signal_rows;
+    }
+
+    if (auto *logs = detail->logsWidget()) {
+      detail_obj["logs_visible"] = logs->isVisible();
+      detail_obj["logs_rect"] = rectToJson(QRect(logs->mapToGlobal(QPoint(0, 0)), logs->size()));
+    }
+    root["detail"] = detail_obj;
+  }
+
+  if (charts_widget != nullptr) {
+    QJsonObject charts;
+    charts["count"] = charts_widget->chartCount();
+    charts["title"] = charts_widget->titleText();
+    charts["docked"] = floating_window == nullptr;
+    charts["serialized_ids"] = QJsonArray::fromStringList(charts_widget->serializeChartIds());
+
+    QJsonArray rects;
+    for (const QRect &rect : charts_widget->chartRects()) {
+      rects.append(rectToJson(rect));
+    }
+    charts["rects"] = rects;
+    root["charts"] = charts;
+  }
+
+  if (video_widget != nullptr) {
+    QJsonObject video;
+    if (auto *slider = video_widget->playbackSlider()) {
+      video["slider_visible"] = slider->isVisible();
+      video["slider_rect"] = rectToJson(QRect(slider->mapToGlobal(QPoint(0, 0)), slider->size()));
+      video["slider_min"] = slider->minimum();
+      video["slider_max"] = slider->maximum();
+      video["slider_value"] = slider->value();
+    }
+    root["video"] = video;
+  }
+
+  const auto json = QJsonDocument(root).toJson(QJsonDocument::Indented);
+  std::filesystem::path final_path(output_path);
+  std::error_code ec;
+  std::filesystem::create_directories(final_path.parent_path(), ec);
+  std::filesystem::path tmp_path = final_path;
+  tmp_path += ".tmp";
+
+  std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
+  if (!out.is_open()) {
+    return;
+  }
+  out.write(json.constData(), json.size());
+  out.close();
+
+  std::filesystem::rename(tmp_path, final_path, ec);
+  if (ec) {
+    std::ofstream fallback(final_path, std::ios::binary | std::ios::trunc);
+    if (fallback.is_open()) {
+      fallback.write(json.constData(), json.size());
+    }
+    std::filesystem::remove(tmp_path, ec);
   }
 }
 

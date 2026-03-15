@@ -60,6 +60,7 @@ class VideoWidget : public QFrame {
 public:
   VideoWidget(QWidget *parnet = nullptr);
   void showThumbnail(double seconds);
+  Slider *playbackSlider() const { return slider; }
 
 protected:
   bool eventFilter(QObject *obj, QEvent *event) override;

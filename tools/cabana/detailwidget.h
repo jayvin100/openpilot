@@ -36,6 +36,12 @@ public:
   void refresh();
   std::pair<QString, QStringList> serializeMessageIds() const;
   void restoreTabs(const QString active_msg_id, const QStringList &msg_ids);
+  MessageId currentMessageId() const { return msg_id; }
+  QString messageLabel() const { return name_label ? name_label->text() : QString(); }
+  bool warningVisible() const { return warning_widget && warning_widget->isVisible(); }
+  QString warningText() const { return warning_label ? warning_label->text() : QString(); }
+  SignalView *signalView() const { return signal_view; }
+  LogsWidget *logsWidget() const { return history_log; }
 
 private:
   void createToolBar();

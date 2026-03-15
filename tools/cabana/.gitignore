@@ -5,4 +5,8 @@ assets.cc
 
 _cabana
 dbc/car_fingerprint_to_dbc.json
+smoke_artifacts/
+smoke_baseline/
 tests/test_cabana
+validation_artifacts/
+validation_baseline/

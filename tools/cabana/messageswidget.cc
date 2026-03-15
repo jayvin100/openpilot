@@ -14,15 +14,18 @@
 #include "tools/cabana/commands.h"
 
 MessagesWidget::MessagesWidget(QWidget *parent) : menu(new QMenu(this)), QWidget(parent) {
+  setObjectName("MessagesWidget");
   QVBoxLayout *main_layout = new QVBoxLayout(this);
   main_layout->setContentsMargins(0, 0, 0, 0);
   // toolbar
   main_layout->addWidget(createToolBar());
   // message table
   main_layout->addWidget(view = new MessageView(this));
+  view->setObjectName("MessageTable");
   view->setItemDelegate(delegate = new MessageBytesDelegate(view, settings.multiple_lines_hex));
   view->setModel(model = new MessageListModel(this));
   view->setHeader(header = new MessageViewHeader(this));
+  header->setObjectName("MessageHeader");
   view->setSortingEnabled(true);
   view->sortByColumn(MessageListModel::Column::NAME, Qt::AscendingOrder);
   view->setAllColumnsShowFocus(true);
@@ -76,10 +79,13 @@ MessagesWidget::MessagesWidget(QWidget *parent) : menu(new QMenu(this)), QWidget
 
 QWidget *MessagesWidget::createToolBar() {
   QWidget *toolbar = new QWidget(this);
+  toolbar->setObjectName("MessagesToolbar");
   QHBoxLayout *layout = new QHBoxLayout(toolbar);
   layout->setContentsMargins(0, 9, 0, 0);
   layout->addWidget(suppress_add = new QPushButton("Suppress Highlighted"));
+  suppress_add->setObjectName("SuppressHighlightedButton");
   layout->addWidget(suppress_clear = new QPushButton());
+  suppress_clear->setObjectName("SuppressClearButton");
   suppress_clear->setToolTip(tr("Clear suppressed"));
   layout->addStretch(1);
   QCheckBox *suppress_defined_signals = new QCheckBox(tr("Suppress Signals"), this);
@@ -88,6 +94,7 @@ QWidget *MessagesWidget::createToolBar() {
   layout->addWidget(suppress_defined_signals);
 
   auto view_button = new ToolButton("three-dots", tr("View..."));
+  view_button->setObjectName("MessagesViewButton");
   view_button->setMenu(menu);
   view_button->setPopupMode(QToolButton::InstantPopup);
   view_button->setStyleSheet("QToolButton::menu-indicator { image: none; }");
@@ -442,10 +449,20 @@ void MessageViewHeader::updateHeaderPositions() {
 }
 
 void MessageViewHeader::updateGeometries() {
+  static const QString filter_names[] = {
+    "MessagesFilterName",
+    "MessagesFilterBus",
+    "MessagesFilterId",
+    "MessagesFilterNode",
+    "MessagesFilterFreq",
+    "MessagesFilterCount",
+    "MessagesFilterBytes",
+  };
   for (int i = 0; i < count(); i++) {
     if (!editors[i]) {
       QString column_name = model()->headerData(i, Qt::Horizontal, Qt::DisplayRole).toString();
       editors[i] = new QLineEdit(this);
+      if (i < std::size(filter_names)) editors[i]->setObjectName(filter_names[i]);
       editors[i]->setClearButtonEnabled(true);
       editors[i]->setPlaceholderText(tr("Filter %1").arg(column_name));
 
