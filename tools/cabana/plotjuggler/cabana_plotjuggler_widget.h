@@ -17,15 +17,20 @@ public:
   void appendSegments(const SegmentMap &segments, uint64_t route_start_nanos);
   void setCurrentTime(double relative_sec);
   void setPlaybackPaused(bool paused);
+  void saveLayoutToFile(const QString &path);
+  void loadLayoutFromFile(const QString &path);
   QString perfSummary() const;
   Q_INVOKABLE void emitCaptureReady();
+
+signals:
+  void captureReady();
+  void playPauseRequested(bool paused);
+  void seekSliderMoved(double relative_sec);
+  void speedChanged(double rate);
 
 private:
   void resizeEvent(QResizeEvent *event) override;
 
   class Impl;
   std::unique_ptr<Impl> impl_;
-
-signals:
-  void captureReady();
 };

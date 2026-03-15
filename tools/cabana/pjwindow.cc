@@ -85,8 +85,7 @@ PlotJugglerWindow::PlotJugglerWindow(AbstractStream *stream, const QString &dbc_
     if (screenshot_delay_ok) {
       QTimer::singleShot(screenshot_delay_ms, this, capture);
     } else {
-      connect(pj_widget, &CabanaPlotJugglerWidget::captureReady, this,
-              [this, capture]() { QTimer::singleShot(100, this, capture); });
+      connect(pj_widget, &CabanaPlotJugglerWidget::captureReady, this, capture);
     }
   }
 }
@@ -132,6 +131,17 @@ void PlotJugglerWindow::startStream(AbstractStream *stream) {
     }
   });
   connect(can, &AbstractStream::eventsMerged, this, [this](const MessageEventsMap &) { syncSegments(); });
+
+  // Toolbar → stream control.
+  connect(pj_widget, &CabanaPlotJugglerWidget::playPauseRequested, this, [this](bool paused) {
+    if (can) can->pause(paused);
+  });
+  connect(pj_widget, &CabanaPlotJugglerWidget::seekSliderMoved, this, [this](double sec) {
+    if (can) can->seekTo(sec);
+  });
+  connect(pj_widget, &CabanaPlotJugglerWidget::speedChanged, this, [this](double rate) {
+    if (can) can->setSpeed(rate);
+  });
 
   syncSegments();
   scheduleTrackerUpdate(can->currentSec(), true);

@@ -51,6 +51,7 @@ plotjuggler_gen_root = plotjuggler_root / '.gen'
 plotjuggler_ui_root = plotjuggler_gen_root / 'ui'
 pj_layout_root = cabana_root / 'pj_layout'
 pj_engine_root = cabana_root / 'pj_engine'
+cabana_plot_ui_root = cabana_root / 'cabana_plot_ui'
 
 
 def repo_rel(path):
@@ -194,6 +195,7 @@ pj_include_dirs = [
   plotjuggler_root / 'plotjuggler_base/src',
   plotjuggler_root / 'plotjuggler_plugins',
   plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog',
+  cabana_plot_ui_root,
   repo_root,
   repo_root / 'msgq',
   repo_root / 'cereal',
@@ -391,7 +393,7 @@ base_headers += [
 base_headers += walk_files(base_root / 'include/PlotJuggler', {'.hpp'}, recursive=True)
 
 app_root = plotjuggler_root / 'plotjuggler_app'
-app_cpp = walk_files(app_root, {'.cpp'}, recursive=True, exclude_names={'main.cpp'})
+app_cpp = walk_files(app_root, {'.cpp'}, recursive=True)
 app_headers = walk_files(app_root, {'.h'}, recursive=True)
 
 plotjuggler_qwt = build_static_library('plotjuggler_qwt', qwt_cpp, qwt_headers)
@@ -419,6 +421,9 @@ pj_layout_lib = build_static_library('pj_layout', pj_layout_cpp, pj_layout_heade
 pj_engine_cpp = walk_files(pj_engine_root, {'.cpp'}, recursive=True)
 pj_engine_headers = walk_files(pj_engine_root, {'.h'}, recursive=True)
 pj_engine_lib = build_static_library('pj_engine', pj_engine_cpp, pj_engine_headers)
+cabana_plot_ui_cpp = walk_files(cabana_plot_ui_root, {'.cpp'}, recursive=True)
+cabana_plot_ui_headers = walk_files(cabana_plot_ui_root, {'.h'}, recursive=True)
+cabana_plot_ui_lib = build_static_library('cabana_plot_ui', cabana_plot_ui_cpp, cabana_plot_ui_headers)
 plotjuggler_openpilot_common = build_static_library(
   'plotjuggler_openpilot_common',
   [plotjuggler_root / 'plotjuggler_plugins/DataLoadRlog/rlog_parser.cpp'],
@@ -441,9 +446,10 @@ cabana_plotjuggler = build_shared_library(
   [plotjuggler_root / 'cabana_plotjuggler_widget.cpp'],
   [plotjuggler_root / 'cabana_plotjuggler_widget.h'],
   [
+    cabana_plot_ui_lib,
+    pj_engine_lib,
     plotjuggler_app_core,
     pj_layout_lib,
-    pj_engine_lib,
     plotjuggler_toolbox_lua_editor,
     plotjuggler_openpilot_common,
     qt_advanced_docking,
