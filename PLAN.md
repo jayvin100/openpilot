@@ -261,27 +261,47 @@ Exit criteria:
 ### Automated
 1. Build:
 ```bash
-scons -j1 tools/cabana/_cabana
+scons -j4 tools/cabana/_cabana
 ```
 
-2. Layout smoke for each layout:
+2. Fast local validation:
 ```bash
 python3 tools/cabana/pj_validation/validate_layouts.py \
   --build \
+  --model \
+  --runtime \
+  --layout locationd_debug.xml \
+  --output-dir /tmp/cabana_pj_fast
+```
+
+3. Full layout validation:
+```bash
+python3 tools/cabana/pj_validation/validate_layouts.py \
+  --build \
+  --model \
   --runtime \
   --output-dir /tmp/cabana_pj_layouts
 ```
 
-3. Perf smoke:
+Validator notes:
+- Runtime screenshots are readiness-based by default. Do not add a fixed delay unless debugging.
+- Runtime jobs auto-scale from CPU and memory. Override with `--runtime-jobs <n>` if needed.
+- Limit validation to a subset with repeated `--layout <file>`.
+
+4. Perf smoke:
 ```bash
 CABANA_PJ_PERF=1 tools/cabana/cabana --pj --demo --pj-layout <layout>
 ```
 
-4. Layout round-trip tests:
+5. Layout round-trip tests:
 - load XML
 - serialize
 - reload
 - compare normalized model
+
+6. Red-team sanity check:
+- Make a temporary copy of one layout, remove or rename a plot/curve reference, point `--contract` at a temp contract using that copied layout, and verify the validator returns non-zero with `contract=fail` or `pj_layout_model: fail`.
+- The runtime part may still pass in this case; the contract/model layers are expected to catch the regression.
 
 ### Manual
 - curve hide/show
