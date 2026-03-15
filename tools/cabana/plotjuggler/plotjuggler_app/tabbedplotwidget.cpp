@@ -17,6 +17,7 @@
 #include <QTabWidget>
 #include <QPushButton>
 #include <QHBoxLayout>
+#include <algorithm>
 #include "qwt_plot_renderer.h"
 #include "mainwindow.h"
 #include "tabbedplotwidget.h"
@@ -62,7 +63,7 @@ TabbedPlotWidget::TabbedPlotWidget(QString name,
   //  //_tab_menu->addAction(_action_savePlots);
   //  _tab_menu->addSeparator();
 
-  this->addTab({});
+  createTabWidget({});
 
   _buttonAddTab = new QPushButton("", this);
   _buttonAddTab->setFlat(true);
@@ -102,6 +103,23 @@ PlotDocker* TabbedPlotWidget::addTab(QString tab_name)
 }
 
 PlotDocker* TabbedPlotWidget::createTab(const QString& requested_name)
+{
+  int created_index = -1;
+  if (!applyWidgetModelEdit([&](cabana::pj_layout::TabbedWidgetModel* widget_model) {
+        widget_model->tabs.push_back(cabana::pj_layout::TabModel{});
+        widget_model->tabs.back().tab_name = requested_name;
+        widget_model->current_tab_index = static_cast<int>(widget_model->tabs.size()) - 1;
+        created_index = widget_model->current_tab_index;
+        return true;
+      }))
+  {
+    return nullptr;
+  }
+
+  return qobject_cast<PlotDocker*>(tabWidget()->widget(created_index));
+}
+
+PlotDocker* TabbedPlotWidget::createTabWidget(const QString& requested_name)
 {
   static int tab_suffix_count = 1;
 
@@ -163,15 +181,14 @@ bool TabbedPlotWidget::renameTab(int index, const QString& name)
     return false;
   }
 
-  tabWidget()->setTabText(index, name);
-  auto* docker = qobject_cast<PlotDocker*>(tabWidget()->widget(index));
-  if (!docker)
-  {
-    return false;
-  }
-  docker->setName(name);
-  emit undoableChange();
-  return true;
+  return applyWidgetModelEdit([&](cabana::pj_layout::TabbedWidgetModel* widget_model) {
+    if (index >= static_cast<int>(widget_model->tabs.size()))
+    {
+      return false;
+    }
+    widget_model->tabs[index].tab_name = name;
+    return true;
+  });
 }
 
 bool TabbedPlotWidget::closeTab(int index)
@@ -181,28 +198,60 @@ bool TabbedPlotWidget::closeTab(int index)
     return false;
   }
 
-  if (tabWidget()->count() == 1)
-  {
-    createTab({});
-  }
+  return applyWidgetModelEdit([&](cabana::pj_layout::TabbedWidgetModel* widget_model) {
+    if (index >= static_cast<int>(widget_model->tabs.size()))
+    {
+      return false;
+    }
 
-  auto* docker = qobject_cast<PlotDocker*>(tabWidget()->widget(index));
+    widget_model->tabs.erase(widget_model->tabs.begin() + index);
+    if (widget_model->tabs.empty())
+    {
+      widget_model->tabs.push_back(cabana::pj_layout::TabModel{});
+      widget_model->current_tab_index = 0;
+    }
+    else if (widget_model->current_tab_index >= static_cast<int>(widget_model->tabs.size()))
+    {
+      widget_model->current_tab_index = static_cast<int>(widget_model->tabs.size()) - 1;
+    }
+    return true;
+  });
+}
+
+bool TabbedPlotWidget::applyWidgetModelEdit(
+    const std::function<bool(cabana::pj_layout::TabbedWidgetModel*)>& mutator)
+{
+  cabana::pj_layout::TabbedWidgetModel widget_model = saveStateModel();
+  if (!mutator(&widget_model))
+  {
+    return false;
+  }
+  return loadStateModel(widget_model);
+}
+
+bool TabbedPlotWidget::applyTabModelEdit(
+    PlotDocker* docker, const std::function<bool(cabana::pj_layout::TabModel*)>& mutator)
+{
   if (!docker)
   {
     return false;
   }
 
-  for (unsigned p = 0; p < docker->plotCount(); p++)
+  const int index = tabWidget()->indexOf(docker);
+  if (index < 0)
   {
-    PlotWidget* plot = docker->plotAt(p);
-    plot->removeAllCurves();
-    plot->deleteLater();
+    return false;
   }
-  docker->deleteLater();
 
-  tabWidget()->removeTab(index);
-  emit undoableChange();
-  return true;
+  return applyWidgetModelEdit([&](cabana::pj_layout::TabbedWidgetModel* widget_model) {
+    if (index >= static_cast<int>(widget_model->tabs.size()))
+    {
+      return false;
+    }
+    widget_model->current_tab_index =
+        std::clamp(index, 0, static_cast<int>(widget_model->tabs.size()) - 1);
+    return mutator(&widget_model->tabs[index]);
+  });
 }
 
 cabana::pj_layout::TabbedWidgetModel TabbedPlotWidget::saveStateModel() const
@@ -228,7 +277,7 @@ bool TabbedPlotWidget::loadStateModel(const cabana::pj_layout::TabbedWidgetModel
 
   for (const auto& tab_model : widget_model.tabs)
   {
-    PlotDocker* docker = addTab(tab_model.tab_name);
+    PlotDocker* docker = createTabWidget(tab_model.tab_name);
     if (!docker->loadStateModel(tab_model))
     {
       return false;
@@ -281,7 +330,7 @@ bool TabbedPlotWidget::xmlLoadState(QDomElement& tabbed_area)
        docker_elem = docker_elem.nextSiblingElement("Tab"))
   {
     QString tab_name = docker_elem.attribute("tab_name");
-    PlotDocker* docker = addTab(tab_name);
+    PlotDocker* docker = createTabWidget(tab_name);
 
     bool success = docker->xmlLoadState(docker_elem);
 
@@ -344,7 +393,6 @@ void TabbedPlotWidget::on_stylesheetChanged(QString theme)
 void TabbedPlotWidget::on_addTabButton_pressed()
 {
   createTab({});
-  emit undoableChange();
 }
 
 void TabbedPlotWidget::on_tabWidget_currentChanged(int index)
@@ -353,7 +401,7 @@ void TabbedPlotWidget::on_tabWidget_currentChanged(int index)
   {
     if (_parent_type.compare("main_window") == 0)
     {
-      addTab(nullptr);
+      createTabWidget({});
     }
     else
     {

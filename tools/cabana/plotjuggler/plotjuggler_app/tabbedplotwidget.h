@@ -11,6 +11,7 @@
 #include <QMainWindow>
 #include <QTableWidget>
 #include <QDomDocument>
+#include <functional>
 #include "plot_docker.h"
 #include "tools/cabana/pj_layout/layout_model.h"
 
@@ -34,6 +35,10 @@ public:
   PlotDocker* createTab(const QString& name = {});
   bool renameTab(int index, const QString& name);
   bool closeTab(int index);
+  bool applyWidgetModelEdit(
+      const std::function<bool(cabana::pj_layout::TabbedWidgetModel*)>& mutator);
+  bool applyTabModelEdit(PlotDocker* docker,
+                         const std::function<bool(cabana::pj_layout::TabModel*)>& mutator);
 
   cabana::pj_layout::TabbedWidgetModel saveStateModel() const;
   bool loadStateModel(const cabana::pj_layout::TabbedWidgetModel& widget_model);
@@ -76,6 +81,8 @@ private slots:
   void paintEvent(QPaintEvent* event) override;
 
 private:
+  PlotDocker* createTabWidget(const QString& name = {});
+
   QTabWidget* _tabWidget;
 
   QPushButton* _buttonHorizontalLink;

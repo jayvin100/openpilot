@@ -6,6 +6,7 @@
 
 #include "plot_docker.h"
 #include "plotwidget_editor.h"
+#include "tabbedplotwidget.h"
 #include "Qads/DockSplitter.h"
 #include <QPushButton>
 #include <QBoxLayout>
@@ -17,6 +18,204 @@
 #include "PlotJuggler/svg_util.h"
 
 namespace {
+
+cabana::pj_layout::LayoutNode MakeDefaultDockAreaNode(const QString& title = "...")
+{
+  cabana::pj_layout::LayoutNode node;
+  node.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
+  node.name = title;
+  node.plots.push_back(cabana::pj_layout::PlotModel{});
+  return node;
+}
+
+void NormalizeSplitterSizes(cabana::pj_layout::LayoutNode* node)
+{
+  if (!node || node->kind != cabana::pj_layout::LayoutNode::Kind::Splitter)
+  {
+    return;
+  }
+
+  node->sizes.assign(node->children.size(),
+                     node->children.empty() ? 0.0 : 1.0 / double(node->children.size()));
+}
+
+bool FindWidgetPath(QWidget* current, QWidget* target, std::vector<int>* path)
+{
+  if (!current || !target)
+  {
+    return false;
+  }
+  if (current == target)
+  {
+    return true;
+  }
+
+  if (auto* splitter = qobject_cast<QSplitter*>(current))
+  {
+    for (int i = 0; i < splitter->count(); ++i)
+    {
+      path->push_back(i);
+      if (FindWidgetPath(splitter->widget(i), target, path))
+      {
+        return true;
+      }
+      path->pop_back();
+    }
+  }
+  return false;
+}
+
+bool FindDockPath(const PlotDocker* docker, DockWidget* dock_widget, int* container_index,
+                  std::vector<int>* path)
+{
+  if (!docker || !dock_widget || !dock_widget->dockAreaWidget())
+  {
+    return false;
+  }
+
+  auto* target_container = dock_widget->dockAreaWidget()->dockContainer();
+  const auto containers = docker->dockContainers();
+  for (int i = 0; i < containers.size(); ++i)
+  {
+    if (containers[i] != target_container)
+    {
+      continue;
+    }
+    path->clear();
+    *container_index = i;
+    return FindWidgetPath(containers[i]->rootSplitter(), dock_widget->dockAreaWidget(), path);
+  }
+  return false;
+}
+
+cabana::pj_layout::LayoutNode* FindLayoutNode(cabana::pj_layout::LayoutNode* node,
+                                              const std::vector<int>& path, size_t depth = 0)
+{
+  if (!node)
+  {
+    return nullptr;
+  }
+  if (depth == path.size())
+  {
+    return node;
+  }
+  if (node->kind != cabana::pj_layout::LayoutNode::Kind::Splitter)
+  {
+    return nullptr;
+  }
+  const int index = path[depth];
+  if (index < 0 || index >= static_cast<int>(node->children.size()))
+  {
+    return nullptr;
+  }
+  return FindLayoutNode(&node->children[index], path, depth + 1);
+}
+
+bool RenameLayoutNode(cabana::pj_layout::LayoutNode* root, const std::vector<int>& path,
+                      const QString& title)
+{
+  auto* node = FindLayoutNode(root, path);
+  if (!node || node->kind != cabana::pj_layout::LayoutNode::Kind::DockArea || title.isEmpty())
+  {
+    return false;
+  }
+  node->name = title;
+  return true;
+}
+
+bool InsertSplitNode(cabana::pj_layout::LayoutNode* root, const std::vector<int>& path,
+                     Qt::Orientation orientation)
+{
+  if (!root)
+  {
+    return false;
+  }
+
+  cabana::pj_layout::LayoutNode new_leaf = MakeDefaultDockAreaNode();
+  if (path.empty())
+  {
+    cabana::pj_layout::LayoutNode existing = *root;
+    root->kind = cabana::pj_layout::LayoutNode::Kind::Splitter;
+    root->orientation = orientation;
+    root->name.clear();
+    root->plots.clear();
+    root->children = { std::move(existing), std::move(new_leaf) };
+    NormalizeSplitterSizes(root);
+    return true;
+  }
+
+  std::vector<int> parent_path(path.begin(), path.end() - 1);
+  const int target_index = path.back();
+  auto* parent = FindLayoutNode(root, parent_path);
+  if (!parent || parent->kind != cabana::pj_layout::LayoutNode::Kind::Splitter ||
+      target_index < 0 || target_index >= static_cast<int>(parent->children.size()))
+  {
+    return false;
+  }
+
+  if (parent->orientation == orientation)
+  {
+    parent->children.insert(parent->children.begin() + target_index + 1, std::move(new_leaf));
+    NormalizeSplitterSizes(parent);
+    return true;
+  }
+
+  cabana::pj_layout::LayoutNode wrapped_existing = std::move(parent->children[target_index]);
+  parent->children[target_index].kind = cabana::pj_layout::LayoutNode::Kind::Splitter;
+  parent->children[target_index].orientation = orientation;
+  parent->children[target_index].name.clear();
+  parent->children[target_index].plots.clear();
+  parent->children[target_index].children = { std::move(wrapped_existing), std::move(new_leaf) };
+  NormalizeSplitterSizes(&parent->children[target_index]);
+  return true;
+}
+
+bool RemoveLayoutNode(cabana::pj_layout::LayoutNode* node, const std::vector<int>& path,
+                      size_t depth = 0)
+{
+  if (!node)
+  {
+    return false;
+  }
+  if (depth == path.size())
+  {
+    *node = MakeDefaultDockAreaNode();
+    return true;
+  }
+  if (node->kind != cabana::pj_layout::LayoutNode::Kind::Splitter)
+  {
+    return false;
+  }
+
+  const int index = path[depth];
+  if (index < 0 || index >= static_cast<int>(node->children.size()))
+  {
+    return false;
+  }
+
+  if (depth + 1 == path.size())
+  {
+    node->children.erase(node->children.begin() + index);
+  }
+  else if (!RemoveLayoutNode(&node->children[index], path, depth + 1))
+  {
+    return false;
+  }
+
+  if (node->children.empty())
+  {
+    *node = MakeDefaultDockAreaNode();
+    return true;
+  }
+  if (node->children.size() == 1)
+  {
+    *node = std::move(node->children.front());
+    return true;
+  }
+
+  NormalizeSplitterSizes(node);
+  return true;
+}
 
 cabana::pj_layout::LayoutNode SaveLayoutNodeModel(QWidget* widget)
 {
@@ -419,6 +618,27 @@ DockWidget* PlotDocker::splitDockWidget(DockWidget* source, Qt::Orientation orie
   return new_widget;
 }
 
+bool PlotDocker::requestSplitDockWidget(DockWidget* source, Qt::Orientation orientation)
+{
+  auto* parent_tabs = qobject_cast<TabbedPlotWidget*>(parentWidget());
+  int container_index = -1;
+  std::vector<int> path;
+  if (!parent_tabs || !FindDockPath(this, source, &container_index, &path))
+  {
+    return false;
+  }
+
+  return parent_tabs->applyTabModelEdit(this, [&](cabana::pj_layout::TabModel* tab_model) {
+    if (container_index < 0 ||
+        container_index >= static_cast<int>(tab_model->containers.size()) ||
+        !tab_model->containers[container_index].has_root)
+    {
+      return false;
+    }
+    return InsertSplitNode(&tab_model->containers[container_index].root, path, orientation);
+  });
+}
+
 bool PlotDocker::closeDockWidget(DockWidget* dock_widget)
 {
   if (!dock_widget)
@@ -440,6 +660,27 @@ bool PlotDocker::closeDockWidget(DockWidget* dock_widget)
   return true;
 }
 
+bool PlotDocker::requestCloseDockWidget(DockWidget* dock_widget)
+{
+  auto* parent_tabs = qobject_cast<TabbedPlotWidget*>(parentWidget());
+  int container_index = -1;
+  std::vector<int> path;
+  if (!parent_tabs || !FindDockPath(this, dock_widget, &container_index, &path))
+  {
+    return false;
+  }
+
+  return parent_tabs->applyTabModelEdit(this, [&](cabana::pj_layout::TabModel* tab_model) {
+    if (container_index < 0 ||
+        container_index >= static_cast<int>(tab_model->containers.size()) ||
+        !tab_model->containers[container_index].has_root)
+    {
+      return false;
+    }
+    return RemoveLayoutNode(&tab_model->containers[container_index].root, path);
+  });
+}
+
 void PlotDocker::setDockTitle(DockWidget* dock_widget, const QString& title)
 {
   if (!dock_widget || title.isEmpty())
@@ -448,6 +689,27 @@ void PlotDocker::setDockTitle(DockWidget* dock_widget, const QString& title)
   }
   dock_widget->setTitle(title);
   emit undoableChange();
+}
+
+bool PlotDocker::requestDockTitleChange(DockWidget* dock_widget, const QString& title)
+{
+  auto* parent_tabs = qobject_cast<TabbedPlotWidget*>(parentWidget());
+  int container_index = -1;
+  std::vector<int> path;
+  if (!parent_tabs || !FindDockPath(this, dock_widget, &container_index, &path))
+  {
+    return false;
+  }
+
+  return parent_tabs->applyTabModelEdit(this, [&](cabana::pj_layout::TabModel* tab_model) {
+    if (container_index < 0 ||
+        container_index >= static_cast<int>(tab_model->containers.size()) ||
+        !tab_model->containers[container_index].has_root)
+    {
+      return false;
+    }
+    return RenameLayoutNode(&tab_model->containers[container_index].root, path, title);
+  });
 }
 
 void PlotDocker::toggleDockFullscreen(DockWidget* dock_widget)
@@ -521,19 +783,39 @@ DockWidget::DockWidget(PlotDataMapRef& datamap,
   setTitle("...");
 
   connect(_toolbar->buttonSplitHorizontal(), &QPushButton::clicked, this,
-          [this]() { splitHorizontal(); });
+          [this]() {
+            if (auto* parent_docker = static_cast<PlotDocker*>(dockManager()))
+            {
+              parent_docker->requestSplitDockWidget(this, Qt::Horizontal);
+            }
+          });
 
   connect(_toolbar->buttonSplitVertical(), &QPushButton::clicked, this,
-          [this]() { splitVertical(); });
+          [this]() {
+            if (auto* parent_docker = static_cast<PlotDocker*>(dockManager()))
+            {
+              parent_docker->requestSplitDockWidget(this, Qt::Vertical);
+            }
+          });
 
-  connect(_plot_widget, &PlotWidget::splitHorizontal, this, [this]() { splitHorizontal(); });
+  connect(_plot_widget, &PlotWidget::splitHorizontal, this, [this]() {
+    if (auto* parent_docker = static_cast<PlotDocker*>(dockManager()))
+    {
+      parent_docker->requestSplitDockWidget(this, Qt::Horizontal);
+    }
+  });
 
-  connect(_plot_widget, &PlotWidget::splitVertical, this, [this]() { splitVertical(); });
+  connect(_plot_widget, &PlotWidget::splitVertical, this, [this]() {
+    if (auto* parent_docker = static_cast<PlotDocker*>(dockManager()))
+    {
+      parent_docker->requestSplitDockWidget(this, Qt::Vertical);
+    }
+  });
 
   connect(_toolbar, &DockToolbar::titleChanged, this, [this](const QString& title) {
     if (auto* parent_docker = static_cast<PlotDocker*>(dockManager()))
     {
-      parent_docker->setDockTitle(this, title);
+      parent_docker->requestDockTitleChange(this, title);
     }
   });
 
@@ -547,7 +829,7 @@ DockWidget::DockWidget(PlotDataMapRef& datamap,
   connect(_toolbar->buttonClose(), &QPushButton::pressed, this, [this]() {
     if (auto* parent_docker = static_cast<PlotDocker*>(dockManager()))
     {
-      parent_docker->closeDockWidget(this);
+      parent_docker->requestCloseDockWidget(this);
     }
   });
 

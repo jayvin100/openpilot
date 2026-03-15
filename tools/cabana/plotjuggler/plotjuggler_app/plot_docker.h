@@ -76,8 +76,11 @@ public:
   PlotWidget* plotAt(int index);
   DockWidget* createDockWidget();
   DockWidget* splitDockWidget(DockWidget* source, Qt::Orientation orientation);
+  bool requestSplitDockWidget(DockWidget* source, Qt::Orientation orientation);
   bool closeDockWidget(DockWidget* dock_widget);
+  bool requestCloseDockWidget(DockWidget* dock_widget);
   void setDockTitle(DockWidget* dock_widget, const QString& title);
+  bool requestDockTitleChange(DockWidget* dock_widget, const QString& title);
   void toggleDockFullscreen(DockWidget* dock_widget);
 
   void setHorizontalLink(bool enabled);
