@@ -13,6 +13,7 @@
 #include <QSettings>
 #include <QStatusBar>
 #include <QTimer>
+#include <QVBoxLayout>
 
 #include "tools/cabana/settings.h"
 #include "tools/cabana/videowidget.h"
@@ -44,6 +45,18 @@ PlotJugglerWindow::PlotJugglerWindow(AbstractStream *stream, const QString &dbc_
   pj_widget = new CabanaPlotJugglerWidget(resolveDBC(stream, dbc_file), layout_file_, this);
   setCentralWidget(pj_widget);
   setDockNestingEnabled(false);
+
+  // Place the playback toolbar under the video dock.
+  if (auto *tb = pj_widget->takeToolbar()) {
+    auto *dock_container = new QWidget(this);
+    auto *dock_layout = new QVBoxLayout(dock_container);
+    dock_layout->setContentsMargins(0, 0, 0, 0);
+    dock_layout->setSpacing(0);
+    // Video will be added later in startStream; reserve the spot.
+    dock_layout->addStretch(1);
+    dock_layout->addWidget(tb);
+    video_dock->setWidget(dock_container);
+  }
   tracker_update_timer = new QTimer(this);
   tracker_update_timer->setSingleShot(true);
   tracker_update_timer->setInterval(250);
@@ -111,7 +124,19 @@ void PlotJugglerWindow::startStream(AbstractStream *stream) {
   can->start();
 
   video_widget = new VideoWidget(this);
-  video_dock->setWidget(video_widget);
+  // Insert video into the dock container (toolbar is already at the bottom).
+  if (auto *container = video_dock->widget()) {
+    auto *vl = qobject_cast<QVBoxLayout *>(container->layout());
+    if (vl) {
+      // Replace the stretch with the video widget.
+      auto *stretch = vl->itemAt(0);
+      if (stretch) vl->removeItem(stretch);
+      delete stretch;
+      vl->insertWidget(0, video_widget, 1);
+    }
+  } else {
+    video_dock->setWidget(video_widget);
+  }
   video_dock->setWindowTitle(QString::fromStdString(can->routeName()));
 
   connect(can, &AbstractStream::seekedTo, this, [this](double sec) { scheduleTrackerUpdate(sec, true); });
@@ -145,6 +170,19 @@ void PlotJugglerWindow::startStream(AbstractStream *stream) {
 
   syncSegments();
   scheduleTrackerUpdate(can->currentSec(), true);
+
+  // Set route duration for timeline — retry until maxSeconds is available.
+  auto *duration_timer = new QTimer(this);
+  duration_timer->setInterval(500);
+  connect(duration_timer, &QTimer::timeout, this, [this, duration_timer]() {
+    double dur = can->maxSeconds() - can->minSeconds();
+    if (dur > 0) {
+      pj_widget->setRouteDuration(dur);
+      duration_timer->stop();
+      duration_timer->deleteLater();
+    }
+  });
+  duration_timer->start();
 }
 
 void PlotJugglerWindow::syncSegments() {

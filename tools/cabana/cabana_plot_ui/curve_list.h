@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QLineEdit>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -35,6 +36,7 @@ private:
 
   QLineEdit *filter_edit_ = nullptr;
   QTreeWidget *tree_widget_ = nullptr;
+  QTimer *filter_timer_ = nullptr;
   std::set<std::string> known_curves_;
 };
 

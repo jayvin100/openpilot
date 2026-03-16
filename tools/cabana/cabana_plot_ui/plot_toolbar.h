@@ -1,10 +1,7 @@
 #pragma once
 
 #include <QDoubleSpinBox>
-#include <QLabel>
-#include <QLineEdit>
 #include <QPushButton>
-#include <QSlider>
 #include <QToolBar>
 
 namespace cabana::plot_ui {
@@ -16,8 +13,6 @@ class PlotToolbar : public QToolBar {
 public:
   explicit PlotToolbar(QWidget *parent = nullptr);
 
-  void setTime(double sec);
-  void setTimeRange(double max_sec);
   void setPaused(bool paused);
 
 signals:
@@ -36,14 +31,11 @@ signals:
 
 private:
   QPushButton *play_btn_ = nullptr;
-  QLineEdit *time_display_ = nullptr;
-  QSlider *seek_slider_ = nullptr;
   QDoubleSpinBox *speed_spin_ = nullptr;
   QPushButton *grid_btn_ = nullptr;
   QPushButton *legend_btn_ = nullptr;
   QPushButton *link_btn_ = nullptr;
   bool paused_ = false;
-  double max_time_ = 1.0;
 };
 
 }  // namespace cabana::plot_ui

@@ -17,9 +17,11 @@ public:
   void appendSegments(const SegmentMap &segments, uint64_t route_start_nanos);
   void setCurrentTime(double relative_sec);
   void setPlaybackPaused(bool paused);
+  void setRouteDuration(double seconds);
   void saveLayoutToFile(const QString &path);
   void loadLayoutFromFile(const QString &path);
   QString perfSummary() const;
+  QWidget *takeToolbar();
   Q_INVOKABLE void emitCaptureReady();
 
 signals:

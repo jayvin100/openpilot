@@ -32,24 +32,7 @@ PlotToolbar::PlotToolbar(QWidget *parent) : QToolBar(parent) {
     emit playPauseToggled(paused_);
   });
 
-  // Time display
-  time_display_ = new QLineEdit(this);
-  time_display_->setReadOnly(true);
-  time_display_->setFixedWidth(100);
-  time_display_->setAlignment(Qt::AlignCenter);
-  time_display_->setText("0.000");
-  addWidget(time_display_);
-
-  // Seek slider
-  seek_slider_ = new QSlider(Qt::Horizontal, this);
-  seek_slider_->setMinimum(0);
-  seek_slider_->setMaximum(10000);
-  seek_slider_->setMinimumWidth(120);
-  addWidget(seek_slider_);
-  connect(seek_slider_, &QSlider::sliderMoved, this, [this](int value) {
-    double sec = (value / 10000.0) * max_time_;
-    emit seekSliderMoved(sec);
-  });
+  addSeparator();
 
   // Speed
   auto *speed_label = new QLabel(" Speed:", this);
@@ -146,19 +129,6 @@ PlotToolbar::PlotToolbar(QWidget *parent) : QToolBar(parent) {
   connect(undo_sc, &QShortcut::activated, this, &PlotToolbar::undoRequested);
   auto *redo_sc = new QShortcut(QKeySequence(Qt::CTRL + Qt::SHIFT + Qt::Key_Z), this);
   connect(redo_sc, &QShortcut::activated, this, &PlotToolbar::redoRequested);
-}
-
-void PlotToolbar::setTime(double sec) {
-  time_display_->setText(QString::number(sec, 'f', 3));
-  if (!seek_slider_->isSliderDown() && max_time_ > 0) {
-    seek_slider_->blockSignals(true);
-    seek_slider_->setValue(static_cast<int>((sec / max_time_) * 10000));
-    seek_slider_->blockSignals(false);
-  }
-}
-
-void PlotToolbar::setTimeRange(double max_sec) {
-  max_time_ = max_sec > 0 ? max_sec : 1.0;
 }
 
 void PlotToolbar::setPaused(bool paused) {

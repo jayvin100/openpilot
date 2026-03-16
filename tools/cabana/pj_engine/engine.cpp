@@ -22,6 +22,7 @@ struct MetaTypeRegistrar {
     qRegisterMetaType<uint64_t>("uint64_t");
     qRegisterMetaType<cabana::pj_layout::SnippetModel>("cabana::pj_layout::SnippetModel");
     qRegisterMetaType<cabana::pj_layout::TransformConfig>("cabana::pj_layout::TransformConfig");
+    qRegisterMetaType<Qt::Orientation>("Qt::Orientation");
   }
 };
 static MetaTypeRegistrar s_registrar;

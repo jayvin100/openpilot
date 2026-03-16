@@ -120,9 +120,8 @@ public:
     // Disable OpenGL for plot canvases — avoids crashes in headless/xvfb.
     QSettings().setValue("Preferences::use_opengl", false);
 
-    // Toolbar at the top.
+    // Toolbar — created but not added to layout. pjwindow places it under the video.
     toolbar_ = new cabana::plot_ui::PlotToolbar(parent);
-    layout->addWidget(toolbar_);
 
     // Build UI: left panel (curve list + Lua button) + plot surface.
     auto *splitter = new QSplitter(Qt::Horizontal, parent);
@@ -179,7 +178,7 @@ public:
           if (dur > max_x) max_x = dur;
         }
       }
-      if (max_x > 0) toolbar_->setTimeRange(max_x);
+      // Timeline range is set from route duration via setRouteDuration().
     });
     QObject::connect(engine_, &cabana::pj_engine::Engine::curveTreeChanged,
                      curve_list_, &cabana::plot_ui::CurveList::updateTree);
@@ -226,13 +225,22 @@ public:
       if (!path.isEmpty()) owner->loadLayoutFromFile(path);
     });
 
-    // Play/pause, seek, speed → bubble up to pjwindow which controls the stream.
+    // Play/pause, speed → bubble up to pjwindow which controls the stream.
     QObject::connect(toolbar_, &cabana::plot_ui::PlotToolbar::playPauseToggled,
                      parent, &CabanaPlotJugglerWidget::playPauseRequested);
-    QObject::connect(toolbar_, &cabana::plot_ui::PlotToolbar::seekSliderMoved,
-                     parent, &CabanaPlotJugglerWidget::seekSliderMoved);
     QObject::connect(toolbar_, &cabana::plot_ui::PlotToolbar::speedChanged,
                      parent, &CabanaPlotJugglerWidget::speedChanged);
+    // Timeline seek → convert absolute to relative and bubble up.
+    QObject::connect(plot_surface_->timeline(), &cabana::plot_ui::TimelineWidget::seekRequested,
+                     parent, [parent, this](double abs_sec) {
+      emit parent->seekSliderMoved(abs_sec - route_start_sec_);
+    });
+
+    // Zoom range → timeline overlay (convert relative → absolute for timeline).
+    QObject::connect(plot_surface_, &cabana::plot_ui::PlotTabWidget::zoomRangeChanged,
+                     parent, [this](double min, double max) {
+      plot_surface_->timeline()->setZoomRange(min + route_start_sec_, max + route_start_sec_);
+    });
 
     // Undo/Redo.
     QObject::connect(toolbar_, &cabana::plot_ui::PlotToolbar::undoRequested,
@@ -321,6 +329,7 @@ public:
   void queueSegments(const SegmentMap &segments, uint64_t route_start_nanos) {
     refreshLayoutOnce();
     route_start_sec_ = route_start_nanos / 1e9;
+    plot_surface_->setRouteStart(route_start_sec_);
     QMetaObject::invokeMethod(engine_, "appendSegments", Qt::QueuedConnection,
                               Q_ARG(SegmentMap, segments),
                               Q_ARG(uint64_t, route_start_nanos));
@@ -384,7 +393,7 @@ void CabanaPlotJugglerWidget::setCurrentTime(double relative_sec) {
 
   double abs_time = impl_->route_start_sec_ + relative_sec;
   impl_->plot_surface_->setTrackerTime(abs_time);
-  impl_->toolbar_->setTime(impl_->use_time_offset_ ? relative_sec : abs_time);
+  impl_->plot_surface_->timeline()->setCurrentTime(abs_time);
 
   QMetaObject::invokeMethod(impl_->engine_, "seek", Qt::QueuedConnection,
                             Q_ARG(double, abs_time));
@@ -394,6 +403,13 @@ void CabanaPlotJugglerWidget::setCurrentTime(double relative_sec) {
     impl_->perf.tracker_calls++;
     impl_->perf.tracker_total_ms += elapsed;
     impl_->perf.tracker_max_ms = std::max(impl_->perf.tracker_max_ms, elapsed);
+  }
+}
+
+void CabanaPlotJugglerWidget::setRouteDuration(double seconds) {
+  if (seconds > 0) {
+    impl_->plot_surface_->timeline()->setTimeRange(
+        impl_->route_start_sec_, impl_->route_start_sec_ + seconds);
   }
 }
 
@@ -435,6 +451,10 @@ void CabanaPlotJugglerWidget::resizeEvent(QResizeEvent *event) {
 
 QString CabanaPlotJugglerWidget::perfSummary() const {
   return impl_->perfSummary();
+}
+
+QWidget *CabanaPlotJugglerWidget::takeToolbar() {
+  return impl_->toolbar_;
 }
 
 void CabanaPlotJugglerWidget::emitCaptureReady() {

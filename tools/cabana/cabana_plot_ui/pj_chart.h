@@ -31,6 +31,7 @@ public:
   void setTrackerTime(double time);
   void setGridVisible(bool visible);
   void setLinkedXRange(double min, double max);
+  void setRouteStart(double sec);
   void resetZoom();
 
   struct CurveItem {
@@ -53,6 +54,7 @@ protected:
   void mousePressEvent(QMouseEvent *event) override;
   void mouseReleaseEvent(QMouseEvent *event) override;
   void mouseMoveEvent(QMouseEvent *event) override;
+  void wheelEvent(QWheelEvent *event) override;
   void dragEnterEvent(QDragEnterEvent *event) override;
   void dragMoveEvent(QDragMoveEvent *event) override;
   void dropEvent(QDropEvent *event) override;
@@ -76,6 +78,7 @@ private:
   QLabel *tip_label_ = nullptr;
   double tooltip_x_ = -1;
   QFont signal_value_font_;
+  double route_start_ = 0;
   bool xy_mode_ = false;
   std::set<std::string> transform_curves_;
   QPixmap chart_pixmap_;

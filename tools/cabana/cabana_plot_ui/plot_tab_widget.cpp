@@ -15,6 +15,9 @@ PlotTabWidget::PlotTabWidget(QWidget *parent) : QWidget(parent) {
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
 
+  timeline_ = new TimelineWidget(this);
+  layout->addWidget(timeline_);
+
   tab_widget_ = new QTabWidget(this);
   tab_widget_->setTabsClosable(true);
   layout->addWidget(tab_widget_);
@@ -82,6 +85,7 @@ QWidget *PlotTabWidget::buildLayoutNode(const cabana::pj_layout::LayoutNode &nod
     }
     auto wirePlot = [this](PlotContainer *pc) {
       int idx = static_cast<int>(all_plots_.size());
+      pc->setRouteStart(route_start_);
       connect(pc, &PlotContainer::seekRequested, this, &PlotTabWidget::seekRequested);
       connect(pc, &PlotContainer::curveDropped, this, [this, idx](const QString &name) {
         emit curveDropped(name, idx);
@@ -90,6 +94,7 @@ QWidget *PlotTabWidget::buildLayoutNode(const cabana::pj_layout::LayoutNode &nod
         emit splitRequested(idx, o);
       });
       connect(pc, &PlotContainer::xRangeChanged, this, [this, pc](double min, double max) {
+        emit zoomRangeChanged(min, max);
         if (!linked_zoom_) return;
         for (auto *other : all_plots_) {
           if (other != pc) other->setLinkedXRange(min, max);
@@ -200,6 +205,13 @@ void PlotTabWidget::redo() {
   current_layout_ = redo_stack_.back();
   redo_stack_.pop_back();
   rebuildFromLayout(current_layout_);
+}
+
+void PlotTabWidget::setRouteStart(double sec) {
+  route_start_ = sec;
+  for (auto *pc : all_plots_) {
+    pc->setRouteStart(sec);
+  }
 }
 
 void PlotTabWidget::setLinkedZoom(bool enabled) {

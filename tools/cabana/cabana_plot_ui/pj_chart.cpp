@@ -139,16 +139,16 @@ void PjChartView::updateSnapshots(const cabana::pj_engine::PlotSnapshotBundle &b
 
   for (auto &ci : curves_) {
     auto it = bundle.snapshots.find(ci.name);
-    if (it == bundle.snapshots.end() || !it->second) {
-      // Curve not found in snapshot — might be a newly added curve whose name
-      // doesn't have data yet, or the snapshot was built before the curve existed.
-      continue;
-    }
+    if (it == bundle.snapshots.end() || !it->second) continue;
     const auto &pts = it->second->points;
     if (ci.vals.size() == pts.size()) continue;  // no new data
 
-    ci.vals = pts;
-    ci.series->replace(QVector<QPointF>(pts.begin(), pts.end()));
+    // Convert to relative time (subtract route start).
+    ci.vals.resize(pts.size());
+    for (size_t i = 0; i < pts.size(); ++i) {
+      ci.vals[i] = QPointF(pts[i].x() - route_start_, pts[i].y());
+    }
+    ci.series->replace(QVector<QPointF>(ci.vals.begin(), ci.vals.end()));
     any_updated = true;
   }
 
@@ -164,6 +164,7 @@ void PjChartView::updateSnapshots(const cabana::pj_engine::PlotSnapshotBundle &b
     }
     if (min_x < max_x) {
       axis_x_->setRange(min_x, max_x);
+      emit xRangeChanged(min_x, max_x);
     }
     updateAxisY();
     updateSeriesPoints();
@@ -173,7 +174,7 @@ void PjChartView::updateSnapshots(const cabana::pj_engine::PlotSnapshotBundle &b
 }
 
 void PjChartView::setTrackerTime(double time) {
-  tracker_time_ = time;
+  tracker_time_ = time - route_start_;  // convert to relative
   viewport()->update();
 }
 
@@ -188,6 +189,10 @@ void PjChartView::setLinkedXRange(double min, double max) {
   updateSeriesPoints();
   chart_pixmap_ = QPixmap();
   viewport()->update();
+}
+
+void PjChartView::setRouteStart(double sec) {
+  route_start_ = sec;
 }
 
 void PjChartView::resetZoom() {
@@ -331,6 +336,18 @@ void PjChartView::mouseReleaseEvent(QMouseEvent *event) {
     auto rect = rubber->geometry().normalized();
     double min = chart()->mapToValue(rect.topLeft()).x();
     double max = chart()->mapToValue(rect.bottomRight()).x();
+    // Clamp to data bounds.
+    double data_min = std::numeric_limits<double>::max();
+    double data_max = std::numeric_limits<double>::lowest();
+    for (const auto &ci : curves_) {
+      if (!ci.vals.empty()) {
+        data_min = std::min(data_min, ci.vals.front().x());
+        data_max = std::max(data_max, ci.vals.back().x());
+      }
+    }
+    min = std::max(min, data_min);
+    max = std::min(max, data_max);
+
     if (rubber->width() <= 0) {
       emit seekRequested(min);
     } else if (rubber->width() > 10 && (max - min) > 0.01) {
@@ -388,6 +405,48 @@ void PjChartView::showTip(double sec) {
 void PjChartView::hideTip() {
   tooltip_x_ = -1;
   tip_label_->hide();
+}
+
+void PjChartView::wheelEvent(QWheelEvent *event) {
+  auto plot_area = chart()->plotArea();
+  if (!plot_area.contains(event->position())) {
+    QChartView::wheelEvent(event);
+    return;
+  }
+
+  // Zoom X axis centered on cursor position.
+  double cursor_x = chart()->mapToValue(event->position()).x();
+  double min = axis_x_->min();
+  double max = axis_x_->max();
+  double range = max - min;
+
+  double factor = event->angleDelta().y() > 0 ? 0.8 : 1.25;  // scroll up = zoom in
+  double new_range = range * factor;
+  if (new_range < 0.1) return;  // don't zoom past 100ms
+
+  // Clamp to data bounds.
+  double data_min = std::numeric_limits<double>::max();
+  double data_max = std::numeric_limits<double>::lowest();
+  for (const auto &ci : curves_) {
+    if (!ci.vals.empty()) {
+      data_min = std::min(data_min, ci.vals.front().x());
+      data_max = std::max(data_max, ci.vals.back().x());
+    }
+  }
+  if (data_min >= data_max) return;
+
+  // Keep cursor position fixed — distribute the zoom proportionally.
+  double ratio = (cursor_x - min) / range;
+  double new_min = std::max(cursor_x - ratio * new_range, data_min);
+  double new_max = std::min(cursor_x + (1.0 - ratio) * new_range, data_max);
+
+  axis_x_->setRange(new_min, new_max);
+  updateAxisY();
+  updateSeriesPoints();
+  emit xRangeChanged(new_min, new_max);
+  chart_pixmap_ = QPixmap();
+  viewport()->update();
+  event->accept();
 }
 
 void PjChartView::dragEnterEvent(QDragEnterEvent *event) {

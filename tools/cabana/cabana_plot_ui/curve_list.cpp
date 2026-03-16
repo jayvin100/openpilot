@@ -2,6 +2,7 @@
 
 #include <QHeaderView>
 #include <QMimeData>
+#include <QTimer>
 
 namespace cabana::plot_ui {
 
@@ -47,12 +48,21 @@ CurveList::CurveList(QWidget *parent) : QWidget(parent) {
   tree_widget_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   tree_widget_->setDragEnabled(true);
   tree_widget_->setDragDropMode(QAbstractItemView::DragOnly);
-  tree_widget_->setAnimated(true);
+  tree_widget_->setAnimated(false);  // faster for large trees
   tree_widget_->setRootIsDecorated(true);
+  // Sorting is done manually after batch insertion, not live.
   layout->addWidget(tree_widget_);
 
-  connect(filter_edit_, &QLineEdit::textChanged, this, &CurveList::applyFilter);
-  // curveVisibilityChanged can be emitted programmatically if needed.
+  // Debounce filter — wait 150ms after last keystroke before applying.
+  filter_timer_ = new QTimer(this);
+  filter_timer_->setSingleShot(true);
+  filter_timer_->setInterval(150);
+  connect(filter_timer_, &QTimer::timeout, this, [this]() {
+    applyFilter(filter_edit_->text());
+  });
+  connect(filter_edit_, &QLineEdit::textChanged, this, [this]() {
+    filter_timer_->start();
+  });
 }
 
 CurveList::~CurveList() = default;
@@ -64,12 +74,9 @@ void CurveList::addCurveToTree(const cabana::pj_engine::CurveEntry &entry) {
   QString full_name = QString::fromStdString(entry.name);
   QString group_name = QString::fromStdString(entry.group);
 
-  // Build the tree name: split by '/' to form a hierarchy.
   QStringList parts = full_name.split('/', Qt::SkipEmptyParts);
   if (parts.isEmpty()) return;
 
-  // If the curve name doesn't already contain the group prefix, prepend it.
-  // But only if the group is different from the first path component.
   if (!group_name.isEmpty()) {
     QStringList group_parts = group_name.split('/', Qt::SkipEmptyParts);
     bool already_prefixed = !parts.isEmpty() && !group_parts.isEmpty() &&
@@ -84,7 +91,6 @@ void CurveList::addCurveToTree(const cabana::pj_engine::CurveEntry &entry) {
     bool is_leaf = (i == parts.size() - 1);
     const QString &part = parts[i];
 
-    // Find existing child with this name.
     QTreeWidgetItem *child = nullptr;
     for (int c = 0; c < parent->childCount(); ++c) {
       if (parent->child(c)->text(0) == part) {
@@ -110,29 +116,36 @@ void CurveList::addCurveToTree(const cabana::pj_engine::CurveEntry &entry) {
 }
 
 void CurveList::updateTree(const cabana::pj_engine::CurveTreeSnapshot &tree) {
+  bool was_empty = known_curves_.empty();
+
+  tree_widget_->setUpdatesEnabled(false);
   tree_widget_->blockSignals(true);
 
   for (const auto &entry : tree.numeric) addCurveToTree(entry);
   for (const auto &entry : tree.strings) addCurveToTree(entry);
   for (const auto &entry : tree.scatter) addCurveToTree(entry);
 
-  // Auto-expand first level for usability.
-  for (int i = 0; i < tree_widget_->topLevelItemCount(); ++i) {
-    tree_widget_->topLevelItem(i)->setExpanded(true);
+  // Sort only on first population (not on every batch).
+  if (was_empty && known_curves_.size() > 0) {
+    tree_widget_->sortItems(0, Qt::AscendingOrder);
+  }
+
+  // Everything collapsed by default.
+  if (was_empty && tree_widget_->topLevelItemCount() > 0) {
+    tree_widget_->collapseAll();
   }
 
   tree_widget_->blockSignals(false);
+  tree_widget_->setUpdatesEnabled(true);
 }
 
 void CurveList::updateValues(const cabana::pj_engine::PlotSnapshotBundle &bundle,
                              double tracker_time) {
-  // Only update leaf items that are visible in the viewport — skip collapsed/hidden.
   QRect viewport_rect = tree_widget_->viewport()->rect();
 
   std::function<void(QTreeWidgetItem *)> visit = [&](QTreeWidgetItem *item) {
     if (item->isHidden()) return;
     if (item->childCount() == 0) {
-      // Skip items outside the visible viewport.
       QRect item_rect = tree_widget_->visualItemRect(item);
       if (!item_rect.intersects(viewport_rect)) return;
 
@@ -170,27 +183,34 @@ void CurveList::updateValues(const cabana::pj_engine::PlotSnapshotBundle &bundle
 }
 
 void CurveList::applyFilter(const QString &text) {
+  tree_widget_->setUpdatesEnabled(false);
+
   std::function<bool(QTreeWidgetItem *)> filterItem = [&](QTreeWidgetItem *item) -> bool {
     if (item->childCount() == 0) {
-      // Leaf: match against the full curve name.
       QString curve = item->data(0, Qt::UserRole).toString();
       bool match = text.isEmpty() || curve.contains(text, Qt::CaseInsensitive);
       item->setHidden(!match);
       return match;
     }
-    // Branch: show if any child matches.
     bool any_visible = false;
     for (int i = 0; i < item->childCount(); ++i) {
       if (filterItem(item->child(i))) any_visible = true;
     }
     item->setHidden(!any_visible);
-    if (any_visible && !text.isEmpty()) item->setExpanded(true);
+    // Expand matching branches when searching, collapse all when cleared.
+    if (text.isEmpty()) {
+      item->setExpanded(false);
+    } else if (any_visible) {
+      item->setExpanded(true);
+    }
     return any_visible;
   };
 
   for (int i = 0; i < tree_widget_->topLevelItemCount(); ++i) {
     filterItem(tree_widget_->topLevelItem(i));
   }
+
+  tree_widget_->setUpdatesEnabled(true);
 }
 
 }  // namespace cabana::plot_ui
