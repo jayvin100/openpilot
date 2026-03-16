@@ -1,0 +1,41 @@
+import os
+
+import imgui
+
+Import('env', 'arch')
+
+imgui_env = env.Clone()
+imgui_env['CPPPATH'] += [
+  imgui.INCLUDE_DIR,
+  '#third_party/raylib/include',
+  '#third_party/json11',
+]
+imgui_env['LIBPATH'] += [f'#third_party/raylib/{arch}/']
+imgui_env['CXXFLAGS'] += ['-Wno-unused-variable']
+
+imgui_srcs = [
+  os.path.join(imgui.SRC_DIR, src)
+  for src in [
+    'imgui.cpp',
+    'imgui_draw.cpp',
+    'imgui_tables.cpp',
+    'imgui_widgets.cpp',
+    'implot.cpp',
+    'implot_items.cpp',
+    'rlImGui.cpp',
+  ]
+]
+
+libs = ['raylib']
+frameworks = []
+if arch == 'Darwin':
+  frameworks += ['OpenGL', 'Cocoa', 'IOKit', 'CoreVideo']
+else:
+  libs += ['GL', 'dl', 'm', 'pthread']
+
+imgui_env.Program(
+  '_imgui_cabana',
+  ['imgui_cabana.cc'] + imgui_srcs,
+  LIBS=['json11'] + libs,
+  FRAMEWORKS=frameworks,
+)

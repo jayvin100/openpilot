@@ -256,5 +256,8 @@ SConscript([
 if Dir('#tools/cabana/').exists() and arch != "larch64":
   SConscript(['tools/cabana/SConscript'])
 
+if Dir('#tools/imgui_cabana/').exists() and arch != "larch64":
+  SConscript(['tools/imgui_cabana/SConscript'])
+
 
 env.CompilationDatabase('compile_commands.json')

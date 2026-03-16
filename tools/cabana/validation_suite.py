@@ -214,6 +214,8 @@ class CabanaSession:
     self.ready_png = self.session_dir / "ready.png"
     self.state_path = self.session_dir / "state.json"
     self.summary_path = self.session_dir / "summary.json"
+    for stale in [self.log_path, self.stats_path, self.ready_png, self.state_path, self.summary_path]:
+      stale.unlink(missing_ok=True)
     self.display_num = None
     self.display = None
     self.proc = None
@@ -274,6 +276,7 @@ class CabanaSession:
         start_new_session=True,
       )
     self.window_id = find_window_id(self.proc.pid, self.display, timeout=5.0)
+    self.focus_window()
     if wait_ready:
       try:
         self.stats = load_stats(self.stats_path, self.log_path, self.suite.args.timeout)
@@ -364,20 +367,26 @@ class CabanaSession:
     self.xrun(["xdotool", "click", "--repeat", "2", "--delay", "50", "1"])
 
   def key(self, sequence):
-    self.xrun(["xdotool", "key", "--clearmodifiers", "--window", str(self.window_id), sequence])
+    if "+" in sequence:
+      self.xrun(["xdotool", "key", "--clearmodifiers", sequence])
+      return
+    self.key_down(sequence)
+    time.sleep(0.10)
+    self.key_up(sequence)
 
   def key_down(self, sequence):
-    self.xrun(["xdotool", "keydown", "--window", str(self.window_id), sequence])
+    self.xrun(["xdotool", "keydown", sequence])
 
   def key_up(self, sequence):
-    self.xrun(["xdotool", "keyup", "--window", str(self.window_id), sequence])
+    self.xrun(["xdotool", "keyup", sequence])
 
   def type_text(self, text):
-    self.xrun(["xdotool", "type", "--clearmodifiers", "--delay", "1", "--window", str(self.window_id), text])
+    for char in text:
+      self.xrun(["xdotool", "type", "--clearmodifiers", "--delay", "0", char])
+      time.sleep(0.03)
 
   def main_window_key(self, sequence):
-    self.focus_window()
-    self.xrun(["xdotool", "key", "--clearmodifiers", sequence])
+    self.key(sequence)
 
   def clear_and_type_widget(self, widget_name, text, *, state=None):
     self.click_widget(widget_name, state=state)
@@ -538,12 +547,7 @@ def select_message_with_signals(session):
   if state.get("detail", {}).get("signal_rows") and state.get("messages", {}).get("current_row", -1) >= 0:
     return state
   for row in candidate_message_rows(state):
-    session.click_rect(row["rect"])
-    state = session.wait_until(
-      lambda current: current.get("messages", {}).get("current_message_id") == row["message_id"],
-      timeout=1.0,
-      desc=f"select message {row['message_id']}",
-    )
+    state = select_message(session, row)
     if state.get("detail", {}).get("signal_rows"):
       return state
   raise ValidationFailure(f"{session.name}: could not find a visible message with signals")
@@ -554,19 +558,14 @@ def find_alternate_message_with_signals(session, current_message_id):
   for row in candidate_message_rows(state):
     if row["message_id"] == current_message_id:
       continue
-    session.click_rect(row["rect"])
-    next_state = session.wait_until(
-      lambda current: current.get("messages", {}).get("current_message_id") == row["message_id"],
-      timeout=1.0,
-      desc=f"select message {row['message_id']}",
-    )
+    next_state = select_message(session, row)
     if next_state.get("detail", {}).get("signal_rows"):
       return row, next_state
   raise ValidationFailure(f"{session.name}: could not find a second visible message with signals")
 
 
 def wait_for_message_filter(session, prefix):
-  session.clear_and_type_widget("MessagesFilterName", prefix)
+  clear_and_type(session, "MessagesFilterName", prefix)
   state = session.wait_until(
     lambda current: current.get("messages", {}).get("row_count", 0) > 0 and current.get("messages", {}).get("rows", [{}])[0].get("name", "").startswith(prefix),
     timeout=1.0,
@@ -576,8 +575,135 @@ def wait_for_message_filter(session, prefix):
 
 
 def candidate_message_rows(state):
-  rows = state.get("messages", {}).get("rows", [])
-  return sorted(rows, key=lambda row: (row.get("source") == 255, row.get("source", 255), row.get("name", "")))
+  return list(state.get("messages", {}).get("rows", []))
+
+
+def is_imgui_backend(state):
+  return state.get("app_backend") == "imgui_cabana"
+
+
+def select_message(session, row):
+  state = session.current_state()
+  if is_imgui_backend(state):
+    target_message_id = row["message_id"]
+    for _ in range(max(3, len(candidate_message_rows(state)) + 2)):
+      state = session.current_state()
+      current_id = state.get("messages", {}).get("current_message_id")
+      if current_id == target_message_id:
+        return state
+      rows = candidate_message_rows(state)
+      row_ids = [candidate["message_id"] for candidate in rows]
+      if target_message_id not in row_ids:
+        raise ValidationFailure(f"{session.name}: target message {target_message_id} is not visible")
+      current_pos = row_ids.index(current_id) if current_id in row_ids else 0
+      target_pos = row_ids.index(target_message_id)
+      session.main_window_key("F12" if target_pos > current_pos else "F11")
+      time.sleep(0.12)
+    return session.wait_until(
+      lambda current: current.get("messages", {}).get("current_message_id") == target_message_id,
+      timeout=1.0,
+      desc=f"select message {target_message_id}",
+    )
+  session.click_rect(row["rect"])
+  return session.wait_until(
+    lambda current: current.get("messages", {}).get("current_message_id") == row["message_id"],
+    timeout=1.0,
+    desc=f"select message {row['message_id']}",
+  )
+
+
+def focus_widget_for_typing(session, widget_name, *, state=None):
+  state = state or session.current_state()
+  if not is_imgui_backend(state):
+    session.click_widget(widget_name, state=state)
+    return
+  keymap = {
+    "MessagesFilterName": "F3",
+    "SignalFilterEdit": "F4",
+    "EditMessageNameEdit": None,
+  }
+  hotkey = keymap.get(widget_name)
+  if hotkey:
+    session.main_window_key(hotkey)
+
+
+def clear_and_type(session, widget_name, text, *, state=None):
+  state = state or session.current_state()
+  focus_widget_for_typing(session, widget_name, state=state)
+  if is_imgui_backend(state):
+    time.sleep(0.05)
+    current_text = state.get("widgets", {}).get(widget_name, {}).get("text", "") or ""
+    for _ in range(max(4, len(current_text) + 2)):
+      session.key("BackSpace")
+  else:
+    session.key("ctrl+a")
+    session.key("BackSpace")
+  if text:
+    session.type_text(text)
+
+
+def toggle_signal_plot(session, signal_row):
+  state = session.current_state()
+  if is_imgui_backend(state):
+    session.main_window_key("F5")
+    return
+  session.click_rect(signal_row["plot_rect"])
+
+
+def open_edit_dialog(session):
+  state = session.current_state()
+  if is_imgui_backend(state):
+    session.main_window_key("F2")
+    return
+  session.click_widget("EditMessageButton")
+
+
+def remove_all_charts(session):
+  state = session.current_state()
+  if is_imgui_backend(state):
+    session.main_window_key("F6")
+    return
+  session.click_widget("ChartsRemoveAllButton")
+
+
+def zoom_chart(session, chart_rect):
+  state = session.current_state()
+  if is_imgui_backend(state):
+    session.main_window_key("F7")
+    return
+  session.drag_rect(chart_rect, start_ratio=(0.20, 0.40), end_ratio=(0.80, 0.40))
+
+
+def reset_chart_zoom(session):
+  state = session.current_state()
+  if is_imgui_backend(state):
+    session.main_window_key("F8")
+    return
+  session.click_widget("ChartsResetZoomButton")
+
+
+def toggle_play_pause(session):
+  state = session.current_state()
+  if is_imgui_backend(state):
+    session.main_window_key("space")
+    return
+  session.click_widget("PlaybackPlayToggleButton")
+
+
+def seek_forward(session):
+  state = session.current_state()
+  if is_imgui_backend(state):
+    session.main_window_key("Right")
+    return
+  session.click_widget("PlaybackSeekForwardButton")
+
+
+def synthetic_slider_seek(session):
+  state = session.current_state()
+  if is_imgui_backend(state):
+    session.main_window_key("F10")
+    return True
+  return False
 
 
 def monitor_playback(session, *, duration, stall_timeout=0.5):
@@ -696,12 +822,7 @@ def scenario_core_workflow(suite):
       if candidate["message_id"] == current_message_id:
         continue
       select_start = time.monotonic()
-      session.click_rect(candidate["rect"])
-      next_state = session.wait_until(
-        lambda current: current.get("messages", {}).get("current_message_id") == candidate["message_id"],
-        timeout=1.0,
-        desc=f"select message {candidate['message_id']}",
-      )
+      next_state = select_message(session, candidate)
       if next_state.get("detail", {}).get("signal_rows"):
         row = candidate
         state = next_state
@@ -714,7 +835,7 @@ def scenario_core_workflow(suite):
     filter_start = time.monotonic()
     state = wait_for_message_filter(session, prefix)
     filter_latency_ms = (time.monotonic() - filter_start) * 1000.0
-    session.clear_and_type_widget("MessagesFilterName", "")
+    clear_and_type(session, "MessagesFilterName", "")
     session.wait_until(
       lambda current: current.get("widgets", {}).get("MessagesFilterName", {}).get("text", "") == "",
       timeout=1.0,
@@ -727,7 +848,7 @@ def scenario_core_workflow(suite):
       raise ValidationFailure("core_workflow: selected message has no signal rows")
 
     chart_start = time.monotonic()
-    session.click_rect(signal_rows[0]["plot_rect"])
+    toggle_signal_plot(session, signal_rows[0])
     state = session.wait_until(
       lambda current: current.get("charts", {}).get("count", 0) >= 1,
       timeout=1.5,
@@ -739,14 +860,14 @@ def scenario_core_workflow(suite):
     chart_rects = state.get("charts", {}).get("rects", [])
     if chart_rects:
       zoom_start = time.monotonic()
-      session.drag_rect(chart_rects[0], start_ratio=(0.20, 0.40), end_ratio=(0.80, 0.40))
+      zoom_chart(session, chart_rects[0])
       state = session.wait_until(
         lambda current: "time_range_start" in current and "time_range_end" in current,
         timeout=2.0,
         desc="chart zoom",
       )
       zoom_latency_ms = (time.monotonic() - zoom_start) * 1000.0
-      session.click_widget("ChartsResetZoomButton")
+      reset_chart_zoom(session)
       session.wait_until(
         lambda current: "time_range_start" not in current and "time_range_end" not in current,
         timeout=1.5,
@@ -755,20 +876,20 @@ def scenario_core_workflow(suite):
     else:
       raise ValidationFailure("core_workflow: chart rects missing after opening chart")
 
-    session.click_widget("ChartsRemoveAllButton")
+    remove_all_charts(session)
     session.wait_until(
       lambda current: current.get("charts", {}).get("count", 0) == 0,
       timeout=1.0,
       desc="remove all charts",
     )
 
-    session.click_widget("PlaybackPlayToggleButton")
+    toggle_play_pause(session)
     session.wait_until(lambda current: not current.get("paused", True), timeout=1.0, desc="playback resume")
     playback_metrics = monitor_playback(session, duration=5.0)
 
     seek_before = session.current_state()["current_sec"]
     seek_start = time.monotonic()
-    session.click_widget("PlaybackSeekForwardButton")
+    seek_forward(session)
     session.wait_until(
       lambda current: current.get("current_sec", 0.0) > seek_before + 0.5,
       timeout=1.5,
@@ -779,13 +900,14 @@ def scenario_core_workflow(suite):
     slider_rect = session.current_state().get("video", {}).get("slider_rect")
     if slider_rect:
       pre_drag_sec = float(session.current_state().get("current_sec", 0.0))
-      session.drag_rect(slider_rect, start_ratio=(0.30, 0.50), end_ratio=(0.60, 0.50))
+      if not synthetic_slider_seek(session):
+        session.drag_rect(slider_rect, start_ratio=(0.30, 0.50), end_ratio=(0.60, 0.50))
       session.wait_until(
         lambda current: abs(float(current.get("current_sec", 0.0)) - pre_drag_sec) > 0.25,
         timeout=1.5,
         desc="playback slider drag",
       )
-    session.click_widget("PlaybackPlayToggleButton")
+    toggle_play_pause(session)
     session.wait_until(lambda current: current.get("paused", True), timeout=1.0, desc="playback pause")
 
     state = session.current_state()
@@ -825,10 +947,10 @@ def scenario_edit_save_reload(suite):
     original_text = temp_dbc.read_text()
 
     edit_start = time.monotonic()
-    session.click_widget("EditMessageButton")
+    open_edit_dialog(session)
     session.wait_for_dialog("Edit message")
-    session.clear_and_type_widget("EditMessageNameEdit", new_name)
-    session.click_widget("EditMessageOkButton")
+    clear_and_type(session, "EditMessageNameEdit", new_name)
+    session.key("Return")
     state = session.wait_until(
       lambda current: new_name in current.get("detail", {}).get("message_label", ""),
       timeout=2.0,
@@ -858,7 +980,7 @@ def scenario_edit_save_reload(suite):
     row = next((row for row in state.get("messages", {}).get("rows", []) if row["message_id"] == message_id), None)
     if row is None:
       raise ValidationFailure(f"edit_save_reload: edited message {message_id} is no longer visible")
-    reload_session.click_rect(row["rect"])
+    select_message(reload_session, row)
     reload_session.wait_until(
       lambda current: new_name in current.get("detail", {}).get("message_label", ""),
       timeout=2.0,
@@ -907,7 +1029,7 @@ def scenario_session_restore(suite):
     signal_rows = state.get("detail", {}).get("signal_rows", [])
     if not signal_rows:
       raise ValidationFailure("session_restore: selected message has no signal rows")
-    session.click_rect(signal_rows[0]["plot_rect"])
+    toggle_signal_plot(session, signal_rows[0])
     session.wait_until(
       lambda current: current.get("charts", {}).get("count", 0) >= 1,
       timeout=1.5,
@@ -957,10 +1079,10 @@ def scenario_video_sanity(suite):
     if not slider.get("slider_visible"):
       raise ValidationFailure("video_sanity: playback slider is not visible")
     screenshot = session.capture("video_ready", threshold=suite.args.threshold, max_diff_pct=1.50, use_ready=True)
-    session.click_widget("PlaybackPlayToggleButton")
+    toggle_play_pause(session)
     session.wait_until(lambda current: not current.get("paused", True), timeout=1.0, desc="video playback resume")
     playback_metrics = monitor_playback(session, duration=4.0)
-    session.click_widget("PlaybackPlayToggleButton")
+    toggle_play_pause(session)
     session.wait_until(lambda current: current.get("paused", True), timeout=1.0, desc="video playback pause")
     state = session.current_state()
     metrics = {
@@ -996,7 +1118,7 @@ def scenario_invalid_dbc(suite):
     )
     screenshot = session.capture("invalid_dbc_dialog", threshold=suite.args.threshold, max_diff_pct=1.50)
     dialog_latency_ms = (time.monotonic() - dialog_start) * 1000.0
-    session.key("Escape")
+    session.main_window_key("Escape")
     session.wait_until(lambda current: not current.get("dialogs", []), timeout=2.0, desc="dialog dismissal")
     session.stats = load_stats(session.stats_path, session.log_path, suite.args.timeout)
     session.wait_for_state(lambda current: current.get("ready"), timeout=5.0, desc="ready after invalid DBC dialog")
@@ -1026,27 +1148,34 @@ def scenario_input_fuzz(suite):
   def random_message_click(state):
     rows = state.get("messages", {}).get("rows", [])
     if rows:
-      session.click_rect(rng.choice(rows)["rect"])
+      select_message(session, rng.choice(rows))
 
   def random_signal_click(state):
     rows = state.get("detail", {}).get("signal_rows", [])
     if rows:
-      session.click_rect(rng.choice(rows)["rect"])
+      toggle_signal_plot(session, rng.choice(rows))
 
   def random_plot_toggle(state):
     rows = [row for row in state.get("detail", {}).get("signal_rows", []) if row.get("plot_rect")]
     if rows:
-      rect = rng.choice(rows)["plot_rect"]
-      if rng.random() < 0.2:
-        session.shift_click_rect(rect)
-      else:
-        session.click_rect(rect)
+      toggle_signal_plot(session, rng.choice(rows))
 
   def message_scroll(state):
-    session.scroll_rect(session.widget_rect("MessageTable", state=state), rng.choice([-3, -2, -1, 1, 2, 3]))
+    if is_imgui_backend(state):
+      session.main_window_key(rng.choice(["Page_Up", "Page_Down", "Up", "Down"]))
+    else:
+      session.scroll_rect(session.widget_rect("MessageTable", state=state), rng.choice([-3, -2, -1, 1, 2, 3]))
 
   def signal_scroll(state):
-    session.scroll_rect(session.widget_rect("SignalTree", state=state), rng.choice([-3, -2, -1, 1, 2, 3]))
+    if is_imgui_backend(state):
+      session.main_window_key("F4")
+      if rng.random() < 0.5:
+        session.type_text(rng.choice(["lane", "brak", "stee", ""]))
+      else:
+        session.key("ctrl+a")
+        session.key("BackSpace")
+    else:
+      session.scroll_rect(session.widget_rect("SignalTree", state=state), rng.choice([-3, -2, -1, 1, 2, 3]))
 
   def filter_text(state):
     rows = state.get("messages", {}).get("rows", [])
@@ -1054,28 +1183,33 @@ def scenario_input_fuzz(suite):
       return
     prefix = text_prefix(rng.choice(rows)["name"], width=4)
     wait_for_message_filter(session, prefix)
-    session.clear_and_type_widget("MessagesFilterName", "")
+    clear_and_type(session, "MessagesFilterName", "")
     session.wait_until(lambda current: current.get("messages", {}).get("row_count", 0) > 0, timeout=1.0, desc="clear fuzz filter")
 
   def play_pause(_state):
-    session.click_widget("PlaybackPlayToggleButton")
+    toggle_play_pause(session)
 
-  def seek(_state):
-    session.click_widget(rng.choice(["PlaybackSeekBackwardButton", "PlaybackSeekForwardButton"]))
+  def seek(state):
+    if is_imgui_backend(state):
+      session.main_window_key(rng.choice(["Left", "Right"]))
+    else:
+      session.click_widget(rng.choice(["PlaybackSeekBackwardButton", "PlaybackSeekForwardButton"]))
 
   def slider_drag(state):
     rect = state.get("video", {}).get("slider_rect")
+    if synthetic_slider_seek(session):
+      return
     if rect:
       start = (0.20, 0.50) if rng.random() < 0.5 else (0.60, 0.50)
       end = (0.60, 0.50) if start[0] < 0.5 else (0.20, 0.50)
       session.drag_rect(rect, start_ratio=start, end_ratio=end)
 
   def keyboard_nav(_state):
-    session.key(rng.choice(["Up", "Down", "Page_Up", "Page_Down", "space", "ctrl+z", "ctrl+shift+z", "Escape", "Tab"]))
+    session.main_window_key(rng.choice(["Up", "Down", "Page_Up", "Page_Down", "space", "ctrl+z", "ctrl+shift+z", "Tab", "F5", "F6", "F7", "F8"]))
 
-  def remove_all_charts(state):
+  def remove_all_chart_action(state):
     if state.get("charts", {}).get("count", 0) > 0:
-      session.click_widget("ChartsRemoveAllButton")
+      remove_all_charts(session)
 
   actions = [
     ("random_message_click", random_message_click),
@@ -1095,14 +1229,14 @@ def scenario_input_fuzz(suite):
     ("keyboard_nav", keyboard_nav),
     ("keyboard_nav", keyboard_nav),
     ("keyboard_nav", keyboard_nav),
-    ("remove_all_charts", remove_all_charts),
+    ("remove_all_charts", remove_all_chart_action),
     ("filter_text", filter_text),
   ]
 
   try:
     select_message_with_signals(session)
     if session.current_state().get("paused", True):
-      session.click_widget("PlaybackPlayToggleButton")
+      toggle_play_pause(session)
       session.wait_until(lambda current: not current.get("paused", True), timeout=1.0, desc="fuzz playback resume")
 
     start = time.monotonic()
