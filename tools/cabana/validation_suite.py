@@ -20,6 +20,7 @@ from smoke_test import (
   ensure_cabana_built,
   find_free_display,
   find_window_id,
+  image_looks_painted,
   load_stats,
   make_diff_image,
   terminate_process,
@@ -436,7 +437,7 @@ class CabanaSession:
     diff_path = self.session_dir / f"{name}.diff.png"
     baseline_dir = self.suite.baseline_dir / self.name
     baseline_path = baseline_dir / f"{name}.png"
-    if use_ready and self.ready_png.exists():
+    if use_ready and self.ready_png.exists() and image_looks_painted(self.ready_png):
       shutil.copy2(self.ready_png, actual_path)
     else:
       capture_steady_window(self.window_id, actual_path, self.display, timeout=1.5, interval=0.1)

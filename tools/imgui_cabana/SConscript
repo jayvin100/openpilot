@@ -7,10 +7,9 @@ Import('env', 'arch')
 imgui_env = env.Clone()
 imgui_env['CPPPATH'] += [
   imgui.INCLUDE_DIR,
-  '#third_party/raylib/include',
+  '#tools/imgui_cabana/backends',
   '#third_party/json11',
 ]
-imgui_env['LIBPATH'] += [f'#third_party/raylib/{arch}/']
 imgui_env['CXXFLAGS'] += ['-Wno-unused-variable']
 
 imgui_srcs = [
@@ -20,13 +19,13 @@ imgui_srcs = [
     'imgui_draw.cpp',
     'imgui_tables.cpp',
     'imgui_widgets.cpp',
-    'implot.cpp',
-    'implot_items.cpp',
-    'rlImGui.cpp',
+    'imgui_impl_opengl3.cpp',
   ]
 ]
 
-libs = ['raylib']
+imgui_srcs += ['backends/imgui_impl_glfw.cpp']
+
+libs = ['/lib/x86_64-linux-gnu/libglfw.so']
 frameworks = []
 if arch == 'Darwin':
   frameworks += ['OpenGL', 'Cocoa', 'IOKit', 'CoreVideo']

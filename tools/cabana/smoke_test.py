@@ -149,6 +149,11 @@ def load_image_array(path):
   return np.asarray(Image.open(path).convert("RGB"), dtype=np.uint8)
 
 
+def image_looks_painted(path, *, mean_threshold=10.0, stddev_threshold=5.0):
+  arr = load_image_array(path)
+  return float(arr.mean()) > mean_threshold and float(arr.std()) > stddev_threshold
+
+
 def changed_pixels_pct(prev_arr, curr_arr, threshold):
   if prev_arr.shape != curr_arr.shape:
     return 100.0
@@ -359,6 +364,11 @@ def main():
     except TimeoutError:
       window_id = find_window_id(cabana_proc.pid, display, timeout=5.0)
       capture_steady_window(window_id, actual_png, display)
+    else:
+      if not image_looks_painted(actual_png):
+        if window_id is None:
+          window_id = find_window_id(cabana_proc.pid, display, timeout=5.0)
+        capture_steady_window(window_id, actual_png, display)
 
     if args.update_baseline or not baseline_png.exists():
       shutil.copy2(actual_png, baseline_png)
