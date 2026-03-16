@@ -25,10 +25,21 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_opengl3_loader.h"
 #include "json11.hpp"
+#include "tools/imgui_cabana/chart/chartswidget.h"
+#include "tools/imgui_cabana/detailwidget.h"
+#include "tools/imgui_cabana/messageswidget.h"
+#include "tools/imgui_cabana/streams/replaystream.h"
+#include "tools/imgui_cabana/ui_types.h"
+#include "tools/imgui_cabana/videowidget.h"
 
 namespace {
 
 using imgui_cabana::Args;
+using imgui_cabana::DialogState;
+using imgui_cabana::MessageData;
+using imgui_cabana::Rect;
+using imgui_cabana::RowSnapshot;
+using imgui_cabana::SignalData;
 
 constexpr const char *kDefaultDemoRoute = "5beb9b58bd12b691/0000010a--a51155e496/0";
 constexpr const char *kDefaultRouteLabel = "5beb9b58bd12b691|0000010a--a51155e496";
@@ -45,13 +56,6 @@ constexpr float kChartsToolbarHeight = 33.0f;
 constexpr float kStatusBarHeight = 23.0f;
 constexpr float kDockTitleGap = 20.0f;
 constexpr float kDockInnerMargin = 1.0f;
-
-struct Rect {
-  float x = 0.0f;
-  float y = 0.0f;
-  float w = 0.0f;
-  float h = 0.0f;
-};
 
 struct WidgetSnapshot {
   std::string class_name = "ImGuiWidget";
@@ -74,39 +78,6 @@ struct ActionSnapshot {
   bool checkable = false;
   bool checked = false;
   std::string shortcut;
-};
-
-struct SignalData {
-  std::string name;
-  std::string value;
-  bool plotted = false;
-};
-
-struct MessageData {
-  int address = 0;
-  int source = 0;
-  std::string name;
-  std::string node;
-  std::vector<SignalData> signals;
-
-  std::string messageId() const {
-    return std::to_string(source) + ":" + std::to_string(address);
-  }
-};
-
-struct DialogState {
-  std::string title;
-  std::string text;
-  std::string detailed_text;
-  Rect rect;
-  bool modal = true;
-  bool visible = false;
-};
-
-struct RowSnapshot {
-  Rect rect;
-  Rect plot_rect;
-  Rect remove_rect;
 };
 
 struct Metrics {
@@ -184,10 +155,32 @@ std::filesystem::path configDir() {
 }
 
 std::vector<MessageData> defaultMessages() {
+  auto make_message = [](int address, int source, std::string name, std::string node, std::vector<uint8_t> bytes) {
+    MessageData message;
+    message.address = address;
+    message.source = source;
+    message.name = std::move(name);
+    message.node = std::move(node);
+    message.bytes = bytes;
+    message.count = 1;
+    message.freq = 1.0;
+    message.samples.push_back({0.0, bytes});
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+      SignalData signal;
+      signal.name = "byte" + std::to_string(i);
+      char value[32];
+      std::snprintf(value, sizeof(value), "0x%02X (%u)", bytes[i], static_cast<unsigned>(bytes[i]));
+      signal.value = value;
+      signal.byte_index = static_cast<int>(i);
+      message.signals.push_back(std::move(signal));
+    }
+    return message;
+  };
+
   return {
-      {186, 0, "Steering_Data", "IPMA", {{"steer_angle", "1.24 deg", false}, {"driver_torque", "0.11 Nm", false}, {"eps_torque", "0.09 Nm", false}}},
-      {187, 0, "Brake_Data", "ABS", {{"brake_pressure", "18.6 bar", false}, {"pedal_pressed", "true", false}, {"vehicle_speed", "12.2 m/s", false}}},
-      {390, 0, "Lane_UI", "IPMA", {{"lane_left", "tracked", false}, {"lane_right", "tracked", false}, {"lka_icon", "active", false}}},
+      make_message(186, 0, "Steering_Data", "IPMA", {0x11, 0x34, 0x05, 0x18, 0x00, 0x7A, 0x00, 0x00}),
+      make_message(187, 0, "Brake_Data", "ABS", {0x1E, 0x10, 0x01, 0x6B, 0x00, 0x00, 0x00, 0x00}),
+      make_message(390, 0, "Lane_UI", "IPMA", {0x01, 0x01, 0x02, 0x55, 0x00, 0x00, 0x00, 0x00}),
   };
 }
 
@@ -260,8 +253,7 @@ class App {
     metrics_.route_load_start_ns = metrics_.process_start_ns;
     route_arg_ = args_.route.value_or(args_.demo ? kDefaultDemoRoute : kDefaultDemoRoute);
     route_name_ = routeLabel(route_arg_);
-    messages_ = defaultMessages();
-    selected_message_index_ = 0;
+    loadRouteData();
     applyDbcFileOverrides();
     updateSignalPlotState();
     metrics_.route_load_done_ns = nowNs();
@@ -278,6 +270,36 @@ class App {
   void saveSmokeScreenshot() const {
     // The external harness already falls back to X11 capture when no app screenshot is produced.
     // Keeping screenshots external avoids backend-specific image export plumbing here.
+  }
+
+  void loadRouteData() {
+    setenv("COMMA_CACHE", "/tmp/comma_download_cache", 1);
+
+    auto route = imgui_cabana::loadReplayRoute(route_arg_, args_.data_dir);
+    if (route.success) {
+      route_load_success_ = true;
+      route_name_ = route.route_name.empty() ? routeLabel(route_arg_) : route.route_name;
+      if (!route.fingerprint.empty()) fingerprint_ = route.fingerprint;
+      messages_ = std::move(route.messages);
+      min_sec_ = route.min_sec;
+      max_sec_ = std::max(route.max_sec, route.min_sec + 1.0);
+      current_sec_ = min_sec_;
+      paused_ = true;
+      selected_message_index_ = 0;
+      detail_visible_ = !messages_.empty();
+      syncMessagesToCurrentTime();
+      return;
+    }
+
+    route_load_success_ = false;
+    route_load_error_ = route.error;
+    messages_ = defaultMessages();
+    selected_message_index_ = 0;
+    detail_visible_ = true;
+  }
+
+  void syncMessagesToCurrentTime() {
+    imgui_cabana::syncReplayMessages(messages_, current_sec_);
   }
 
   void initWindow() {
@@ -473,6 +495,7 @@ class App {
     if (ImGui::IsKeyPressed(ImGuiKey_F10)) {
       current_sec_ = min_sec_ + (max_sec_ - min_sec_) * 0.6;
       paused_ = true;
+      syncMessagesToCurrentTime();
       return;
     }
 
@@ -496,10 +519,12 @@ class App {
     if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
       current_sec_ = std::max(min_sec_, current_sec_ - 1.0f);
       paused_ = true;
+      syncMessagesToCurrentTime();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
       current_sec_ = std::min(max_sec_, current_sec_ + 1.0f);
       paused_ = true;
+      syncMessagesToCurrentTime();
     }
   }
 
@@ -508,31 +533,7 @@ class App {
       current_sec_ = std::min(max_sec_, current_sec_ + frame_delta_sec_);
       if (current_sec_ >= max_sec_) paused_ = true;
     }
-    for (auto &message : messages_) {
-      for (auto &signal : message.signals) {
-        signal.value = animatedValue(signal.name);
-      }
-    }
-  }
-
-  std::string animatedValue(const std::string &name) const {
-    const double t = current_sec_;
-    if (name == "steer_angle") return fmtFloat(std::sin(t) * 1.8, " deg");
-    if (name == "driver_torque") return fmtFloat(0.12 + std::cos(t * 0.7) * 0.08, " Nm");
-    if (name == "eps_torque") return fmtFloat(0.09 + std::sin(t * 0.9) * 0.07, " Nm");
-    if (name == "brake_pressure") return fmtFloat(17.5 + std::sin(t * 0.4) * 2.5, " bar");
-    if (name == "pedal_pressed") return (std::fmod(t, 4.0) > 2.0) ? "true" : "false";
-    if (name == "vehicle_speed") return fmtFloat(11.8 + std::sin(t * 0.25) * 0.7, " m/s");
-    if (name == "lane_left") return (std::fmod(t, 5.0) > 1.0) ? "tracked" : "searching";
-    if (name == "lane_right") return (std::fmod(t, 6.0) > 1.0) ? "tracked" : "searching";
-    if (name == "lka_icon") return paused_ ? "standby" : "active";
-    return "0";
-  }
-
-  static std::string fmtFloat(double value, const char *suffix) {
-    char buffer[64];
-    std::snprintf(buffer, sizeof(buffer), "%.2f%s", value, suffix);
-    return buffer;
+    syncMessagesToCurrentTime();
   }
 
   int windowWidth() const {
@@ -630,7 +631,29 @@ class App {
     drawDockTitleBar("MESSAGES");
     ImGui::BeginChild("MessagesWidget", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_NoScrollbar);
     captureWindowRect("MessagesWidget", "QWidget");
-    drawMessagesPane();
+    imgui_cabana::MessagesWidgetModel messages_model = {
+        .messages = &messages_,
+        .selected_message_index = &selected_message_index_,
+        .detail_visible = &detail_visible_,
+        .message_filter = &message_filter_,
+        .message_filter_buffer = &message_filter_buffer_,
+        .message_bus_filter_buffer = &message_bus_filter_buffer_,
+        .message_id_filter_buffer = &message_id_filter_buffer_,
+        .message_node_filter_buffer = &message_node_filter_buffer_,
+        .message_freq_filter_buffer = &message_freq_filter_buffer_,
+        .message_count_filter_buffer = &message_count_filter_buffer_,
+        .message_bytes_filter_buffer = &message_bytes_filter_buffer_,
+        .focus_message_filter = &focus_message_filter_,
+        .row_snapshots = &row_snapshots_,
+    };
+    imgui_cabana::WidgetCallbacks widget_callbacks = {
+        .capture_window_rect = [this](const std::string &name, const std::string &class_name) { captureWindowRect(name, class_name); },
+        .capture_item = [this](const std::string &name, const std::string &class_name, std::optional<std::string> text, std::optional<std::string> placeholder) {
+          captureItem(name, class_name, std::move(text), std::move(placeholder));
+        },
+        .current_item_rect = [this]() { return currentItemRect(); },
+    };
+    imgui_cabana::drawMessagesPane(messages_model, widget_callbacks);
     ImGui::EndChild();
     ImGui::EndChild();
 
@@ -639,7 +662,24 @@ class App {
     ImGui::BeginChild("CenterWidget", ImVec2(center_width, total_height), false);
     captureWindowRect("CenterWidget", "QWidget");
     if (showDetailPane()) {
-      drawDetailPane();
+      imgui_cabana::SignalViewModel signal_model = {
+          .messages = &messages_,
+          .selected_message_index = &selected_message_index_,
+          .signal_filter = &signal_filter_,
+          .signal_filter_buffer = &signal_filter_buffer_,
+          .focus_signal_filter = &focus_signal_filter_,
+          .signal_snapshots = &signal_snapshots_,
+      };
+      imgui_cabana::DetailWidgetModel detail_model = {
+          .messages = &messages_,
+          .selected_message_index = &selected_message_index_,
+          .signal_view = signal_model,
+      };
+      imgui_cabana::DetailWidgetCallbacks detail_callbacks = {
+          .widget = widget_callbacks,
+          .open_edit_dialog = [this]() { openEditDialog(); },
+      };
+      imgui_cabana::drawDetailPane(detail_model, detail_callbacks);
     } else {
       drawWelcomePane();
     }
@@ -652,11 +692,34 @@ class App {
     drawDockTitleBar("ROUTE: " + route_name_ + "  FINGERPRINT: " + fingerprint_);
     ImGui::BeginChild("VideoWidget", ImVec2(0.0f, kVideoHeight), false);
     captureWindowRect("VideoWidget", "QWidget");
-    drawVideoPane();
+    imgui_cabana::VideoWidgetModel video_model = {
+        .playback_toolbar =
+            {
+                .current_sec = &current_sec_,
+                .min_sec = &min_sec_,
+                .max_sec = &max_sec_,
+                .paused = &paused_,
+            },
+        .playback_slider_rect = &playback_slider_rect_,
+    };
+    imgui_cabana::drawVideoPane(video_model, widget_callbacks);
     ImGui::EndChild();
     ImGui::BeginChild("ChartsWidget", ImVec2(0.0f, 0.0f), false);
     captureWindowRect("ChartsWidget", "QWidget");
-    drawChartsPane();
+    imgui_cabana::ChartsWidgetModel charts_model = {
+        .messages = &messages_,
+        .current_sec = &current_sec_,
+        .min_sec = &min_sec_,
+        .max_sec = &max_sec_,
+        .time_range = &time_range_,
+        .drag_start_x = &drag_start_x_,
+        .chart_rects = &chart_rects_,
+    };
+    imgui_cabana::ChartsWidgetCallbacks charts_callbacks = {
+        .widget = widget_callbacks,
+        .clear_all_charts = [this]() { clearAllCharts(); },
+    };
+    imgui_cabana::drawChartsPane(charts_model, charts_callbacks);
     ImGui::EndChild();
     ImGui::EndChild();
 
@@ -721,307 +784,6 @@ class App {
     ImGui::BeginDisabled();
     ImGui::Button(key, ImVec2(button_w, 24.0f));
     ImGui::EndDisabled();
-  }
-
-  std::string formatPlaybackTime(double sec, bool with_millis) const {
-    const int total_minutes = static_cast<int>(sec) / 60;
-    const int total_seconds = static_cast<int>(sec) % 60;
-    if (!with_millis) {
-      char buffer[32];
-      std::snprintf(buffer, sizeof(buffer), "%02d:%02d", total_minutes, total_seconds);
-      return buffer;
-    }
-    const int millis = static_cast<int>(std::round((sec - std::floor(sec)) * 1000.0));
-    char buffer[32];
-    std::snprintf(buffer, sizeof(buffer), "%02d:%02d.%03d", total_minutes, total_seconds, millis);
-    return buffer;
-  }
-
-  void drawPlaybackToolbar() {
-    ImGui::BeginChild("PlaybackToolbar", ImVec2(0.0f, kPlaybackToolbarHeight), false);
-    captureWindowRect("PlaybackToolbar", "QWidget");
-
-    if (ImGui::Button("<<", ImVec2(26.0f, 23.0f))) current_sec_ = std::max(min_sec_, current_sec_ - 1.0f);
-    captureItem("PlaybackSeekBackwardButton", "QToolButton", "<<");
-    ImGui::SameLine(0.0f, 4.0f);
-
-    if (ImGui::Button(paused_ ? ">" : "||", ImVec2(26.0f, 23.0f))) paused_ = !paused_;
-    captureItem("PlaybackPlayToggleButton", "QToolButton", std::string(paused_ ? ">" : "||"));
-    ImGui::SameLine(0.0f, 4.0f);
-
-    if (ImGui::Button(">>", ImVec2(26.0f, 23.0f))) current_sec_ = std::min(max_sec_, current_sec_ + 1.0f);
-    captureItem("PlaybackSeekForwardButton", "QToolButton", ">>");
-    ImGui::SameLine(0.0f, 4.0f);
-
-    std::string time_display = formatPlaybackTime(current_sec_, true) + " / " + formatPlaybackTime(max_sec_, false);
-    ImGui::Button(time_display.c_str(), ImVec2(118.0f, 23.0f));
-    captureItem("PlaybackTimeDisplayButton", "QToolButton", time_display);
-
-    const float speed_width = 52.0f;
-    float right_x = ImGui::GetWindowContentRegionMax().x - speed_width;
-    if (right_x > ImGui::GetCursorPosX()) {
-      ImGui::SetCursorPosX(right_x);
-    }
-    ImGui::Button("1x  ", ImVec2(speed_width, 23.0f));
-    captureItem("PlaybackSpeedButton", "QToolButton", "1x  ");
-    ImGui::EndChild();
-  }
-
-  void drawMessagesFilter(const char *id, char *buffer, size_t size, const char *hint, float width, bool interactive = false) {
-    ImGui::SetNextItemWidth(width);
-    if (interactive && focus_message_filter_) {
-      ImGui::SetKeyboardFocusHere();
-      focus_message_filter_ = false;
-    }
-    if (interactive) {
-      if (ImGui::InputTextWithHint(id, hint, buffer, size)) {
-        message_filter_ = std::string(buffer);
-        clampSelection();
-      }
-    } else {
-      ImGui::InputTextWithHint(id, hint, buffer, size, ImGuiInputTextFlags_ReadOnly);
-    }
-  }
-
-  void drawMessagesPane() {
-    ImGui::BeginChild("MessagesToolbar", ImVec2(0.0f, kMessagesToolbarHeight), false);
-    captureWindowRect("MessagesToolbar", "QWidget");
-    ImGui::SetCursorPos(ImVec2(0.0f, 9.0f));
-    ImGui::Button("Suppress Highlighted", ImVec2(140.0f, 26.0f));
-    captureItem("SuppressHighlightedButton", "QPushButton", "Suppress Highlighted");
-    ImGui::SameLine(146.0f, 0.0f);
-    ImGui::Button("Clear", ImVec2(80.0f, 26.0f));
-    captureItem("SuppressClearButton", "QPushButton", "Clear");
-    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowSize().x - 24.0f, 10.0f));
-    ImGui::Button("...", ImVec2(24.0f, 23.0f));
-    captureItem("MessagesViewButton", "QToolButton", "...");
-    ImGui::EndChild();
-
-    ImGui::BeginChild("MessageHeader", ImVec2(0.0f, 49.0f), false);
-    captureWindowRect("MessageHeader", "QWidget");
-    ImGui::SetCursorPos(ImVec2(1.0f, 4.0f));
-    drawMessagesFilter("##MessagesFilterName", message_filter_buffer_.data(), message_filter_buffer_.size(), "Filter Name", 104.0f, true);
-    captureItem("MessagesFilterName", "QLineEdit", message_filter_, std::string("Filter Name"));
-    ImGui::SameLine(105.0f, 0.0f);
-    ImGui::SetNextItemWidth(104.0f);
-    ImGui::InputTextWithHint("##MessagesFilterBus", "Filter Bus", message_bus_filter_buffer_.data(), message_bus_filter_buffer_.size(), ImGuiInputTextFlags_ReadOnly);
-    captureItem("MessagesFilterBus", "QLineEdit", std::string(""), std::string("Filter Bus"));
-    ImGui::SameLine(209.0f, 0.0f);
-    ImGui::SetNextItemWidth(104.0f);
-    ImGui::InputTextWithHint("##MessagesFilterId", "Filter ID", message_id_filter_buffer_.data(), message_id_filter_buffer_.size(), ImGuiInputTextFlags_ReadOnly);
-    captureItem("MessagesFilterId", "QLineEdit", std::string(""), std::string("Filter ID"));
-    ImGui::SameLine(313.0f, 0.0f);
-    ImGui::SetNextItemWidth(104.0f);
-    ImGui::InputTextWithHint("##MessagesFilterNode", "Filter Node", message_node_filter_buffer_.data(), message_node_filter_buffer_.size(), ImGuiInputTextFlags_ReadOnly);
-    captureItem("MessagesFilterNode", "QLineEdit", std::string(""), std::string("Filter Node"));
-    ImGui::SameLine(417.0f, 0.0f);
-    ImGui::SetNextItemWidth(104.0f);
-    ImGui::InputTextWithHint("##MessagesFilterFreq", "Filter Freq", message_freq_filter_buffer_.data(), message_freq_filter_buffer_.size(), ImGuiInputTextFlags_ReadOnly);
-    captureItem("MessagesFilterFreq", "QLineEdit", std::string(""), std::string("Filter Freq"));
-    ImGui::SameLine(521.0f, 0.0f);
-    ImGui::SetNextItemWidth(104.0f);
-    ImGui::InputTextWithHint("##MessagesFilterCount", "Filter Count", message_count_filter_buffer_.data(), message_count_filter_buffer_.size(), ImGuiInputTextFlags_ReadOnly);
-    captureItem("MessagesFilterCount", "QLineEdit", std::string(""), std::string("Filter Count"));
-    ImGui::SameLine(625.0f, 0.0f);
-    ImGui::SetNextItemWidth(198.0f);
-    ImGui::InputTextWithHint("##MessagesFilterBytes", "Filter Bytes", message_bytes_filter_buffer_.data(), message_bytes_filter_buffer_.size(), ImGuiInputTextFlags_ReadOnly);
-    captureItem("MessagesFilterBytes", "QLineEdit", std::string(""), std::string("Filter Bytes"));
-    ImGui::EndChild();
-
-    ImGui::BeginChild("MessageTable", ImVec2(0.0f, 0.0f), false);
-    captureWindowRect("MessageTable", "QTableView");
-    ImGui::BeginChild("MessageTableScroll", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
-    const auto visible = filteredMessageIndices();
-    ImDrawList *draw_list = ImGui::GetWindowDrawList();
-
-    for (int index : visible) {
-      auto &message = messages_[index];
-      const bool selected = detail_visible_ && index == selected_message_index_;
-      ImGui::PushID(index);
-      ImVec2 row_min = ImGui::GetCursorScreenPos();
-      if (ImGui::Selectable("##message_row", selected, ImGuiSelectableFlags_SpanAllColumns, ImVec2(-1.0f, 25.0f))) {
-        selected_message_index_ = index;
-        detail_visible_ = true;
-      }
-      Rect row_rect = currentItemRect();
-      row_snapshots_[message.messageId()].rect = row_rect;
-      ImVec2 text_pos = ImVec2(row_min.x + 6.0f, row_min.y + 5.0f);
-      const ImU32 text_color = selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(32, 32, 32, 255);
-      draw_list->AddText(text_pos, text_color, message.name.c_str());
-      draw_list->AddText(ImVec2(row_min.x + 110.0f, row_min.y + 5.0f), text_color, std::to_string(message.source).c_str());
-      char id_buffer[16];
-      std::snprintf(id_buffer, sizeof(id_buffer), "%X", message.address);
-      draw_list->AddText(ImVec2(row_min.x + 210.0f, row_min.y + 5.0f), text_color, id_buffer);
-      draw_list->AddText(ImVec2(row_min.x + 262.0f, row_min.y + 5.0f), text_color, message.node.c_str());
-      draw_list->AddText(ImVec2(row_min.x + 325.0f, row_min.y + 5.0f), text_color, "10");
-      draw_list->AddText(ImVec2(row_min.x + 372.0f, row_min.y + 5.0f), text_color, "42");
-      draw_list->AddText(ImVec2(row_min.x + 425.0f, row_min.y + 5.0f), text_color, "00 11 22 33");
-      ImGui::PopID();
-    }
-    ImGui::EndChild();
-    ImGui::EndChild();
-  }
-
-  void drawVideoPane() {
-    const float content_width = ImGui::GetContentRegionAvail().x;
-    const float camera_height = std::max(60.0f, kVideoHeight - kPlaybackToolbarHeight - kPlaybackSliderHeight);
-
-    ImDrawList *draw_list = ImGui::GetWindowDrawList();
-    ImVec2 camera_pos = ImGui::GetCursorScreenPos();
-    ImVec2 camera_max = ImVec2(camera_pos.x + content_width, camera_pos.y + camera_height);
-    draw_list->AddRectFilled(camera_pos, camera_max, IM_COL32(40, 40, 40, 255));
-    draw_list->AddText(ImVec2(camera_pos.x + 10.0f, camera_pos.y + 10.0f), IM_COL32(220, 220, 220, 255), "roadCameraState");
-    float indicator_x = camera_pos.x + 12.0f + static_cast<float>((current_sec_ - min_sec_) / std::max(0.001, max_sec_ - min_sec_)) * (content_width - 24.0f);
-    draw_list->AddLine(ImVec2(indicator_x, camera_pos.y + 8.0f), ImVec2(indicator_x, camera_max.y - 8.0f), IM_COL32(47, 101, 202, 255), 2.0f);
-    ImGui::Dummy(ImVec2(content_width, camera_height));
-
-    ImGui::BeginChild("PlaybackSliderRegion", ImVec2(0.0f, kPlaybackSliderHeight), false);
-    ImGui::SetNextItemWidth(-1.0f);
-    float slider_sec = current_sec_;
-    if (ImGui::SliderFloat("##PlaybackSlider", &slider_sec, min_sec_, max_sec_, "")) {
-      current_sec_ = slider_sec;
-      paused_ = true;
-    }
-    captureItem("PlaybackSlider", "QSlider");
-    playback_slider_rect_ = currentItemRect();
-    ImGui::EndChild();
-
-    drawPlaybackToolbar();
-  }
-
-  void drawDetailPane() {
-    auto &message = messages_[selected_message_index_];
-    ImGui::BeginChild("DetailToolbar", ImVec2(0.0f, 33.0f), false);
-    captureWindowRect("DetailToolbar", "QWidget");
-    ImGui::SetCursorPos(ImVec2(6.0f, 6.0f));
-    std::string label = message.name + " (" + message.node + ")";
-    ImGui::TextUnformatted(label.c_str());
-    captureItem("DetailMessageLabel", "QLabel", label);
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 190.0f);
-    ImGui::TextUnformatted("Heatmap:");
-    ImGui::SameLine();
-    ImGui::RadioButton("Live", true);
-    ImGui::SameLine();
-    ImGui::RadioButton("All", false);
-    ImGui::SameLine();
-    if (ImGui::Button("Edit", ImVec2(42.0f, 22.0f))) openEditDialog();
-    captureItem("EditMessageButton", "QToolButton", "Edit");
-    ImGui::EndChild();
-
-    ImGui::BeginChild("BinaryView", ImVec2(0.0f, 170.0f), ImGuiChildFlags_Borders);
-    ImDrawList *draw_list = ImGui::GetWindowDrawList();
-    const ImVec2 origin = ImGui::GetCursorScreenPos();
-    for (int row = 0; row < 4; ++row) {
-      for (int col = 0; col < 8; ++col) {
-        ImVec2 min = ImVec2(origin.x + col * 58.0f, origin.y + row * 28.0f);
-        ImVec2 max = ImVec2(min.x + 54.0f, min.y + 24.0f);
-        draw_list->AddRectFilled(min, max, IM_COL32(250, 250, 250, 255));
-        draw_list->AddRect(min, max, IM_COL32(215, 215, 215, 255));
-      }
-    }
-    ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, 140.0f));
-    ImGui::EndChild();
-
-    ImGui::BeginChild("SignalView", ImVec2(0.0f, 0.0f), false);
-    captureWindowRect("SignalView", "QWidget");
-    ImGui::SetNextItemWidth(-1.0f);
-    if (focus_signal_filter_) {
-      ImGui::SetKeyboardFocusHere();
-      focus_signal_filter_ = false;
-    }
-    if (ImGui::InputTextWithHint("##SignalFilterEdit", "Filter signals", signal_filter_buffer_.data(), signal_filter_buffer_.size())) {
-      signal_filter_ = std::string(signal_filter_buffer_.data());
-    }
-    captureItem("SignalFilterEdit", "QLineEdit", signal_filter_, std::string("Filter signals"));
-
-    ImGui::BeginChild("SignalTree", ImVec2(0.0f, 0.0f), false);
-    captureWindowRect("SignalTree", "QTreeView");
-    for (auto &signal : message.signals) {
-      if (!signal_filter_.empty() && signal.name.find(signal_filter_) == std::string::npos) continue;
-      ImGui::PushID(signal.name.c_str());
-      ImVec2 row_min = ImGui::GetCursorScreenPos();
-      ImGui::Selectable("##signal_row", false, ImGuiSelectableFlags_SpanAllColumns, ImVec2(-1.0f, 24.0f));
-      signal_snapshots_[signal.name].rect = currentItemRect();
-      draw_list = ImGui::GetWindowDrawList();
-      draw_list->AddText(ImVec2(row_min.x + 8.0f, row_min.y + 5.0f), IM_COL32(32, 32, 32, 255), signal.name.c_str());
-      draw_list->AddText(ImVec2(row_min.x + 280.0f, row_min.y + 5.0f), IM_COL32(88, 88, 88, 255), signal.value.c_str());
-      ImGui::SetCursorScreenPos(ImVec2(row_min.x + ImGui::GetContentRegionAvail().x - 60.0f, row_min.y + 2.0f));
-      if (ImGui::SmallButton(signal.plotted ? "Plotted" : "Plot")) signal.plotted = !signal.plotted;
-      signal_snapshots_[signal.name].plot_rect = currentItemRect();
-      ImGui::PopID();
-    }
-    ImGui::EndChild();
-    ImGui::EndChild();
-  }
-
-  void drawChartsPane() {
-    ImGui::BeginChild("ChartsToolbar", ImVec2(0.0f, kChartsToolbarHeight), false);
-    captureWindowRect("ChartsToolbar", "QWidget");
-    ImGui::SetCursorPos(ImVec2(6.0f, 6.0f));
-    ImGui::TextUnformatted("Charts");
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 168.0f);
-    if (ImGui::Button("Reset Zoom", ImVec2(78.0f, 22.0f))) time_range_.reset();
-    captureItem("ChartsResetZoomButton", "QToolButton", "Reset Zoom");
-    ImGui::SameLine();
-    if (ImGui::Button("Remove All", ImVec2(84.0f, 22.0f))) clearAllCharts();
-    captureItem("ChartsRemoveAllButton", "QToolButton", "Remove All");
-    ImGui::EndChild();
-
-    const auto plotted = plottedSignalIds();
-    const float chart_height = 200.0f;
-    const ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
-    const ImVec2 canvas_size = ImVec2(ImGui::GetContentRegionAvail().x, chart_height);
-    ImGui::InvisibleButton("##ChartCanvas", canvas_size, ImGuiButtonFlags_MouseButtonLeft);
-    chart_rects_.push_back({canvas_pos.x, canvas_pos.y, canvas_size.x, canvas_size.y});
-
-    ImDrawList *draw_list = ImGui::GetWindowDrawList();
-    draw_list->AddRectFilled(canvas_pos, ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y), IM_COL32(255, 255, 255, 255));
-    draw_list->AddRect(canvas_pos, ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y), IM_COL32(188, 188, 188, 255));
-
-    if (ImGui::IsItemActivated()) drag_start_x_ = ImGui::GetIO().MousePos.x;
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-      const float end_x = ImGui::GetIO().MousePos.x;
-      if (std::fabs(end_x - drag_start_x_) > 8.0f) {
-        const float min_x = std::min(drag_start_x_, end_x);
-        const float max_x = std::max(drag_start_x_, end_x);
-        const float start_norm = std::clamp((min_x - canvas_pos.x) / std::max(1.0f, canvas_size.x), 0.0f, 1.0f);
-        const float end_norm = std::clamp((max_x - canvas_pos.x) / std::max(1.0f, canvas_size.x), 0.0f, 1.0f);
-        time_range_ = {min_sec_ + start_norm * (max_sec_ - min_sec_), min_sec_ + end_norm * (max_sec_ - min_sec_)};
-      }
-    }
-
-    for (int i = 0; i <= 4; ++i) {
-      float y = canvas_pos.y + (canvas_size.y / 4.0f) * i;
-      draw_list->AddLine(ImVec2(canvas_pos.x, y), ImVec2(canvas_pos.x + canvas_size.x, y), IM_COL32(236, 236, 236, 255));
-    }
-    for (int i = 0; i <= 6; ++i) {
-      float x = canvas_pos.x + (canvas_size.x / 6.0f) * i;
-      draw_list->AddLine(ImVec2(x, canvas_pos.y), ImVec2(x, canvas_pos.y + canvas_size.y), IM_COL32(242, 242, 242, 255));
-    }
-
-    if (plotted.empty()) {
-      draw_list->AddText(ImVec2(canvas_pos.x + 16.0f, canvas_pos.y + 16.0f), IM_COL32(120, 120, 120, 255), "Plot a signal to start charting.");
-      ImGui::Dummy(ImVec2(0.0f, 6.0f));
-      return;
-    }
-
-    const std::array<ImU32, 3> colors = {IM_COL32(47, 101, 202, 255), IM_COL32(183, 62, 62, 255), IM_COL32(30, 145, 90, 255)};
-    for (size_t s = 0; s < plotted.size(); ++s) {
-      std::vector<ImVec2> points;
-      for (int x = 0; x < static_cast<int>(canvas_size.x); x += 12) {
-        float norm = static_cast<float>(x) / std::max(1.0f, canvas_size.x - 1.0f);
-        float t = min_sec_ + norm * static_cast<float>(max_sec_ - min_sec_);
-        float y_norm = 0.5f + 0.25f * std::sin(t * (0.9f + static_cast<float>(s) * 0.4f));
-        points.push_back(ImVec2(canvas_pos.x + x, canvas_pos.y + (1.0f - y_norm) * canvas_size.y));
-      }
-      draw_list->AddPolyline(points.data(), static_cast<int>(points.size()), colors[s % colors.size()], 0, 2.0f);
-    }
-
-    float marker_x = canvas_pos.x + static_cast<float>((current_sec_ - min_sec_) / std::max(0.001, max_sec_ - min_sec_)) * canvas_size.x;
-    draw_list->AddLine(ImVec2(marker_x, canvas_pos.y), ImVec2(marker_x, canvas_pos.y + canvas_size.y), IM_COL32(35, 35, 35, 255), 2.0f);
-    ImGui::Dummy(ImVec2(0.0f, 6.0f));
   }
 
   void drawDialogs() {
@@ -1118,13 +880,7 @@ class App {
   }
 
   std::vector<std::string> plottedSignalIds() const {
-    std::vector<std::string> ids;
-    for (const auto &message : messages_) {
-      for (const auto &signal : message.signals) {
-        if (signal.plotted) ids.push_back(message.messageId() + "/" + signal.name);
-      }
-    }
-    return ids;
+    return imgui_cabana::plottedSignalIds(messages_);
   }
 
   void applyDbcFileOverrides() {
@@ -1142,10 +898,23 @@ class App {
       return;
     }
 
+    static const std::regex bo_re(R"dbc(BO_\s+(\d+)\s+([^\s:]+)\s*:\s*\d+\s+([^\s]+))dbc");
+    for (std::sregex_iterator it(dbc_contents.begin(), dbc_contents.end(), bo_re), end; it != end; ++it) {
+      const uint64_t address = std::stoull((*it)[1].str());
+      const std::string name = (*it)[2].str();
+      const std::string node = (*it)[3].str();
+      for (auto &message : messages_) {
+        if (message.address == address) {
+          message.name = name;
+          message.node = node;
+        }
+      }
+    }
+
     static const std::regex valid_name_re(R"(VALID_(\d+)_(\d+))");
     for (std::sregex_iterator it(dbc_contents.begin(), dbc_contents.end(), valid_name_re), end; it != end; ++it) {
       const int source = std::stoi((*it)[1].str());
-      const int address = std::stoi((*it)[2].str());
+      const uint64_t address = std::stoull((*it)[2].str());
       for (auto &message : messages_) {
         if (message.source == source && message.address == address) {
           message.name = (*it)[0].str();
@@ -1155,7 +924,7 @@ class App {
 
     static const std::regex comment_name_re(R"dbc(CM_\s+BO_\s+(\d+)\s+"([^"]+)")dbc");
     for (std::sregex_iterator it(dbc_contents.begin(), dbc_contents.end(), comment_name_re), end; it != end; ++it) {
-      const int address = std::stoi((*it)[1].str());
+      const uint64_t address = std::stoull((*it)[1].str());
       const std::string name = (*it)[2].str();
       for (auto &message : messages_) {
         if (message.address == address) {
@@ -1226,16 +995,22 @@ class App {
   }
 
   std::vector<int> filteredMessageIndices() const {
-    std::vector<int> indices;
-    for (size_t i = 0; i < messages_.size(); ++i) {
-      if (message_filter_.empty() || messages_[i].name.find(message_filter_) == 0) {
-        indices.push_back(static_cast<int>(i));
-      }
-    }
-    if (indices.empty()) {
-      for (size_t i = 0; i < messages_.size(); ++i) indices.push_back(static_cast<int>(i));
-    }
-    return indices;
+    const imgui_cabana::MessagesWidgetModel model = {
+        .messages = const_cast<std::vector<MessageData> *>(&messages_),
+        .selected_message_index = const_cast<int *>(&selected_message_index_),
+        .detail_visible = const_cast<bool *>(&detail_visible_),
+        .message_filter = const_cast<std::string *>(&message_filter_),
+        .message_filter_buffer = const_cast<std::array<char, 128> *>(&message_filter_buffer_),
+        .message_bus_filter_buffer = const_cast<std::array<char, 32> *>(&message_bus_filter_buffer_),
+        .message_id_filter_buffer = const_cast<std::array<char, 32> *>(&message_id_filter_buffer_),
+        .message_node_filter_buffer = const_cast<std::array<char, 32> *>(&message_node_filter_buffer_),
+        .message_freq_filter_buffer = const_cast<std::array<char, 32> *>(&message_freq_filter_buffer_),
+        .message_count_filter_buffer = const_cast<std::array<char, 32> *>(&message_count_filter_buffer_),
+        .message_bytes_filter_buffer = const_cast<std::array<char, 96> *>(&message_bytes_filter_buffer_),
+        .focus_message_filter = const_cast<bool *>(&focus_message_filter_),
+        .row_snapshots = const_cast<std::unordered_map<std::string, RowSnapshot> *>(&row_snapshots_),
+    };
+    return imgui_cabana::filteredMessageIndices(model);
   }
 
   void moveSelection(int delta) {
@@ -1257,11 +1032,22 @@ class App {
   }
 
   void clampSelection() {
-    const auto visible = filteredMessageIndices();
-    if (visible.empty()) return;
-    if (std::find(visible.begin(), visible.end(), selected_message_index_) == visible.end()) {
-      selected_message_index_ = visible.front();
-    }
+    imgui_cabana::MessagesWidgetModel model = {
+        .messages = &messages_,
+        .selected_message_index = &selected_message_index_,
+        .detail_visible = &detail_visible_,
+        .message_filter = &message_filter_,
+        .message_filter_buffer = &message_filter_buffer_,
+        .message_bus_filter_buffer = &message_bus_filter_buffer_,
+        .message_id_filter_buffer = &message_id_filter_buffer_,
+        .message_node_filter_buffer = &message_node_filter_buffer_,
+        .message_freq_filter_buffer = &message_freq_filter_buffer_,
+        .message_count_filter_buffer = &message_count_filter_buffer_,
+        .message_bytes_filter_buffer = &message_bytes_filter_buffer_,
+        .focus_message_filter = &focus_message_filter_,
+        .row_snapshots = &row_snapshots_,
+    };
+    imgui_cabana::clampSelection(model);
   }
 
   DialogState makeDialog(const std::string &title, const std::string &text, const std::string &detailed_text) const {
@@ -1313,7 +1099,7 @@ class App {
 
     json11::Json::object obj = {
         {"ready", metrics_.ready},
-        {"route_load_success", true},
+        {"route_load_success", route_load_success_},
         {"route_name", route_name_},
         {"process_start_ns", std::to_string(metrics_.process_start_ns)},
         {"route_load_start_ns", std::to_string(metrics_.route_load_start_ns)},
@@ -1550,6 +1336,7 @@ class App {
   bool paused_ = true;
   bool quit_requested_ = false;
   bool dirty_ = false;
+  bool route_load_success_ = true;
   double current_sec_ = 0.0;
   double min_sec_ = 0.0;
   double max_sec_ = 60.0;
@@ -1567,6 +1354,7 @@ class App {
   std::string smoke_stats_path_;
   std::string smoke_screenshot_path_;
   std::string validation_state_path_;
+  std::string route_load_error_;
   Rect playback_slider_rect_;
   std::unordered_map<std::string, WidgetSnapshot> widgets_;
   std::unordered_map<std::string, RowSnapshot> row_snapshots_;

@@ -2,7 +2,7 @@ import os
 
 import imgui
 
-Import('env', 'arch')
+Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal', 'replay_lib')
 
 imgui_env = env.Clone()
 imgui_env['CPPPATH'] += [
@@ -34,7 +34,18 @@ else:
 
 imgui_env.Program(
   '_imgui_cabana',
-  ['imgui_cabana.cc', 'app_state.cc', 'mainwin.cc'] + imgui_srcs,
-  LIBS=['json11'] + libs,
+  [
+    'imgui_cabana.cc',
+    'app_state.cc',
+    'mainwin.cc',
+    'messageswidget.cc',
+    'binaryview.cc',
+    'signalview.cc',
+    'detailwidget.cc',
+    'videowidget.cc',
+    'chart/chartswidget.cc',
+    'streams/replaystream.cc',
+  ] + imgui_srcs,
+  LIBS=[replay_lib, common, messaging, visionipc, cereal, 'json11', 'avformat', 'avcodec', 'swresample', 'avutil', 'x264', 'z', 'bz2', 'zstd', 'yuv', 'ncurses'] + libs,
   FRAMEWORKS=frameworks,
 )
