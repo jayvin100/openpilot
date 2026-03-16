@@ -34,7 +34,7 @@ else:
 
 imgui_env.Program(
   '_imgui_cabana',
-  ['imgui_cabana.cc'] + imgui_srcs,
+  ['imgui_cabana.cc', 'app_state.cc', 'mainwin.cc'] + imgui_srcs,
   LIBS=['json11'] + libs,
   FRAMEWORKS=frameworks,
 )
