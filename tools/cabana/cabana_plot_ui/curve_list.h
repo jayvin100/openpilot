@@ -33,6 +33,7 @@ signals:
 private:
   void addCurveToTree(const cabana::pj_engine::CurveEntry &entry);
   void applyFilter(const QString &text);
+  void onItemChanged(QTreeWidgetItem *item, int column);
 
   QLineEdit *filter_edit_ = nullptr;
   QTreeWidget *tree_widget_ = nullptr;

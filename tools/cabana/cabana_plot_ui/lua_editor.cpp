@@ -2,10 +2,7 @@
 
 #include <QDialogButtonBox>
 #include <QLabel>
-#include <QLineEdit>
 #include <QVBoxLayout>
-
-#include "QCodeEditor"
 
 namespace cabana::plot_ui {
 
@@ -24,13 +21,15 @@ LuaEditorDialog::LuaEditorDialog(QWidget *parent) : QDialog(parent) {
   layout->addWidget(linked_source_edit_);
 
   layout->addWidget(new QLabel("Global variables:"));
-  global_editor_ = new QCodeEditor(this);
+  global_editor_ = new QPlainTextEdit(this);
   global_editor_->setMinimumHeight(80);
+  global_editor_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
   layout->addWidget(global_editor_);
 
   layout->addWidget(new QLabel("Function:"));
-  function_editor_ = new QCodeEditor(this);
+  function_editor_ = new QPlainTextEdit(this);
   function_editor_->setMinimumHeight(200);
+  function_editor_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
   layout->addWidget(function_editor_);
 
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);

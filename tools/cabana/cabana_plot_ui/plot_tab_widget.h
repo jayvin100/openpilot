@@ -36,6 +36,7 @@ public:
   void redo();
   void snapshotForUndo();
   TimelineWidget *timeline() { return timeline_; }
+  cabana::pj_layout::LayoutModel layoutModel() const { return current_layout_; }
 
 signals:
   void seekRequested(double time);
@@ -43,6 +44,7 @@ signals:
   void splitRequested(int plot_index, Qt::Orientation orientation);
   void tabCreateRequested(QString name);
   void tabCloseRequested(int index);
+  void tabRenameRequested(int index, QString name);
   void zoomRangeChanged(double min, double max);
 
 protected:

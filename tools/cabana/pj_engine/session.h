@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "PlotJuggler/plotdata.h"
-#include "PlotJuggler/reactive_function.h"
 #include "PlotJuggler/transform_function.h"
 #include "plotjuggler_app/transforms/custom_function.h"
 #include "tools/cabana/pj_engine/series_snapshot.h"

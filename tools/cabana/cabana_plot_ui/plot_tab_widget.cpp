@@ -40,6 +40,9 @@ PlotTabWidget::PlotTabWidget(QWidget *parent) : QWidget(parent) {
 
   // When user switches tabs, update the newly visible plots with latest data.
   connect(tab_widget_, &QTabWidget::currentChanged, this, [this](int index) {
+    if (!current_layout_.tabbed_widgets.empty()) {
+      current_layout_.tabbed_widgets[0].current_tab_index = index;
+    }
     if (index >= 0 && index < static_cast<int>(plots_per_tab_.size()) && last_bundle_) {
       for (auto *pc : plots_per_tab_[index]) {
         pc->updateSnapshots(*last_bundle_);
@@ -62,7 +65,7 @@ bool PlotTabWidget::eventFilter(QObject *obj, QEvent *event) {
       QString name = QInputDialog::getText(this, "Rename Tab", "Tab name:",
                                            QLineEdit::Normal, tab_widget_->tabText(idx), &ok);
       if (ok && !name.isEmpty()) {
-        tab_widget_->setTabText(idx, name);
+        emit tabRenameRequested(idx, name);
       }
       return true;
     }
@@ -192,7 +195,7 @@ void PlotTabWidget::snapshotForUndo() {
 }
 
 void PlotTabWidget::undo() {
-  if (undo_stack_.size() <= 1) return;
+  if (undo_stack_.empty()) return;
   redo_stack_.push_back(current_layout_);
   current_layout_ = undo_stack_.back();
   undo_stack_.pop_back();

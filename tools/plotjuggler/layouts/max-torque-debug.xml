@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='UTF-8'?>
+<?xml version='1.0' encoding='utf-8'?>
 <root>
  <tabbed_widget name="Main Window" parent="main_window">
   <Tab containers="1" tab_name="tab1">
@@ -6,34 +6,34 @@
     <DockSplitter orientation="-" count="4" sizes="0.249724;0.250829;0.249724;0.249724">
      <DockArea name="...">
       <plot flip_y="false" style="Lines" flip_x="false" mode="TimeSeries">
-       <range left="0.000450" top="6.050533" right="2483.624998" bottom="-7.599037"/>
-       <limitY/>
-       <curve color="#1ac938" name="Actual lateral accel (roll compensated)"/>
-       <curve color="#ff7f0e" name="Desired lateral accel (roll compensated)"/>
+       <range left="0.000450" top="6.050533" right="2483.624998" bottom="-7.599037" />
+       <limitY />
+       <curve color="#1ac938" name="Actual lateral accel (roll compensated)" />
+       <curve color="#ff7f0e" name="Desired lateral accel (roll compensated)" />
       </plot>
      </DockArea>
      <DockArea name="...">
       <plot flip_y="false" style="Lines" flip_x="false" mode="TimeSeries">
-       <range left="0.000450" top="5.384416" right="2483.624998" bottom="-7.503945"/>
-       <limitY/>
-       <curve color="#1ac938" name="roll compensated lateral acceleration"/>
+       <range left="0.000450" top="5.384416" right="2483.624998" bottom="-7.503945" />
+       <limitY />
+       <curve color="#1ac938" name="roll compensated lateral acceleration" />
       </plot>
      </DockArea>
      <DockArea name="...">
       <plot flip_y="false" style="Lines" flip_x="false" mode="TimeSeries">
-       <range left="0.000450" top="1.050000" right="2483.624998" bottom="-1.050000"/>
-       <limitY/>
-       <curve color="#0097ff" name="/carState/steeringPressed"/>
-       <curve color="#d62728" name="/carOutput/actuatorsOutput/torque"/>
+       <range left="0.000450" top="1.050000" right="2483.624998" bottom="-1.050000" />
+       <limitY />
+       <curve color="#0097ff" name="/carState/steeringPressed" />
+       <curve color="#d62728" name="/carOutput/actuatorsOutput/torque" />
       </plot>
      </DockArea>
      <DockArea name="...">
       <plot flip_y="false" style="Lines" flip_x="false" mode="TimeSeries">
-       <range left="0.000450" top="80.762969" right="2483.624998" bottom="-2.181837"/>
-       <limitY/>
+       <range left="0.000450" top="80.762969" right="2483.624998" bottom="-2.181837" />
+       <limitY />
        <curve color="#f14cc1" name="/carState/vEgo">
         <transform alias="/carState/vEgo[Scale/Offset]" name="Scale/Offset">
-         <options value_offset="0" time_offset="0" value_scale="2.23694"/>
+         <options value_offset="0" time_offset="0" value_scale="2.23694" />
         </transform>
        </curve>
       </plot>
@@ -41,23 +41,22 @@
     </DockSplitter>
    </Container>
   </Tab>
-  <currentTabIndex index="0"/>
+  <currentTabIndex index="0" />
  </tabbed_widget>
- <use_relative_time_offset enabled="1"/>
- <!-- - - - - - - - - - - - - - - -->
- <!-- - - - - - - - - - - - - - - -->
+ <use_relative_time_offset enabled="1" />
+ 
+ 
  <Plugins>
-  <plugin ID="DataLoad Rlog"/>
-  <plugin ID="Cereal Subscriber"/>
+  <plugin ID="DataLoad Rlog" />
+  <plugin ID="Cereal Subscriber" />
  </Plugins>
- <!-- - - - - - - - - - - - - - - -->
- <!-- - - - - - - - - - - - - - - -->
+ 
+ 
  <customMathEquations>
   <snippet name="roll compensated lateral acceleration">
-   <global></global>
-   <function>if (v3 == 0 and v4 == 1) then
-  return  (value * v1 ^ 2) - (v2 * 9.81)
-end
+   <global />
+   <function>if v3 == 0 and v4 == 1:
+  return  (value * v1 ** 2) - (v2 * 9.81)
 return 0</function>
    <linked_source>/controlsState/curvature</linked_source>
    <additional_sources>
@@ -68,8 +67,8 @@ return 0</function>
    </additional_sources>
   </snippet>
   <snippet name="Desired lateral accel (roll compensated)">
-   <global></global>
-   <function>return (value * v1 ^ 2) - (v2 * 9.81)</function>
+   <global />
+   <function>return (value * v1 ** 2) - (v2 * 9.81)</function>
    <linked_source>/controlsState/desiredCurvature</linked_source>
    <additional_sources>
     <v1>/carState/vEgo</v1>
@@ -77,8 +76,8 @@ return 0</function>
    </additional_sources>
   </snippet>
   <snippet name="Actual lateral accel (roll compensated)">
-   <global></global>
-   <function>return (value * v1 ^ 2) - (v2 * 9.81)</function>
+   <global />
+   <function>return (value * v1 ** 2) - (v2 * 9.81)</function>
    <linked_source>/controlsState/curvature</linked_source>
    <additional_sources>
     <v1>/carState/vEgo</v1>
@@ -86,7 +85,6 @@ return 0</function>
    </additional_sources>
   </snippet>
  </customMathEquations>
- <snippets/>
- <!-- - - - - - - - - - - - - - - -->
+ <snippets />
+ 
 </root>
-

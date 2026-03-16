@@ -4,7 +4,6 @@
 #include <QFile>
 #include <QMessageBox>
 #include <QElapsedTimer>
-#include "lua_custom_function.h"
 
 CustomFunction::CustomFunction(SnippetData snippet)
 {

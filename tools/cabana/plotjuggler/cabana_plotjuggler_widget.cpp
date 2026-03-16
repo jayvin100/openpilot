@@ -36,7 +36,6 @@ static void initPlotJugglerResources() {
   static bool initialized = false;
   if (initialized) return;
   Q_INIT_RESOURCE(resource);
-  Q_INIT_RESOURCE(qcodeeditor_resources);
   initialized = true;
 }
 
@@ -189,13 +188,18 @@ public:
 
     // Rebuild UI when Engine mutates the layout (tab create/remove, etc.).
     QObject::connect(engine_, &cabana::pj_engine::Engine::layoutChanged,
-                     plot_surface_, &cabana::plot_ui::PlotTabWidget::rebuildFromLayout);
+                     parent, [this](const cabana::pj_layout::LayoutModel &updated_layout) {
+      cached_layout_ = updated_layout;
+      plot_surface_->rebuildFromLayout(updated_layout);
+    });
 
     // Tab create/close → Engine.
     QObject::connect(plot_surface_, &cabana::plot_ui::PlotTabWidget::tabCreateRequested,
                      engine_, &cabana::pj_engine::Engine::createTab);
     QObject::connect(plot_surface_, &cabana::plot_ui::PlotTabWidget::tabCloseRequested,
                      engine_, &cabana::pj_engine::Engine::removeTab);
+    QObject::connect(plot_surface_, &cabana::plot_ui::PlotTabWidget::tabRenameRequested,
+                     engine_, &cabana::pj_engine::Engine::renameTab);
 
     // Split plot → Engine.
     QObject::connect(plot_surface_, &cabana::plot_ui::PlotTabWidget::splitRequested,
@@ -244,9 +248,19 @@ public:
 
     // Undo/Redo.
     QObject::connect(toolbar_, &cabana::plot_ui::PlotToolbar::undoRequested,
-                     plot_surface_, &cabana::plot_ui::PlotTabWidget::undo);
+                     parent, [this]() {
+      plot_surface_->undo();
+      cached_layout_ = plot_surface_->layoutModel();
+      QMetaObject::invokeMethod(engine_, "loadLayout", Qt::QueuedConnection,
+                                Q_ARG(cabana::pj_layout::LayoutModel, cached_layout_));
+    });
     QObject::connect(toolbar_, &cabana::plot_ui::PlotToolbar::redoRequested,
-                     plot_surface_, &cabana::plot_ui::PlotTabWidget::redo);
+                     parent, [this]() {
+      plot_surface_->redo();
+      cached_layout_ = plot_surface_->layoutModel();
+      QMetaObject::invokeMethod(engine_, "loadLayout", Qt::QueuedConnection,
+                                Q_ARG(cabana::pj_layout::LayoutModel, cached_layout_));
+    });
 
     // Time offset toggle.
     QObject::connect(toolbar_, &cabana::plot_ui::PlotToolbar::timeOffsetToggled,
@@ -255,14 +269,14 @@ public:
     engine_thread_->start();
 
     // Update curve list values at ~30fps (only visible items are updated).
-    auto *value_timer = new QTimer(parent);
-    value_timer->setInterval(33);
-    QObject::connect(value_timer, &QTimer::timeout, parent, [this]() {
+    value_timer_ = new QTimer(parent);
+    value_timer_->setInterval(33);
+    QObject::connect(value_timer_, &QTimer::timeout, parent, [this]() {
       if (last_bundle_) {
         curve_list_->updateValues(*last_bundle_, last_bundle_->tracker_time);
       }
     });
-    value_timer->start();
+    value_timer_->start();
 
     if (!dbc_name.isEmpty()) {
       qputenv("DBC_NAME", dbc_name.toUtf8());
@@ -279,6 +293,10 @@ public:
   ~Impl() {
     // Disconnect all signals first to prevent callbacks during destruction.
     QObject::disconnect(engine_, nullptr, nullptr, nullptr);
+    if (value_timer_) {
+      value_timer_->stop();
+      value_timer_->disconnect();
+    }
     // Stop the engine thread — quit() posts an exit event, wait() blocks until done.
     engine_thread_->quit();
     engine_thread_->wait();
@@ -357,6 +375,7 @@ public:
   cabana::plot_ui::CurveList *curve_list_ = nullptr;
   cabana::pj_engine::Engine *engine_ = nullptr;
   QThread *engine_thread_ = nullptr;
+  QTimer *value_timer_ = nullptr;
   cabana::pj_engine::PlotSnapshotBundlePtr last_bundle_;
   cabana::pj_layout::LayoutModel cached_layout_;  // UI-thread copy for safe reads
   double route_start_sec_ = 0.0;
@@ -421,8 +440,7 @@ void CabanaPlotJugglerWidget::setPlaybackPaused(bool paused) {
 
 void CabanaPlotJugglerWidget::saveLayoutToFile(const QString &path) {
   if (path.isEmpty()) return;
-  // Use the UI-thread cached layout — no cross-thread access needed.
-  QString xml = cabana::pj_layout::ToXmlString(impl_->cached_layout_, 1);
+  QString xml = cabana::pj_layout::ToXmlString(impl_->plot_surface_->layoutModel(), 1);
   QFile file(path);
   if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
     file.write(xml.toUtf8());

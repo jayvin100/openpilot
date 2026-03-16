@@ -136,10 +136,23 @@ QXYSeries *PjChartView::createSeries(QColor color) {
 
 void PjChartView::updateSnapshots(const cabana::pj_engine::PlotSnapshotBundle &bundle) {
   bool any_updated = false;
+  bool visibility_changed = false;
 
   for (auto &ci : curves_) {
     auto it = bundle.snapshots.find(ci.name);
-    if (it == bundle.snapshots.end() || !it->second) continue;
+    if (it == bundle.snapshots.end() || !it->second) {
+      if (ci.series->isVisible()) {
+        ci.series->setVisible(false);
+        visibility_changed = true;
+      }
+      continue;
+    }
+
+    if (!ci.series->isVisible()) {
+      ci.series->setVisible(true);
+      visibility_changed = true;
+    }
+
     const auto &pts = it->second->points;
     if (ci.vals.size() == pts.size()) continue;  // no new data
 
@@ -152,7 +165,7 @@ void PjChartView::updateSnapshots(const cabana::pj_engine::PlotSnapshotBundle &b
     any_updated = true;
   }
 
-  if (any_updated) {
+  if (any_updated || visibility_changed) {
     // Auto-scale X axis to fit all data.
     double min_x = std::numeric_limits<double>::max();
     double max_x = std::numeric_limits<double>::lowest();

@@ -16,7 +16,8 @@ ReplayStream::ReplayStream(QObject *parent) : AbstractStream(parent) {
 
   // TODO: Remove when OpenpilotPrefix supports ZMQ
 #ifndef __APPLE__
-  op_prefix = std::make_unique<OpenpilotPrefix>();
+  const char *existing_prefix = getenv("OPENPILOT_PREFIX");
+  op_prefix = std::make_unique<OpenpilotPrefix>(existing_prefix ? existing_prefix : "");
 #endif
 
   QObject::connect(&settings, &Settings::changed, this, [this]() {

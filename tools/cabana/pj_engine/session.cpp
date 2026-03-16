@@ -269,32 +269,9 @@ std::vector<std::string> PlotJugglerSession::deleteCurvesWithDependencies(
   return {to_be_deleted.begin(), to_be_deleted.end()};
 }
 
-ReactiveUpdate PlotJugglerSession::updateReactiveTransforms(double tracker_time) {
-  ReactiveUpdate update;
-  auto existing_names = plot_data_.getAllNames();
-
-  for (auto &[_, transform] : transforms_) {
-    if (auto reactive_function = std::dynamic_pointer_cast<PJ::ReactiveLuaFunction>(transform)) {
-      reactive_function->setTimeTracker(tracker_time);
-      reactive_function->calculate();
-
-      for (const auto &curve_name : reactive_function->createdCurves()) {
-        if (existing_names.insert(curve_name).second) {
-          update.added_curves.push_back(curve_name);
-        }
-        update.updated_curves.insert(curve_name);
-      }
-    }
-  }
-
-  std::vector<std::string> updated_names;
-  updated_names.reserve(update.updated_curves.size());
-  for (const auto &curve_name : update.updated_curves) {
-    updated_names.push_back(curve_name);
-  }
-  refreshSnapshotsForCurveNames(updated_names);
-
-  return update;
+ReactiveUpdate PlotJugglerSession::updateReactiveTransforms(double) {
+  // Reactive Lua transforms removed — custom math uses Python batch evaluation.
+  return {};
 }
 
 std::vector<std::string> PlotJugglerSession::updateDerivedTransforms() {
@@ -310,9 +287,7 @@ std::vector<std::string> PlotJugglerSession::updateDerivedTransforms() {
             });
 
   for (auto *function : ordered_transforms) {
-    if (dynamic_cast<PJ::ReactiveLuaFunction *>(function) == nullptr) {
-      function->calculate();
-    }
+    function->calculate();
   }
   refreshSnapshotsForTransformOutputs();
   std::vector<std::string> updated_curve_names;

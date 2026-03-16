@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <exception>
 
-#include "plotjuggler_app/transforms/lua_custom_function.h"
+#include "tools/cabana/pj_engine/py_transform.h"
 
 namespace cabana::pj_engine {
 
@@ -73,6 +73,7 @@ void Engine::loadLayout(cabana::pj_layout::LayoutModel layout) {
   layout_ = std::move(layout);
   setupCustomMath();
   emit layoutChanged(layout_);
+  emitSnapshots();
 }
 
 void Engine::setupCustomMath() {
@@ -89,7 +90,7 @@ void Engine::setupCustomMath() {
       data.additional_sources = snippet.additional_sources;
 
       try {
-        auto custom_plot = std::make_shared<LuaCustomFunction>(data);
+        auto custom_plot = std::make_shared<PyCustomFunction>(data);
         QString error;
         session_.upsertCustomPlot(custom_plot, &error);
       } catch (const std::exception &e) {
@@ -199,6 +200,23 @@ void Engine::addCurveToPlot(QString curve, int plot_index) {
   emitSnapshots();
 }
 
+void Engine::removeCurveFromPlot(QString curve, int plot_index) {
+  auto plots = allPlots(layout_);
+  if (plot_index < 0 || plot_index >= static_cast<int>(plots.size())) return;
+
+  auto &curves = plots[plot_index]->curves;
+  const auto before = curves.size();
+  curves.erase(std::remove_if(curves.begin(), curves.end(),
+                              [&](const cabana::pj_layout::CurveBinding &binding) {
+                                return binding.name == curve;
+                              }),
+               curves.end());
+  if (curves.size() == before) return;
+
+  emit layoutChanged(layout_);
+  emitSnapshots();
+}
+
 void Engine::moveCurveToPlot(QString curve, int tab_index, int plot_index) {
   auto plots = allPlots(layout_);
   if (plot_index < 0 || plot_index >= static_cast<int>(plots.size())) return;
@@ -228,42 +246,44 @@ void Engine::splitPlot(int plot_index, Qt::Orientation orientation) {
   auto plots = allPlots(layout_);
   if (plot_index < 0 || plot_index >= static_cast<int>(plots.size())) return;
 
-  cabana::pj_layout::PlotModel plot_copy = *plots[plot_index];
+  // Copy the plot model BEFORE modifying the tree.
+  cabana::pj_layout::PlotModel original_plot = *plots[plot_index];
 
-  // Walk the layout tree to find the DockArea containing the target plot.
+  // Walk the layout tree to find the DockArea and split it.
   int idx = 0;
   std::function<bool(cabana::pj_layout::LayoutNode &)> splitInNode;
   splitInNode = [&](cabana::pj_layout::LayoutNode &node) -> bool {
     if (node.kind == cabana::pj_layout::LayoutNode::Kind::DockArea) {
       for (size_t i = 0; i < node.plots.size(); ++i) {
         if (idx == plot_index) {
-          if (node.plots.size() == 1) {
-            // Single plot in DockArea — replace DockArea with Splitter.
-            cabana::pj_layout::LayoutNode left;
-            left.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
-            left.plots.push_back(node.plots[0]);
+          // Copy all plots from this node before modifying it.
+          auto all_node_plots = node.plots;
 
-            cabana::pj_layout::LayoutNode right;
-            right.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
-            right.plots.push_back(plot_copy);
+          cabana::pj_layout::LayoutNode left;
+          left.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
+          left.plots = all_node_plots;
 
-            node.kind = cabana::pj_layout::LayoutNode::Kind::Splitter;
-            node.orientation = orientation;
-            node.plots.clear();
-            node.children = {std::move(left), std::move(right)};
-            node.sizes = {50, 50};
-          } else {
-            // Multiple plots — extract this one into a sibling DockArea.
-            node.plots.push_back(plot_copy);
-          }
+          cabana::pj_layout::LayoutNode right;
+          right.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
+          right.plots.push_back(original_plot);
+
+          // Now safe to modify node — we have copies of everything.
+          node.kind = cabana::pj_layout::LayoutNode::Kind::Splitter;
+          node.orientation = orientation;
+          node.plots.clear();
+          node.children.clear();
+          node.children.push_back(std::move(left));
+          node.children.push_back(std::move(right));
+          node.sizes = {50, 50};
           return true;
         }
         idx++;
       }
       return false;
     }
-    for (auto &child : node.children) {
-      if (splitInNode(child)) return true;
+    // Iterate by index to avoid iterator invalidation.
+    for (size_t i = 0; i < node.children.size(); ++i) {
+      if (splitInNode(node.children[i])) return true;
     }
     return false;
   };
@@ -273,6 +293,7 @@ void Engine::splitPlot(int plot_index, Qt::Orientation orientation) {
       for (auto &c : tab.containers) {
         if (c.has_root && splitInNode(c.root)) {
           emit layoutChanged(layout_);
+          emitSnapshots();
           return;
         }
       }
@@ -291,6 +312,7 @@ void Engine::createTab(QString name) {
   tab.containers.push_back(std::move(container));
   layout_.tabbed_widgets[0].tabs.push_back(std::move(tab));
   emit layoutChanged(layout_);
+  emitSnapshots();
 }
 
 void Engine::removeTab(int tab_index) {
@@ -299,7 +321,17 @@ void Engine::removeTab(int tab_index) {
   if (tab_index >= 0 && tab_index < static_cast<int>(tabs.size())) {
     tabs.erase(tabs.begin() + tab_index);
     emit layoutChanged(layout_);
+    emitSnapshots();
   }
+}
+
+void Engine::renameTab(int tab_index, QString name) {
+  if (layout_.tabbed_widgets.empty()) return;
+  auto &tabs = layout_.tabbed_widgets[0].tabs;
+  if (tab_index < 0 || tab_index >= static_cast<int>(tabs.size()) || name.isEmpty()) return;
+
+  tabs[tab_index].tab_name = std::move(name);
+  emit layoutChanged(layout_);
 }
 
 void Engine::updateTransform(QString curve, cabana::pj_layout::TransformConfig config) {
@@ -311,6 +343,7 @@ void Engine::updateTransform(QString curve, cabana::pj_layout::TransformConfig c
         binding.has_transform = !config.name.isEmpty();
         binding.transform = std::move(config);
         emit layoutChanged(layout_);
+        emitSnapshots();
         return;
       }
     }
@@ -325,12 +358,33 @@ void Engine::updateLua(cabana::pj_layout::SnippetModel snippet) {
   data.linked_source = snippet.linked_source;
   data.additional_sources = snippet.additional_sources;
   try {
-    auto custom_plot = std::make_shared<LuaCustomFunction>(data);
+    auto custom_plot = std::make_shared<PyCustomFunction>(data);
     QString error;
     session_.upsertCustomPlot(custom_plot, &error);
   } catch (const std::exception &e) {
     qWarning("Engine: updateLua failed for '%s': %s", qPrintable(snippet.name), e.what());
   }
+
+  auto upsert_snippet = [&](std::vector<cabana::pj_layout::SnippetModel> &snippets) {
+    for (auto &existing : snippets) {
+      if (existing.name == snippet.name) {
+        existing = snippet;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  bool stored = upsert_snippet(layout_.custom_math_snippets);
+  if (!stored) {
+    stored = upsert_snippet(layout_.snippets);
+  }
+  if (!stored) {
+    layout_.custom_math_present = true;
+    layout_.custom_math_snippets.push_back(snippet);
+  }
+
+  emit layoutChanged(layout_);
   emitSnapshots();
 }
 

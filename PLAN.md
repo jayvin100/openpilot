@@ -285,7 +285,9 @@ python3 tools/cabana/pj_validation/validate_layouts.py \
 
 Validator notes:
 - Runtime screenshots are readiness-based by default. Do not add a fixed delay unless debugging.
-- Runtime jobs auto-scale from CPU and memory. Override with `--runtime-jobs <n>` if needed.
+- Runtime jobs auto-scale conservatively and currently cap at `2` by default for stability.
+- Runtime failures are retried once serially to filter out rare teardown flakes while still failing deterministic regressions.
+- Override the default concurrency with `--runtime-jobs <n>` if you explicitly want a higher-stress run.
 - Limit validation to a subset with repeated `--layout <file>`.
 
 4. Perf smoke:

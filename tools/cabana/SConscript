@@ -184,9 +184,6 @@ if arch == "Darwin":
 pj_include_dirs = [
   plotjuggler_root,
   plotjuggler_root / '3rdparty',
-  plotjuggler_root / '3rdparty/QCodeEditor/include',
-  plotjuggler_root / '3rdparty/lua-5.4.3/src',
-  plotjuggler_root / '3rdparty/sol',
   plotjuggler_root / 'plotjuggler_app',
   plotjuggler_root / 'plotjuggler_base/include',
   plotjuggler_root / 'plotjuggler_base/src',
@@ -358,17 +355,10 @@ bootstrap_svg_outputs = pj_env.Command(
   [repo_rel(bootstrap_svg_script), repo_rel(bootstrap_icons_source)],
   f'python3 ${{SOURCES[0]}} ${{SOURCES[1]}} {bootstrap_svg_root}')
 
-qcodeeditor_root = plotjuggler_root / '3rdparty/QCodeEditor'
-qcodeeditor_cpp = walk_files(qcodeeditor_root / 'src/internal', {'.cpp'})
-qcodeeditor_headers = walk_files(qcodeeditor_root / 'include', {'', '.hpp'}, recursive=True)
-
-lua_root = plotjuggler_root / '3rdparty/lua-5.4.3/src'
-lua_cpp = [path for path in walk_files(lua_root, {'.c'}) if path.name not in {'lua.c', 'luac.c'}]
-
 base_root = plotjuggler_root / 'plotjuggler_base'
 base_cpp = [
   path for path in walk_files(base_root / 'src', {'.cpp'})
-  if path.name not in {'datastreamer_base.cpp'}
+  if path.name not in {'datastreamer_base.cpp', 'reactive_function.cpp'}
 ]
 base_headers = walk_files(base_root / 'src', {'.h'})
 base_headers += [
@@ -380,17 +370,6 @@ base_headers += walk_files(base_root / 'include/PlotJuggler', {'.hpp'}, recursiv
 app_root = plotjuggler_root / 'plotjuggler_app'
 app_cpp = walk_files(app_root, {'.cpp'}, recursive=True)
 app_headers = walk_files(app_root, {'.h'}, recursive=True)
-
-qcodeeditor = build_static_library(
-  'QCodeEditor',
-  qcodeeditor_cpp,
-  qcodeeditor_headers,
-  qrc_files=[qcodeeditor_root / 'resources/qcodeeditor_resources.qrc'])
-
-lua_env = pj_env.Clone()
-lua_env.AppendUnique(CPPDEFINES=['LUA_USE_POSIX'] if arch != "Darwin" else [])
-lua_objects = build_objects(lua_env, 'lua_static', [repo_rel(path) for path in lua_cpp], shared=False, deps=[])
-lua_static = lua_env.Library(repo_rel(plotjuggler_gen_root / 'lib' / 'lua_static'), lua_objects)
 
 plotjuggler_base = build_static_library('plotjuggler_base', base_cpp, base_headers)
 pj_layout_cpp = walk_files(pj_layout_root, {'.cpp'}, recursive=True)
@@ -413,11 +392,6 @@ plotjuggler_app_core = build_static_library(
   qrc_files=[app_root / 'resource.qrc'],
   cppdefines=pj_version_defs)
 pj_env.Depends(plotjuggler_app_core, bootstrap_svg_outputs)
-plotjuggler_toolbox_lua_editor = build_static_library(
-  'plotjuggler_toolbox_lua_editor',
-  [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.cpp'],
-  [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.h'])
-
 cabana_plotjuggler = build_shared_library(
   'cabana_plotjuggler',
   [plotjuggler_root / 'cabana_plotjuggler_widget.cpp'],
@@ -427,11 +401,8 @@ cabana_plotjuggler = build_shared_library(
     pj_engine_lib,
     plotjuggler_app_core,
     pj_layout_lib,
-    plotjuggler_toolbox_lua_editor,
     plotjuggler_openpilot_common,
-    qcodeeditor,
     plotjuggler_base,
-    lua_static,
   ] + pj_common_link_libs + pj_platform_libs,
   cppdefines=pj_version_defs,
   linkflags=['-Wl,-Bsymbolic-functions'] if arch != "Darwin" else [])

@@ -1,12 +1,10 @@
 #pragma once
 
 #include <QDialog>
+#include <QLineEdit>
+#include <QPlainTextEdit>
 
 #include "tools/cabana/pj_layout/layout_model.h"
-
-class QCodeEditor;
-class QLineEdit;
-class QComboBox;
 
 namespace cabana::plot_ui {
 
@@ -26,8 +24,8 @@ signals:
 
 private:
   QLineEdit *name_edit_ = nullptr;
-  QCodeEditor *global_editor_ = nullptr;
-  QCodeEditor *function_editor_ = nullptr;
+  QPlainTextEdit *global_editor_ = nullptr;
+  QPlainTextEdit *function_editor_ = nullptr;
   QLineEdit *linked_source_edit_ = nullptr;
 };
 

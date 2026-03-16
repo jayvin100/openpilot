@@ -5,9 +5,11 @@ import concurrent.futures
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -53,6 +55,9 @@ def run_runtime_capture(
   env = os.environ.copy()
   env["CABANA_PJ_SCREENSHOT"] = str(output_png)
   env["CABANA_PJ_SCREENSHOT_EXIT"] = "1"
+  runtime_prefix = f"_pjv_{layout.stem}_{uuid.uuid4().hex[:8]}"
+  env["OPENPILOT_PREFIX"] = runtime_prefix
+  comma_dir = Path(env.get("HOME", str(Path.home()))) / f".comma{runtime_prefix}"
   if delay_ms > 0:
     env["CABANA_PJ_SCREENSHOT_DELAY_MS"] = str(delay_ms)
   lib_var = "DYLD_LIBRARY_PATH" if platform.system() == "Darwin" else "LD_LIBRARY_PATH"
@@ -85,6 +90,8 @@ def run_runtime_capture(
     if isinstance(output, bytes):
       output = output.decode("utf-8", errors="replace")
     return 124, output, True
+  finally:
+    shutil.rmtree(comma_dir, ignore_errors=True)
 
 
 def run_layout_model_validation(repo_root: Path, contract_path: Path) -> tuple[int, str]:
@@ -112,7 +119,9 @@ def available_memory_gb() -> int:
 def auto_runtime_jobs(layout_count: int) -> int:
   cpu_budget = max(1, (os.cpu_count() or 2) // 4)
   memory_budget = max(1, available_memory_gb() // 4)
-  return max(1, min(layout_count, 4, cpu_budget, memory_budget))
+  # Runtime validation spins up multiple Xvfb + replay + video decode stacks.
+  # In practice 4-way parallelism is faster but flaky; 2-way stays stable.
+  return max(1, min(layout_count, 2, cpu_budget, memory_budget))
 
 
 def main() -> int:
@@ -163,7 +172,7 @@ def main() -> int:
 
   binary = repo_root / "tools/cabana/_cabana"
   summary = {
-      "contract": str(contract_path.relative_to(repo_root)),
+      "contract": str(contract_path.relative_to(repo_root)) if contract_path.is_relative_to(repo_root) else str(contract_path),
       "output_dir": str(output_dir),
       "layout_model": None,
       "layouts": [],
@@ -204,6 +213,14 @@ def main() -> int:
       for future in concurrent.futures.as_completed(futures):
         layout_name, runtime_result = future.result()
         runtime_results[layout_name] = runtime_result
+
+    retry_layouts = [layout_name for layout_name, result in runtime_results.items() if not result["runtime_ok"]]
+    for layout_name in retry_layouts:
+      _, retry_result = run_one_runtime(layout_name)
+      retry_result["runtime_retried"] = True
+      if retry_result["runtime_ok"]:
+        retry_result["runtime_retry_recovered"] = True
+      runtime_results[layout_name] = retry_result
 
   for layout_name in layout_names:
     layout_path = layout_dir / layout_name

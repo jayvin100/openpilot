@@ -52,6 +52,7 @@ CurveList::CurveList(QWidget *parent) : QWidget(parent) {
   tree_widget_->setRootIsDecorated(true);
   // Sorting is done manually after batch insertion, not live.
   layout->addWidget(tree_widget_);
+  connect(tree_widget_, &QTreeWidget::itemChanged, this, &CurveList::onItemChanged);
 
   // Debounce filter — wait 150ms after last keystroke before applying.
   filter_timer_ = new QTimer(this);
@@ -105,7 +106,8 @@ void CurveList::addCurveToTree(const cabana::pj_engine::CurveEntry &entry) {
       if (is_leaf) {
         child->setText(1, "-");
         child->setData(0, Qt::UserRole, full_name);
-        child->setFlags(child->flags() | Qt::ItemIsDragEnabled);
+        child->setFlags(child->flags() | Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
+        child->setCheckState(0, Qt::Checked);
       } else {
         child->setFlags(child->flags() & ~Qt::ItemIsDragEnabled);
       }
@@ -211,6 +213,15 @@ void CurveList::applyFilter(const QString &text) {
   }
 
   tree_widget_->setUpdatesEnabled(true);
+}
+
+void CurveList::onItemChanged(QTreeWidgetItem *item, int column) {
+  if (column != 0 || item == nullptr || item->childCount() != 0) return;
+
+  const QString curve = item->data(0, Qt::UserRole).toString();
+  if (curve.isEmpty()) return;
+
+  emit curveVisibilityChanged(curve, item->checkState(0) != Qt::Unchecked);
 }
 
 }  // namespace cabana::plot_ui

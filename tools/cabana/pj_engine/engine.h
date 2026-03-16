@@ -48,12 +48,14 @@ public slots:
   void setCurveVisibility(QString curve, bool visible);
   void setVisibleRange(double x_min, double x_max);
   void addCurveToPlot(QString curve, int plot_index);
+  void removeCurveFromPlot(QString curve, int plot_index);
   void moveCurveToPlot(QString curve, int tab_index, int plot_index);
 
   // Layout mutations
   void splitPlot(int plot_index, Qt::Orientation orientation);
   void createTab(QString name);
   void removeTab(int tab_index);
+  void renameTab(int tab_index, QString name);
 
   // Transform & Lua
   void updateTransform(QString curve, cabana::pj_layout::TransformConfig config);
