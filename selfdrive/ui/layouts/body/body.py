@@ -162,9 +162,9 @@ class BodyLayout(Widget):
         self._last_input_time = time.monotonic()
 
       if time.monotonic() - self._last_input_time > IDLE_TIMEOUT:
-        self._animator.set_animation(WINK)
+        self._animator.set_animation(INQUISITIVE)
       else:
-        self._animator.set_animation(WINK)
+        self._animator.set_animation(NORMAL)
     else:
       self._was_active = False
       self._animator.set_animation(ASLEEP)
