@@ -93,7 +93,7 @@ qt_flags = [
 ]
 
 base_qt_modules = ["Widgets", "Gui", "Core"]
-pj_qt_modules = base_qt_modules + ["PrintSupport", "Concurrent", "Xml", "Svg", "OpenGL"]
+pj_qt_modules = base_qt_modules + ["PrintSupport", "Concurrent", "Xml", "Svg", "OpenGL", "Charts"]
 
 if arch == "Darwin":
   qt_install_prefix = f"{brew_prefix}/opt/qt@5"
@@ -185,10 +185,7 @@ pj_include_dirs = [
   plotjuggler_root,
   plotjuggler_root / '3rdparty',
   plotjuggler_root / '3rdparty/QCodeEditor/include',
-  plotjuggler_root / '3rdparty/Qt-Advanced-Docking/include',
-  plotjuggler_root / '3rdparty/Qt-Advanced-Docking/include/Qads',
   plotjuggler_root / '3rdparty/lua-5.4.3/src',
-  plotjuggler_root / '3rdparty/qwt/src',
   plotjuggler_root / '3rdparty/sol',
   plotjuggler_root / 'plotjuggler_app',
   plotjuggler_root / 'plotjuggler_base/include',
@@ -212,7 +209,7 @@ if all(pj_system_capnp_libs):
   pj_common_link_libs = pj_system_capnp_libs
 else:
   pj_common_link_libs = ['capnp', 'kj']
-pj_version_defs = [('MainWindow', 'PlotJugglerMainWindow')]
+pj_version_defs = []
 pj_meta_re = re.compile(r'\b(Q_OBJECT|Q_GADGET|Q_PLUGIN_METADATA)\b')
 
 
@@ -361,21 +358,9 @@ bootstrap_svg_outputs = pj_env.Command(
   [repo_rel(bootstrap_svg_script), repo_rel(bootstrap_icons_source)],
   f'python3 ${{SOURCES[0]}} ${{SOURCES[1]}} {bootstrap_svg_root}')
 
-qwt_root = plotjuggler_root / '3rdparty/qwt/src'
-qwt_cpp = [path for path in walk_files(qwt_root, {'.cpp'}) if path.name != 'qwt_plot_glcanvas.cpp']
-qwt_headers = [path for path in walk_files(qwt_root, {'.h'}) if path.name != 'qwt_plot_glcanvas.h']
-
 qcodeeditor_root = plotjuggler_root / '3rdparty/QCodeEditor'
 qcodeeditor_cpp = walk_files(qcodeeditor_root / 'src/internal', {'.cpp'})
 qcodeeditor_headers = walk_files(qcodeeditor_root / 'include', {'', '.hpp'}, recursive=True)
-
-ads_root = plotjuggler_root / '3rdparty/Qt-Advanced-Docking'
-ads_cpp = walk_files(ads_root / 'src', {'.cpp'})
-if arch != "Darwin":
-  ads_cpp += walk_files(ads_root / 'src/linux', {'.cpp'})
-ads_headers = walk_files(ads_root / 'include/Qads', {'.h'})
-if arch != "Darwin":
-  ads_headers += walk_files(ads_root / 'src/linux', {'.h'})
 
 lua_root = plotjuggler_root / '3rdparty/lua-5.4.3/src'
 lua_cpp = [path for path in walk_files(lua_root, {'.c'}) if path.name not in {'lua.c', 'luac.c'}]
@@ -396,18 +381,11 @@ app_root = plotjuggler_root / 'plotjuggler_app'
 app_cpp = walk_files(app_root, {'.cpp'}, recursive=True)
 app_headers = walk_files(app_root, {'.h'}, recursive=True)
 
-plotjuggler_qwt = build_static_library('plotjuggler_qwt', qwt_cpp, qwt_headers)
 qcodeeditor = build_static_library(
   'QCodeEditor',
   qcodeeditor_cpp,
   qcodeeditor_headers,
   qrc_files=[qcodeeditor_root / 'resources/qcodeeditor_resources.qrc'])
-qt_advanced_docking = build_static_library(
-  'qt_advanced_docking',
-  ads_cpp,
-  ads_headers,
-  qrc_files=[ads_root / 'src/ads.qrc'],
-  cppdefines=['ADS_STATIC'])
 
 lua_env = pj_env.Clone()
 lua_env.AppendUnique(CPPDEFINES=['LUA_USE_POSIX'] if arch != "Darwin" else [])
@@ -435,7 +413,6 @@ plotjuggler_app_core = build_static_library(
   qrc_files=[app_root / 'resource.qrc'],
   cppdefines=pj_version_defs)
 pj_env.Depends(plotjuggler_app_core, bootstrap_svg_outputs)
-pj_env.Depends(qt_advanced_docking, bootstrap_svg_outputs)
 plotjuggler_toolbox_lua_editor = build_static_library(
   'plotjuggler_toolbox_lua_editor',
   [plotjuggler_root / 'plotjuggler_plugins/ToolboxLuaEditor/lua_editor.cpp'],
@@ -452,10 +429,8 @@ cabana_plotjuggler = build_shared_library(
     pj_layout_lib,
     plotjuggler_toolbox_lua_editor,
     plotjuggler_openpilot_common,
-    qt_advanced_docking,
     qcodeeditor,
     plotjuggler_base,
-    plotjuggler_qwt,
     lua_static,
   ] + pj_common_link_libs + pj_platform_libs,
   cppdefines=pj_version_defs,

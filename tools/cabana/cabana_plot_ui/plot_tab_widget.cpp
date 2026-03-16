@@ -1,5 +1,6 @@
 #include "tools/cabana/cabana_plot_ui/plot_tab_widget.h"
 
+#include <QApplication>
 #include <QInputDialog>
 #include <QMouseEvent>
 #include <QSplitter>
@@ -33,6 +34,15 @@ PlotTabWidget::PlotTabWidget(QWidget *parent) : QWidget(parent) {
   });
 
   connect(tab_widget_, &QTabWidget::tabCloseRequested, this, &PlotTabWidget::onTabCloseRequested);
+
+  // When user switches tabs, update the newly visible plots with latest data.
+  connect(tab_widget_, &QTabWidget::currentChanged, this, [this](int index) {
+    if (index >= 0 && index < static_cast<int>(plots_per_tab_.size()) && last_bundle_) {
+      for (auto *pc : plots_per_tab_[index]) {
+        pc->updateSnapshots(*last_bundle_);
+      }
+    }
+  });
 
   // Double-click tab to rename.
   tab_widget_->tabBar()->installEventFilter(this);
@@ -121,6 +131,10 @@ QWidget *PlotTabWidget::buildLayoutNode(const cabana::pj_layout::LayoutNode &nod
 }
 
 void PlotTabWidget::rebuildFromLayout(const cabana::pj_layout::LayoutModel &layout) {
+  // Save previous state for undo (skip on first load).
+  if (!current_layout_.tabbed_widgets.empty() && !(layout == current_layout_)) {
+    snapshotForUndo();
+  }
   current_layout_ = layout;
   all_plots_.clear();
   plots_per_tab_.clear();
@@ -194,6 +208,7 @@ void PlotTabWidget::setLinkedZoom(bool enabled) {
 
 void PlotTabWidget::updateSnapshots(cabana::pj_engine::PlotSnapshotBundlePtr bundle) {
   if (!bundle) return;
+  last_bundle_ = bundle;
   int current_tab = tab_widget_->currentIndex();
   if (current_tab >= 0 && current_tab < static_cast<int>(plots_per_tab_.size())) {
     for (auto *pc : plots_per_tab_[current_tab]) {
@@ -222,12 +237,12 @@ void PlotTabWidget::cycleLegend() {
   static int legend_state = 0;
   legend_state = (legend_state + 1) % 3;
   for (auto *pc : all_plots_) {
+    auto *legend = pc->chart()->legend();
     switch (legend_state) {
-      case 0: pc->setLegendSize(0); break;  // hidden
-      case 1: pc->setLegendSize(10); pc->setLegendAlignment(Qt::AlignRight); break;
-      case 2: pc->setLegendSize(10); pc->setLegendAlignment(Qt::AlignLeft); break;
+      case 0: legend->hide(); break;
+      case 1: legend->setAlignment(Qt::AlignRight); legend->show(); break;
+      case 2: legend->setAlignment(Qt::AlignLeft); legend->show(); break;
     }
-    pc->replot();
   }
 }
 

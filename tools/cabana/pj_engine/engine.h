@@ -47,6 +47,7 @@ public slots:
   // Curve & plot interaction
   void setCurveVisibility(QString curve, bool visible);
   void setVisibleRange(double x_min, double x_max);
+  void addCurveToPlot(QString curve, int plot_index);
   void moveCurveToPlot(QString curve, int tab_index, int plot_index);
 
   // Layout mutations

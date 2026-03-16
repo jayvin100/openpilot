@@ -1,5 +1,8 @@
 #include "lua_editor.h"
 #include "ui_lua_editor.h"
+#include "PlotJuggler/plotdata.h"
+
+using namespace PJ;
 #include <QSettings>
 #include <QPushButton>
 #include <QLineEdit>

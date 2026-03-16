@@ -51,6 +51,7 @@ private:
   QTabWidget *tab_widget_ = nullptr;
   std::vector<PlotContainer *> all_plots_;
   std::vector<std::vector<PlotContainer *>> plots_per_tab_;
+  cabana::pj_engine::PlotSnapshotBundlePtr last_bundle_;
   std::deque<cabana::pj_layout::LayoutModel> undo_stack_;
   std::deque<cabana::pj_layout::LayoutModel> redo_stack_;
   cabana::pj_layout::LayoutModel current_layout_;

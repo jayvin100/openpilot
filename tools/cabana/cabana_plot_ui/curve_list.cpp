@@ -126,17 +126,23 @@ void CurveList::updateTree(const cabana::pj_engine::CurveTreeSnapshot &tree) {
 
 void CurveList::updateValues(const cabana::pj_engine::PlotSnapshotBundle &bundle,
                              double tracker_time) {
-  // Walk all leaf items and show the Y value at tracker_time.
+  // Only update leaf items that are visible in the viewport — skip collapsed/hidden.
+  QRect viewport_rect = tree_widget_->viewport()->rect();
+
   std::function<void(QTreeWidgetItem *)> visit = [&](QTreeWidgetItem *item) {
+    if (item->isHidden()) return;
     if (item->childCount() == 0) {
+      // Skip items outside the visible viewport.
+      QRect item_rect = tree_widget_->visualItemRect(item);
+      if (!item_rect.intersects(viewport_rect)) return;
+
       QString curve = item->data(0, Qt::UserRole).toString();
       if (curve.isEmpty()) return;
       auto it = bundle.snapshots.find(curve.toStdString());
       if (it == bundle.snapshots.end() || !it->second || it->second->points.empty()) {
-        item->setText(1, "-");
+        if (item->text(1) != "-") item->setText(1, "-");
         return;
       }
-      // Binary search for the point closest to tracker_time.
       const auto &pts = it->second->points;
       auto lower = std::lower_bound(pts.begin(), pts.end(), tracker_time,
                                     [](const QPointF &p, double t) { return p.x() < t; });
@@ -149,7 +155,7 @@ void CurveList::updateValues(const cabana::pj_engine::PlotSnapshotBundle &bundle
         }
       }
       item->setText(1, QString::number(lower->y(), 'g', 5));
-    } else {
+    } else if (item->isExpanded()) {
       for (int i = 0; i < item->childCount(); ++i) {
         visit(item->child(i));
       }

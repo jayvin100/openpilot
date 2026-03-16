@@ -33,7 +33,6 @@ signals:
   void undoRequested();
   void redoRequested();
   void timeOffsetToggled(bool on);
-  void dateTimeToggled(bool on);
 
 private:
   QPushButton *play_btn_ = nullptr;

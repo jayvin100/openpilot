@@ -181,6 +181,23 @@ std::vector<cabana::pj_layout::PlotModel *> allPlots(cabana::pj_layout::LayoutMo
 
 }  // namespace
 
+void Engine::addCurveToPlot(QString curve, int plot_index) {
+  auto plots = allPlots(layout_);
+  if (plot_index < 0 || plot_index >= static_cast<int>(plots.size())) return;
+
+  // Check if curve already exists in this plot.
+  for (const auto &b : plots[plot_index]->curves) {
+    if (b.name == curve) return;
+  }
+
+  cabana::pj_layout::CurveBinding binding;
+  binding.name = curve;
+  plots[plot_index]->curves.push_back(std::move(binding));
+
+  emit layoutChanged(layout_);
+  emitSnapshots();
+}
+
 void Engine::moveCurveToPlot(QString curve, int tab_index, int plot_index) {
   auto plots = allPlots(layout_);
   if (plot_index < 0 || plot_index >= static_cast<int>(plots.size())) return;
@@ -207,52 +224,53 @@ void Engine::moveCurveToPlot(QString curve, int tab_index, int plot_index) {
 }
 
 void Engine::splitPlot(int plot_index, Qt::Orientation orientation) {
-  // Find the plot by flat index and split its parent node.
-  // For now, duplicate the plot into two side-by-side plots.
   auto plots = allPlots(layout_);
   if (plot_index < 0 || plot_index >= static_cast<int>(plots.size())) return;
 
-  auto *target = plots[plot_index];
-  cabana::pj_layout::PlotModel copy = *target;
+  cabana::pj_layout::PlotModel plot_copy = *plots[plot_index];
 
-  // Walk the layout to find the LayoutNode containing this plot and split it.
-  // Simplified: find which tab/container owns this plot and add a sibling.
+  // Walk the layout tree to find the DockArea containing the target plot.
   int idx = 0;
+  std::function<bool(cabana::pj_layout::LayoutNode &)> splitInNode;
+  splitInNode = [&](cabana::pj_layout::LayoutNode &node) -> bool {
+    if (node.kind == cabana::pj_layout::LayoutNode::Kind::DockArea) {
+      for (size_t i = 0; i < node.plots.size(); ++i) {
+        if (idx == plot_index) {
+          if (node.plots.size() == 1) {
+            // Single plot in DockArea — replace DockArea with Splitter.
+            cabana::pj_layout::LayoutNode left;
+            left.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
+            left.plots.push_back(node.plots[0]);
+
+            cabana::pj_layout::LayoutNode right;
+            right.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
+            right.plots.push_back(plot_copy);
+
+            node.kind = cabana::pj_layout::LayoutNode::Kind::Splitter;
+            node.orientation = orientation;
+            node.plots.clear();
+            node.children = {std::move(left), std::move(right)};
+            node.sizes = {50, 50};
+          } else {
+            // Multiple plots — extract this one into a sibling DockArea.
+            node.plots.push_back(plot_copy);
+          }
+          return true;
+        }
+        idx++;
+      }
+      return false;
+    }
+    for (auto &child : node.children) {
+      if (splitInNode(child)) return true;
+    }
+    return false;
+  };
+
   for (auto &tw : layout_.tabbed_widgets) {
     for (auto &tab : tw.tabs) {
       for (auto &c : tab.containers) {
-        if (!c.has_root) continue;
-        std::function<bool(cabana::pj_layout::LayoutNode &)> splitInNode;
-        splitInNode = [&](cabana::pj_layout::LayoutNode &node) -> bool {
-          if (node.kind == cabana::pj_layout::LayoutNode::Kind::DockArea) {
-            for (size_t i = 0; i < node.plots.size(); ++i) {
-              if (idx == plot_index) {
-                // Replace this DockArea with a Splitter containing two DockAreas.
-                cabana::pj_layout::LayoutNode left;
-                left.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
-                left.plots.push_back(node.plots[i]);
-
-                cabana::pj_layout::LayoutNode right;
-                right.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
-                right.plots.push_back(copy);
-
-                node.kind = cabana::pj_layout::LayoutNode::Kind::Splitter;
-                node.orientation = orientation;
-                node.plots.clear();
-                node.children = {std::move(left), std::move(right)};
-                node.sizes = {50, 50};
-                return true;
-              }
-              idx++;
-            }
-            return false;
-          }
-          for (auto &child : node.children) {
-            if (splitInNode(child)) return true;
-          }
-          return false;
-        };
-        if (splitInNode(c.root)) {
+        if (c.has_root && splitInNode(c.root)) {
           emit layoutChanged(layout_);
           return;
         }
@@ -265,6 +283,11 @@ void Engine::createTab(QString name) {
   if (layout_.tabbed_widgets.empty()) return;
   cabana::pj_layout::TabModel tab;
   tab.tab_name = name;
+  cabana::pj_layout::ContainerModel container;
+  container.has_root = true;
+  container.root.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
+  container.root.plots.push_back({});  // one empty plot area
+  tab.containers.push_back(std::move(container));
   layout_.tabbed_widgets[0].tabs.push_back(std::move(tab));
   emit layoutChanged(layout_);
 }

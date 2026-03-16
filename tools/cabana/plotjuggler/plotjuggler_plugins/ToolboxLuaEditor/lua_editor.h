@@ -4,8 +4,8 @@
 #include <QListWidgetItem>
 #include <map>
 #include "PlotJuggler/toolbox_base.h"
-#include "PlotJuggler/plotwidget_base.h"
 #include "PlotJuggler/reactive_function.h"
+#include "PlotJuggler/util/delayed_callback.hpp"
 #include "PlotJuggler/util/delayed_callback.hpp"
 
 #include "QCodeEditor"
@@ -67,7 +67,7 @@ private:
   QLuaCompleter* _completer;
 
   int _font_size;
-  DelayedCallback _delay_library_check;
+  PJ::DelayedCallback _delay_library_check;
 
   QString _previous_library;
 

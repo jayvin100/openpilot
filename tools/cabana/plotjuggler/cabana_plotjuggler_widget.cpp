@@ -37,7 +37,6 @@ static void initPlotJugglerResources() {
   if (initialized) return;
   Q_INIT_RESOURCE(resource);
   Q_INIT_RESOURCE(qcodeeditor_resources);
-  Q_INIT_RESOURCE(ads);
   initialized = true;
 }
 
@@ -203,6 +202,10 @@ public:
     QObject::connect(plot_surface_, &cabana::plot_ui::PlotTabWidget::splitRequested,
                      engine_, &cabana::pj_engine::Engine::splitPlot);
 
+    // Curve dropped onto plot → Engine adds it.
+    QObject::connect(plot_surface_, &cabana::plot_ui::PlotTabWidget::curveDropped,
+                     engine_, &cabana::pj_engine::Engine::addCurveToPlot);
+
     // Toolbar signals.
     QObject::connect(toolbar_, &cabana::plot_ui::PlotToolbar::gridToggled,
                      plot_surface_, &cabana::plot_ui::PlotTabWidget::setGridVisible);
@@ -243,9 +246,9 @@ public:
 
     engine_thread_->start();
 
-    // Throttle curve list value updates to ~4Hz (not every snapshot).
+    // Update curve list values at ~30fps (only visible items are updated).
     auto *value_timer = new QTimer(parent);
-    value_timer->setInterval(250);
+    value_timer->setInterval(33);
     QObject::connect(value_timer, &QTimer::timeout, parent, [this]() {
       if (last_bundle_) {
         curve_list_->updateValues(*last_bundle_, last_bundle_->tracker_time);
@@ -276,13 +279,29 @@ public:
   }
 
   void refreshLayoutOnce() {
-    if (layout_loaded || layout_path.isEmpty()) return;
+    if (layout_loaded) return;
 
     cabana::pj_layout::LayoutModel model;
-    QString error;
-    if (!cabana::pj_layout::LoadLayoutFile(layout_path, &model, &error)) {
-      qWarning() << "Failed to load layout:" << layout_path << error;
-      return;
+
+    if (layout_path.isEmpty()) {
+      // No layout file — create a default empty layout with one tab and one plot area.
+      cabana::pj_layout::TabbedWidgetModel tw;
+      tw.name = "Main";
+      cabana::pj_layout::TabModel tab;
+      tab.tab_name = "tab1";
+      cabana::pj_layout::ContainerModel container;
+      container.has_root = true;
+      container.root.kind = cabana::pj_layout::LayoutNode::Kind::DockArea;
+      container.root.plots.push_back({});  // one empty plot
+      tab.containers.push_back(std::move(container));
+      tw.tabs.push_back(std::move(tab));
+      model.tabbed_widgets.push_back(std::move(tw));
+    } else {
+      QString error;
+      if (!cabana::pj_layout::LoadLayoutFile(layout_path, &model, &error)) {
+        qWarning() << "Failed to load layout:" << layout_path << error;
+        return;
+      }
     }
 
     // Build UI from layout (on UI thread).
