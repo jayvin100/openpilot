@@ -227,6 +227,23 @@ async def stream_options(request: 'web.Request'):
   return response
 
 
+REQUIRED_VIDEO_CODEC = "H264"
+
+def _validate_sdp_video_codecs(sdp: str):
+  import aiortc.sdp
+  desc = aiortc.sdp.SessionDescription.parse(sdp)
+  required_mime = f"video/{REQUIRED_VIDEO_CODEC}"
+  for m in desc.media:
+    if m.kind != "video":
+      continue
+    offered_mimes = {c.mimeType for c in m.rtp.codecs}
+    if required_mime not in offered_mimes:
+      raise web.HTTPBadRequest(
+        text=json.dumps({"error": "unsupported_codec", "message": f"Frontend must offer {REQUIRED_VIDEO_CODEC} via setCodecPreferences()"}),
+        content_type="application/json",
+      )
+
+
 def _cleanup_stale_streams(stream_dict: dict):
   stale = [sid for sid, s in stream_dict.items() if s.run_task is None or s.run_task.done()]
   for sid in stale:
@@ -253,6 +270,7 @@ async def get_stream(request: 'web.Request'):
 
     raw_body = await request.json()
     body = StreamRequestBody(**raw_body)
+    _validate_sdp_video_codecs(body.sdp)
 
     session = StreamSession(body.sdp, body.cameras, body.bridge_services_in, body.bridge_services_out, debug_mode)
     answer = await session.get_answer()
