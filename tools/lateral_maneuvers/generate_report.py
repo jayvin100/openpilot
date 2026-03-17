@@ -3,6 +3,7 @@ import argparse
 import base64
 import io
 import math
+import numpy as np
 import os
 import pprint
 import webbrowser
@@ -12,6 +13,8 @@ import matplotlib.pyplot as plt
 from openpilot.common.utils import tabulate
 
 from cereal import car
+from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.selfdrive.controls.lib.latcontrol_torque import LP_FILTER_CUTOFF_HZ
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.system.hardware.hw import Paths
 from openpilot.common.constants import CV
@@ -125,8 +128,8 @@ def report(platform, route, _description, CP, ID, maneuvers):
           builder.append('</h3>')
 
       plt.rcParams['font.size'] = 40
-      fig = plt.figure(figsize=(30, 24))
-      ax = fig.subplots(3, 1, sharex=True, gridspec_kw={'height_ratios': [5, 3, 3]})
+      fig = plt.figure(figsize=(30, 30))
+      ax = fig.subplots(4, 1, sharex=True, gridspec_kw={'height_ratios': [5, 3, 3, 3]})
 
       ax[0].grid(linewidth=4)
       desired_lat_accel = [lat_accel(m.desiredCurvature, v) for m, v in zip(lateralPlan, v_ego, strict=False)]
@@ -159,10 +162,21 @@ def report(platform, route, _description, CP, ID, maneuvers):
       ax[1].yaxis.set_major_formatter(plt.FormatStrFormatter('%.1f'))
       ax[1].legend()
 
+      t_accel = np.array(t_controlsState[:len(actual_lat_accel)])
+      raw_jerk = np.gradient(actual_lat_accel, t_accel)
+      dt_avg = np.mean(np.diff(t_accel))
+      jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), dt_avg)
+      filtered_jerk = [jerk_filter.update(j) for j in raw_jerk]
       ax[2].grid(linewidth=4)
-      ax[2].plot(t_carControl, [math.degrees(m.orientationNED[0]) for m in carControl], label='roll', linewidth=6)
-      ax[2].set_ylabel('Roll (deg)')
+      ax[2].plot(t_accel, filtered_jerk, label='actual jerk', linewidth=6)
+      ax[2].plot(t_controlsState[:len(controlsState)], [cs.lateralTorqueState.desiredLateralJerk for cs in controlsState], label='desired jerk', linewidth=6)
+      ax[2].set_ylabel('Jerk (m/s^3)')
       ax[2].legend()
+
+      ax[3].grid(linewidth=4)
+      ax[3].plot(t_carControl, [math.degrees(m.orientationNED[0]) for m in carControl], label='roll', linewidth=6)
+      ax[3].set_ylabel('Roll (deg)')
+      ax[3].legend()
 
       ax[-1].set_xlabel("Time (s)")
       fig.tight_layout()
