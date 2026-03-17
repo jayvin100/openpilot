@@ -6,6 +6,8 @@ from openpilot.selfdrive.ui.mici.layouts.offroad_alerts import MiciOffroadAlerts
 from openpilot.selfdrive.ui.mici.onroad.augmented_road_view import AugmentedRoadView
 from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.selfdrive.ui.mici.layouts.onboarding import OnboardingWindow
+from openpilot.selfdrive.ui.body.layouts import BodyLayout
+from openpilot.selfdrive.ui.body.layouts import MiciBodyHomeLayout
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.scroller import Scroller
 from openpilot.system.ui.lib.application import gui_app
@@ -20,16 +22,20 @@ class MiciMainLayout(Scroller):
 
     self._pm = messaging.PubMaster(['bookmarkButton'])
 
+    self._is_body = ui_state.CP is not None and ui_state.CP.notCar
     self._prev_onroad = False
     self._prev_standstill = False
     self._onroad_time_delay: float | None = None
     self._setup = False
 
     # Initialize widgets
-    self._home_layout = MiciHomeLayout()
+    self._home_layout = MiciBodyHomeLayout() if self._is_body else MiciHomeLayout()
+    if self._is_body:
+      self._onroad_layout = BodyLayout()
+    else:
+      self._onroad_layout = AugmentedRoadView(bookmark_callback=self._on_bookmark_clicked)
     self._alerts_layout = MiciOffroadAlerts()
     self._settings_layout = SettingsLayout()
-    self._onroad_layout = AugmentedRoadView(bookmark_callback=self._on_bookmark_clicked)
 
     # Initialize widget rects
     for widget in (self._home_layout, self._settings_layout, self._alerts_layout, self._onroad_layout):
@@ -43,7 +49,6 @@ class MiciMainLayout(Scroller):
     ])
     self._scroller.set_reset_scroll_at_show(False)
 
-    # Disable scrolling when onroad is interacting with bookmark
     self._scroller.set_scrolling_enabled(lambda: not self._onroad_layout.is_swiping_left())
 
     # Set callbacks

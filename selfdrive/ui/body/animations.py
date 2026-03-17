@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+import time
 
 
 class AnimationMode(Enum):
@@ -7,7 +8,6 @@ class AnimationMode(Enum):
   ONCE_FORWARD_BACKWARD = 2
   REPEAT_FORWARD = 3
   REPEAT_FORWARD_BACKWARD = 4
-
 
 @dataclass
 class Animation:
@@ -20,6 +20,7 @@ class Animation:
   left_turn_remove: list[tuple[int, int]] | None = None   # dots to remove from frame when turning left
   right_turn_remove: list[tuple[int, int]] | None = None   # dots to remove from frame when turning right
 
+# --- Animation Helper Functions ---
 
 def _mirror(dots: list[tuple[int, int]]) -> list[tuple[int, int]]:
   """Mirror a component from the left side of the face to the right"""
@@ -42,6 +43,7 @@ def _make_frame(left_eye: list[tuple[int, int]], right_eye: list[tuple[int, int]
                  mouth: list[tuple[int, int]]) -> list[tuple[int, int]]:
   return left_eye + left_brow + right_eye + right_brow + mouth
 
+# --- Animation Helper Components ---
 
 # Eyes (left side)
 EYE_OPEN = [
@@ -131,9 +133,9 @@ ASLEEP = Animation(
 
 SLEEPY = Animation(
   frames=[
-    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), [], _shift(_mirror(BROW_STRAIGHT), (1,0)), MOUTH_NORMAL),
-    _make_frame(EYE_CLOSED, _mirror(EYE_HALF), [], _mirror(BROW_LOWERED), MOUTH_NORMAL),
-    _make_frame(EYE_CLOSED, _mirror(EYE_OPEN), [], _mirror(BROW_HIGH), MOUTH_NORMAL)
+    _make_frame(EYE_CLOSED, _mirror(EYE_CLOSED), _shift(BROW_STRAIGHT, (1,0)), [], MOUTH_NORMAL),
+    _make_frame(EYE_HALF, _mirror(EYE_CLOSED), BROW_LOWERED, [], MOUTH_NORMAL),
+    _make_frame(EYE_OPEN, _mirror(EYE_CLOSED), BROW_HIGH, [], MOUTH_NORMAL)
   ],
   frame_duration=0.25,
   mode=AnimationMode.ONCE_FORWARD_BACKWARD,
@@ -174,3 +176,106 @@ WINK = Animation(
   mode=AnimationMode.ONCE_FORWARD_BACKWARD,
   frame_duration=0.75,
 )
+
+
+# --- Face Animator Class ---
+
+class FaceAnimator:
+  def __init__(self, animation: Animation):
+    self._animation = animation
+    self._next: Animation | None = None
+    self._start_time = time.monotonic()
+    self._rewinding = False
+    self._rewind_start: float = 0.0
+    self._rewind_from: int = 0
+    self._seen_nonzero = False
+
+  def set_animation(self, animation: Animation):
+    if animation is not self._animation:
+      self._next = animation
+
+  def get_dots(self) -> list[tuple[int, int]]:
+    now = time.monotonic()
+    elapsed = now - self._start_time
+
+    # Handle rewind for forward-only animations
+    if self._rewinding:
+      rewind_elapsed = now - self._rewind_start
+      frames_back = round(rewind_elapsed / self._animation.frame_duration)
+      frame_index = self._rewind_from - frames_back
+      if frame_index <= 0:
+        return self._switch_to_next(now)
+      return self._animation.frames[frame_index]
+
+    # Play starting frames first (once)
+    starting = self._animation.starting_frames or []
+    starting_duration = len(starting) * self._animation.frame_duration
+    if starting and elapsed < starting_duration:
+      frame_index = min(int(elapsed / self._animation.frame_duration), len(starting) - 1)
+      return starting[frame_index]
+
+    # Main loop
+    loop_elapsed = elapsed - starting_duration if starting else elapsed
+    frame_index = _get_frame_index(self._animation, loop_elapsed, gap_first=bool(starting))
+
+    if frame_index != 0:
+      self._seen_nonzero = True
+
+    if self._next is not None:
+      if frame_index == 0 and (len(self._animation.frames) == 1 or self._seen_nonzero):
+        return self._switch_to_next(now)
+      # No natural return to frame 0 — start rewinding
+      if self._animation.mode in (AnimationMode.ONCE_FORWARD, AnimationMode.REPEAT_FORWARD):
+        self._rewinding = True
+        self._rewind_start = now
+        self._rewind_from = frame_index
+
+    return self._animation.frames[frame_index]
+
+  def _switch_to_next(self, now: float) -> list[tuple[int, int]]:
+    self._animation = self._next
+    self._next = None
+    self._rewinding = False
+    self._seen_nonzero = False
+    self._start_time = now
+    return self._animation.frames[0]
+
+
+def _get_frame_index(animation: Animation, elapsed: float, gap_first: bool = False) -> int:
+  """Get the current frame index given elapsed time and animation mode."""
+  num_frames = len(animation.frames)
+  if num_frames == 1:
+    return 0
+
+  forward_duration = num_frames * animation.frame_duration
+  has_backward = animation.mode in (AnimationMode.ONCE_FORWARD_BACKWARD, AnimationMode.REPEAT_FORWARD_BACKWARD)
+  repeats = animation.mode in (AnimationMode.REPEAT_FORWARD, AnimationMode.REPEAT_FORWARD_BACKWARD)
+
+  if has_backward:
+    backward_frames = max(num_frames - 2, 0)
+    backward_duration = backward_frames * animation.frame_duration
+    cycle_duration = forward_duration + animation.hold_end + backward_duration
+  else:
+    backward_frames = 0
+    backward_duration = 0
+    cycle_duration = forward_duration
+
+  if not repeats:
+    # Play once — clamp elapsed to one cycle
+    t = min(elapsed, cycle_duration)
+  else:
+    adj_elapsed = elapsed + cycle_duration if gap_first else elapsed
+    t = adj_elapsed % animation.repeat_interval
+
+  if t < forward_duration:
+    return min(int(t / animation.frame_duration), num_frames - 1)
+  elif not has_backward:
+    return num_frames - 1
+  elif t < forward_duration + animation.hold_end:
+    return num_frames - 1
+  elif t < forward_duration + animation.hold_end + backward_duration:
+    backward_elapsed = t - forward_duration - animation.hold_end
+    backward_index = min(int(backward_elapsed / animation.frame_duration), backward_frames - 1)
+    return num_frames - 2 - backward_index
+  else:
+    return 0

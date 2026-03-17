@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from cereal import log
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.selfdrive.ui.layouts.body.body_pairing import BodyPairingScreen
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, FONT_SCALE
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -99,7 +98,6 @@ class BodySidebar(Widget):
     self._draw_network_indicator(rect)
     self._draw_metrics(rect)
     self._draw_battery_indicator(rect)
-    self._draw_pair_button(rect)
     self._draw_mic_indicator(rect)
 
   def _update_state(self):
@@ -160,18 +158,6 @@ class BodySidebar(Widget):
         self._on_settings_click()
       return
 
-    # Pair button
-    text = tr(tr_noop("PAIR"))
-    text_size = measure_text_cached(self._font_extra_bold, text, FONT_SIZE)
-    btn_w = int(text_size.x + 60)
-    btn_h = 117
-    btn_x = int(self._rect.x + self._rect.width - btn_w - 30)
-    btn_y = int(self._rect.y + 30)
-    pair_rect = rl.Rectangle(btn_x, btn_y, btn_w, btn_h)
-    if rl.check_collision_point_rec(mouse_pos, pair_rect):
-      gui_app.push_widget(BodyPairingScreen())
-      return
-
     # Mic indicator
     if self._recording_audio and rl.check_collision_point_rec(mouse_pos, self._mic_indicator_rect):
       if self._open_settings_callback:
@@ -188,38 +174,13 @@ class BodySidebar(Widget):
     tint = Colors.BUTTON_PRESSED if settings_down else Colors.BUTTON_NORMAL
     rl.draw_texture(self._settings_img, btn_x, btn_y, tint)
 
-  def _draw_pair_button(self, rect: rl.Rectangle):
-    mouse_pos = rl.get_mouse_position()
-    mouse_down = self.is_pressed and rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT)
-
-    text = tr(tr_noop("PAIR"))
-    text_size = measure_text_cached(self._font_extra_bold, text, FONT_SIZE)
-    btn_w = int(text_size.x + 60)
-    btn_h = 117
-    btn_x = int(rect.x + rect.width - btn_w - 30)
-    btn_y = int(rect.y + 30)
-
-    pair_rect = rl.Rectangle(btn_x, btn_y, btn_w, btn_h)
-    pair_pressed = mouse_down and rl.check_collision_point_rec(mouse_pos, pair_rect)
-    bg_color = Colors.BUTTON_PRESSED if pair_pressed else Colors.BUTTON_NORMAL
-
-    rl.draw_rectangle_rounded(pair_rect, 0.5, 10, bg_color)
-    text_pos = rl.Vector2(btn_x + (btn_w - text_size.x) / 2, btn_y + (btn_h - text_size.y) / 2)
-    rl.draw_text_ex(self._font_extra_bold, text, text_pos, FONT_SIZE, 0, rl.BLACK)
-
   def _draw_battery_indicator(self, rect: rl.Rectangle):
-    # Position to the left of the PAIR button
-    text = tr(tr_noop("PAIR"))
-    text_size = measure_text_cached(self._font_extra_bold, text, FONT_SIZE)
-    pair_btn_w = int(text_size.x + 60)
-    pair_btn_x = int(rect.x + rect.width - pair_btn_w - 30)
-
     # Battery icon dimensions
     batt_w = 50
     batt_h = 28
     tip_w = 5
     tip_h = 12
-    batt_x = pair_btn_x - batt_w - 80
+    batt_x = int(rect.x + rect.width - batt_w - tip_w - 30)
     batt_y = int(rect.y + 30 + (METRIC_HEIGHT - batt_h) / 2)
 
     # Choose fill color based on level

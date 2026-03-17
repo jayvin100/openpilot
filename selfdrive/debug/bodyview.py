@@ -5,7 +5,7 @@ import os
 import time
 import threading
 
-os.environ["BIG"] = "1"
+# os.environ["BIG"] = "1"
 
 import pyray as rl
 from cereal import car, log, messaging
