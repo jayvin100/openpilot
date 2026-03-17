@@ -82,8 +82,7 @@ class BodyLayout(Widget):
   def _update_state(self):
     sm = ui_state.sm
 
-    joystick_mode = ui_state.params.get_bool("JoystickDebugMode")
-    active = joystick_mode and sm['selfdriveState'].enabled
+    active = ui_state.is_onroad()
     if active:
       if not self._was_active:
         self._last_input_time = time.monotonic()
