@@ -33,6 +33,7 @@ class Maneuver:
 
   _active: bool = False
   _finished: bool = False
+  _run_completed: bool = False
   _action_index: int = 0
   _action_frames: int = 0
   _ready_cnt: int = 0
@@ -40,6 +41,7 @@ class Maneuver:
   _baseline_curvature: float = 0.0
 
   def get_accel(self, v_ego: float, lat_active: bool, curvature: float, roll: float) -> float:
+    self._run_completed = False
     # only start maneuver on straight, flat roads
     ready = abs(v_ego - self.initial_speed) < MAX_SPEED_DEV and lat_active and abs(curvature) < MAX_CURV and abs(roll) < MAX_ROLL
     self._ready_cnt = (self._ready_cnt + 1) if ready else 0
@@ -66,9 +68,11 @@ class Maneuver:
       # repeat maneuver
       elif self._repeated < self.repeat:
         self._repeated += 1
+        self._run_completed = True
         self.reset()
       # finish maneuver
       else:
+        self._run_completed = True
         self._finished = True
 
     return float(action_accel)
@@ -158,7 +162,7 @@ def main():
 
     accel = 0
     v_ego = max(sm['carState'].vEgo, 0)
-    cur_curvature = sm['controlsState'].curvature
+    curvature = sm['controlsState'].curvature
 
     if maneuver is not None:
       # reset maneuver on steering override or out of range speed
@@ -166,9 +170,12 @@ def main():
         maneuver.reset()
 
       roll = sm['carControl'].orientationNED[0] if len(sm['carControl'].orientationNED) == 3 else 0.0
-      accel = maneuver.get_accel(v_ego, sm['carControl'].latActive, cur_curvature, roll)
+      accel = maneuver.get_accel(v_ego, sm['carControl'].latActive, curvature, roll)
 
-      if maneuver.active:
+      if maneuver._run_completed:
+        alert_msg.alertDebug.alertText1 = 'Complete'
+        alert_msg.alertDebug.alertText2 = maneuver.description
+      elif maneuver.active:
         action_remaining = maneuver.actions[maneuver._action_index].time_bp[-1] - maneuver._action_frames * DT_MDL
         if maneuver.description.startswith('sine'):
           freq = maneuver.description.split()[1]
@@ -180,7 +187,7 @@ def main():
         alert_msg.alertDebug.alertText1 = f'Set speed to {maneuver.initial_speed * CV.MS_TO_MPH:0.0f} mph'
       else:
         ready_time = max(TIMER - maneuver._ready_cnt * DT_MDL, 0)
-        curv_ok = abs(cur_curvature) < MAX_CURV
+        curv_ok = abs(curvature) < MAX_CURV
         roll_ok = abs(roll) < MAX_ROLL
         if curv_ok and roll_ok:
           alert_msg.alertDebug.alertText1 = f'Starting: {ready_time:.0f}s'

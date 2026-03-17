@@ -43,10 +43,15 @@ def report(platform, route, _description, CP, ID, maneuvers):
   builder.append(f"<details><summary><h3 style='display: inline-block;'>CarParams</h3></summary><pre>{format_car_params(CP)}</pre></details>\n")
   builder.append('{ summary }')  # to be replaced below
   for description, runs in maneuvers:
-    print(f'plotting maneuver: {description}, runs: {len(runs)}')
+    # filter incomplete runs
+    completed_runs = [msgs for msgs in runs
+                      if any(m.alertDebug.alertText1 == 'Complete' for m in msgs if m.which() == 'alertDebug')]
+    print(f'plotting maneuver: {description}')
+    if not completed_runs:
+      continue
     builder.append("<div style='border-top: 1px solid #000; margin: 20px 0;'></div>\n")
     builder.append(f"<h2>{description}</h2>\n")
-    for run, msgs in enumerate(runs):
+    for run, msgs in enumerate(completed_runs):
       t_carControl, carControl = zip(*[(m.logMonoTime, m.carControl) for m in msgs if m.which() == 'carControl'], strict=True)
       t_carState, carState = zip(*[(m.logMonoTime, m.carState) for m in msgs if m.which() == 'carState'], strict=True)
       t_controlsState, controlsState = zip(*[(m.logMonoTime, m.controlsState) for m in msgs if m.which() == 'controlsState'], strict=True)
@@ -70,14 +75,15 @@ def report(platform, route, _description, CP, ID, maneuvers):
       builder.append(f"<details {_open}><summary><h3 style='display: inline-block;'>{title}</h3></summary>\n")
 
       baseline_accel = lat_accel(controlsState[0].curvature, carState[0].vEgo)
+      v_ego = [m.vEgo for m in carState]
       cross_markers = []
 
       if description.startswith('sine'):
-        amplitude = max(abs(lat_accel(lp.desiredCurvature, cs.vEgo) - baseline_accel)
-                        for lp, cs in zip(lateralPlan, carState, strict=False))
+        amplitude = max(abs(lat_accel(lp.desiredCurvature, v) - baseline_accel)
+                        for lp, v in zip(lateralPlan, v_ego, strict=False))
         threshold = amplitude * 0.5
         builder.append('<h3 style="font-weight: normal">50% peak')
-        for t, cs, v in zip(t_controlsState, controlsState, [m.vEgo for m in carState], strict=False):
+        for t, cs, v in zip(t_controlsState, controlsState, v_ego, strict=False):
           actual = lat_accel(cs.curvature, v) - baseline_accel
           if abs(actual) > threshold:
             builder.append(f', <strong>crossed in {t:.3f}s</strong>')
@@ -89,10 +95,10 @@ def report(platform, route, _description, CP, ID, maneuvers):
           builder.append(', <strong>not crossed</strong>')
         builder.append('</h3>')
       else:
-        action_targets = [(0, lat_accel(lateralPlan[0].desiredCurvature, carState[0].vEgo) - baseline_accel)]
-        for i in range(1, min(len(lateralPlan), len(carState))):
+        action_targets = [(0, lat_accel(lateralPlan[0].desiredCurvature, v_ego[0]) - baseline_accel)]
+        for i in range(1, min(len(lateralPlan), len(v_ego))):
           if abs(lateralPlan[i].desiredCurvature - lateralPlan[i - 1].desiredCurvature) > 0.001:
-            desired = lat_accel(lateralPlan[i].desiredCurvature, carState[i].vEgo) - baseline_accel
+            desired = lat_accel(lateralPlan[i].desiredCurvature, v_ego[i]) - baseline_accel
             action_targets.append((i, desired))
 
         for j, (start_i, act_target) in enumerate(action_targets):
@@ -101,7 +107,7 @@ def report(platform, route, _description, CP, ID, maneuvers):
 
           builder.append(f'<h3 style="font-weight: normal">aTarget: {round(act_target, 1)} m/s^2')
           prev_crossed = False
-          for t, cs, v in zip(t_controlsState, controlsState, [m.vEgo for m in carState], strict=False):
+          for t, cs, v in zip(t_controlsState, controlsState, v_ego, strict=False):
             if not (start_time <= t <= end_time):
               continue
             actual_accel = lat_accel(cs.curvature, v) - baseline_accel
@@ -123,14 +129,14 @@ def report(platform, route, _description, CP, ID, maneuvers):
       ax = fig.subplots(3, 1, sharex=True, gridspec_kw={'height_ratios': [5, 3, 3]})
 
       ax[0].grid(linewidth=4)
-      desired_lat_accel = [lat_accel(m.desiredCurvature, v) for m, v in zip(lateralPlan, [s.vEgo for s in carState], strict=False)]
+      desired_lat_accel = [lat_accel(m.desiredCurvature, v) for m, v in zip(lateralPlan, v_ego, strict=False)]
       if description.startswith('sine'):
         ax[0].plot(t_lateralPlan[:len(desired_lat_accel)], desired_lat_accel, label='desired lat accel', linewidth=6)
       else:
         t_desired = [t_lateralPlan[0]] + t_lateralPlan[:len(desired_lat_accel)]
         desired_lat_accel = [baseline_accel] + desired_lat_accel
         ax[0].step(t_desired, desired_lat_accel, label='desired lat accel', linewidth=6, where='post')
-      actual_lat_accel = [lat_accel(cs.curvature, v) for cs, v in zip(controlsState, [m.vEgo for m in carState], strict=False)]
+      actual_lat_accel = [lat_accel(cs.curvature, v) for cs, v in zip(controlsState, v_ego, strict=False)]
       ax[0].plot(t_controlsState[:len(actual_lat_accel)], actual_lat_accel, label='actual lat accel', linewidth=6)
       ax[0].set_ylabel('Lateral Accel (m/s^2)')
 
@@ -148,7 +154,7 @@ def report(platform, route, _description, CP, ID, maneuvers):
       ax[0].legend(h1 + h2, l1 + l2, prop={'size': 30})
 
       ax[1].grid(linewidth=4)
-      ax[1].plot(t_carState, [m.vEgo * CV.MS_TO_MPH for m in carState], label='vEgo', linewidth=6)
+      ax[1].plot(t_carState, [v * CV.MS_TO_MPH for v in v_ego], label='vEgo', linewidth=6)
       ax[1].set_ylabel('Velocity (mph)')
       ax[1].yaxis.set_major_formatter(plt.FormatStrFormatter('%.1f'))
       ax[1].legend()
@@ -212,7 +218,7 @@ if __name__ == '__main__':
 
   for msg in lr:
     if msg.which() == 'alertDebug':
-      active = 'Active' in msg.alertDebug.alertText1
+      active = 'Active' in msg.alertDebug.alertText1 or msg.alertDebug.alertText1 == 'Complete'
       if active and not active_prev:
         if msg.alertDebug.alertText2 == description_prev:
           maneuvers[-1][1].append([])
