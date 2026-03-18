@@ -260,7 +260,7 @@ class BodyPairingScreen(_BodyPairingBase, Widget):
 
 MICI_TEXT_COLOR = rl.Color(255, 255, 255, int(255 * 0.9))
 MICI_TEXT_DIM = rl.Color(0xAA, 0xAA, 0xAA, 255)
-MICI_LABEL_SIZE = 28
+MICI_LABEL_SIZE = 24
 MICI_DESC_SIZE = 26
 MICI_LINE_HEIGHT = 32
 
@@ -299,24 +299,45 @@ class OneTimeConnectPanel(_BodyPairingBase, NavWidget):
 
     # Label and manual info to the right
     label_x = rect.x + 8 + qr_size
-    y = rect.y + 24
+    y = rect.y + 18
 
-    ssid = self._wifi_manager.connected_ssid
-    wifi_text = f"WiFi: {ssid}" if ssid else "WiFi: not connected"
-    rl.draw_text_ex(self._font, wifi_text, rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
-    y += MICI_LABEL_SIZE + 20
-
-    rl.draw_text_ex(self._font_semi, "scan qr code or", rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
+    prefix = "scan qr code "
+    rl.draw_text_ex(self._font, prefix, rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
+    or_x = label_x + rl.measure_text_ex(self._font, prefix, MICI_LABEL_SIZE, 0).x
+    rl.draw_text_ex(self._font_semi, "OR", rl.Vector2(or_x + 20, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
     y += MICI_LABEL_SIZE + 6
 
-    rl.draw_text_ex(self._font_semi, "connect manually via:", rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
+    rl.draw_text_ex(self._font, "connect manually:", rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
     y += MICI_LABEL_SIZE + 12
 
-    rl.draw_text_ex(self._font, "connect.comma.ai", rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
-    y += MICI_LABEL_SIZE + 6
+    step_font_size = MICI_LABEL_SIZE - 3
+    circle_r = step_font_size // 2 + 1
+    circle_d = circle_r * 2
+    gap = 8
+    num_font_size = step_font_size - 4
+    row_h = circle_d
+    for i, step in enumerate(("connect.comma.ai", "add new device", "connect to comma body"), 1):
+      cx = int(label_x + circle_r)
+      cy = int(y + row_h // 2)
+      rl.draw_circle_lines(cx, cy, circle_r, MICI_TEXT_COLOR)
+      num = str(i)
+      num_size = rl.measure_text_ex(self._font_semi, num, num_font_size, 0)
+      rl.draw_text_ex(self._font_semi, num, rl.Vector2(int(cx - num_size.x / 2), int(cy - num_size.y / 2 - 1)), num_font_size, 0, MICI_TEXT_COLOR)
+      step_size = rl.measure_text_ex(self._font, step, step_font_size, 0)
+      rl.draw_text_ex(self._font, step, rl.Vector2(label_x + circle_d + gap, int(cy - step_size.y / 2 - 3)), step_font_size, 0, MICI_TEXT_COLOR)
+      y += row_h + 6
+
+    y += 10
 
     ip_text = f"IP: {self._ip_address}" if self._ip_address else "IP: not connected"
-    rl.draw_text_ex(self._font, ip_text, rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
+    rl.draw_text_ex(self._font, ip_text, rl.Vector2(label_x, y), 22, 0, MICI_TEXT_COLOR)
+    y += 24
+
+    ssid = self._wifi_manager.connected_ssid
+    if ssid and len(ssid) > 20:
+      ssid = ssid[:17] + "..."
+    wifi_text = f"WiFi: {ssid}" if ssid else "wifi: not connected"
+    rl.draw_text_ex(self._font, wifi_text, rl.Vector2(label_x, y), 22, 0, MICI_TEXT_COLOR)
 
   def __del__(self):
     self._cleanup_textures()
