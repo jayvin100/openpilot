@@ -1,7 +1,7 @@
 import pyray as rl
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.selfdrive.ui.body.widgets.body_pairing import MiciBodyPairingScreen
+from openpilot.selfdrive.ui.body.widgets.body_pairing import OneTimeConnectPanel
 from openpilot.selfdrive.ui.mici.layouts.home import MiciHomeLayout
 
 PAIR_BTN_FONT_SIZE = 36
@@ -13,10 +13,10 @@ class MiciBodyHomeLayout(MiciHomeLayout):
     self._font_bold = gui_app.font(FontWeight.BOLD)
 
   def _get_pair_btn_rect(self) -> rl.Rectangle:
-    text = "PAIR"
+    text = "CONNECT"
     text_size = measure_text_cached(self._font_bold, text, PAIR_BTN_FONT_SIZE)
-    btn_w = int(text_size.x + 180)
-    btn_h = 120
+    btn_w = int(text_size.x + 100)
+    btn_h = 124
     btn_x = int(self._rect.x + self._rect.width - btn_w - PAIR_BTN_MARGIN)
     btn_y = int(self._rect.y + self._rect.height - btn_h - 5 - PAIR_BTN_MARGIN)
     return rl.Rectangle(btn_x, btn_y, btn_w, btn_h)
@@ -29,7 +29,7 @@ class MiciBodyHomeLayout(MiciHomeLayout):
     bg_color = rl.Color(255, 255, 255, 166) if pair_pressed else rl.WHITE
 
     rl.draw_rectangle_rounded(pair_rect, 0.5, 10, bg_color)
-    text = "PAIR"
+    text = "CONNECT"
     text_size = measure_text_cached(self._font_bold, text, PAIR_BTN_FONT_SIZE)
     text_pos = rl.Vector2(pair_rect.x + (pair_rect.width - text_size.x) / 2,
                           pair_rect.y + (pair_rect.height - text_size.y) / 2)
@@ -38,7 +38,7 @@ class MiciBodyHomeLayout(MiciHomeLayout):
   def _handle_mouse_release(self, mouse_pos: MousePos):
     pair_rect = self._get_pair_btn_rect()
     if rl.check_collision_point_rec(mouse_pos, pair_rect):
-      gui_app.push_widget(MiciBodyPairingScreen())
+      gui_app.push_widget(OneTimeConnectPanel())
       return
     super()._handle_mouse_release(mouse_pos)
 

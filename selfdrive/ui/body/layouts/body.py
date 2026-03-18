@@ -64,14 +64,14 @@ class BodyLayout(Widget):
     bg_color = rl.Color(255, 255, 255, 166) if pair_pressed else rl.WHITE
 
     rl.draw_rectangle_rounded(pair_rect, 0.5, 10, bg_color)
-    text = tr(tr_noop("PAIR"))
+    text = tr(tr_noop("CONNECT"))
     text_size = measure_text_cached(self._font_bold, text, PAIR_BTN_FONT_SIZE)
     text_pos = rl.Vector2(pair_rect.x + (pair_rect.width - text_size.x) / 2,
                           pair_rect.y + (pair_rect.height - text_size.y) / 2)
     rl.draw_text_ex(self._font_bold, text, text_pos, PAIR_BTN_FONT_SIZE, 0, rl.BLACK)
 
   def _get_pair_btn_rect(self, rect: rl.Rectangle) -> rl.Rectangle:
-    text = tr(tr_noop("PAIR"))
+    text = tr(tr_noop("CONNECT"))
     text_size = measure_text_cached(self._font_bold, text, PAIR_BTN_FONT_SIZE)
     btn_w = int(text_size.x + 60)
     btn_h = 80

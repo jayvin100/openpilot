@@ -7,10 +7,8 @@ import numpy as np
 import pyray as rl
 import qrcode
 
-from openpilot.common.api import Api
-from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.ui.ui_state import device, ui_state
+from openpilot.selfdrive.ui.ui_state import device
 from openpilot.system.ui.lib.application import FontWeight, MousePos, gui_app
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.wifi_manager import WifiManager
@@ -38,11 +36,6 @@ class _BodyPairingBase:
   QR_REFRESH_INTERVAL = 300  # seconds
 
   def _init_pairing_state(self):
-    self._params = Params()
-
-    self._pair_qr_texture: rl.Texture | None = None
-    self._pair_qr_last_gen = float('-inf')
-
     self._connect_qr_texture: rl.Texture | None = None
     self._connect_qr_last_gen = float('-inf')
 
@@ -57,15 +50,6 @@ class _BodyPairingBase:
     if now - self._last_ip_check > 10:
       self._ip_address = _get_local_ip()
       self._last_ip_check = now
-
-  def _get_pairing_url(self) -> str:
-    try:
-      dongle_id = self._params.get("DongleId") or ""
-      token = Api(dongle_id).get_token({'pair': True})
-    except Exception:
-      cloudlog.exception("Failed to get pairing token")
-      token = ""
-    return f"https://connect.comma.ai/?pair={token}"
 
   def _get_connect_url(self) -> str:
     ip = self._ip_address or "unknown"
@@ -93,14 +77,6 @@ class _BodyPairingBase:
       cloudlog.exception("QR code generation failed")
       return None
 
-  def _refresh_pair_qr(self):
-    now = time.monotonic()
-    if now - self._pair_qr_last_gen >= self.QR_REFRESH_INTERVAL:
-      if self._pair_qr_texture and self._pair_qr_texture.id != 0:
-        rl.unload_texture(self._pair_qr_texture)
-      self._pair_qr_texture = self._generate_qr(self._get_pairing_url(), invert=True)
-      self._pair_qr_last_gen = now
-
   def _refresh_connect_qr(self):
     now = time.monotonic()
     if now - self._connect_qr_last_gen >= self.QR_REFRESH_INTERVAL:
@@ -115,9 +91,8 @@ class _BodyPairingBase:
     rl.draw_texture_pro(texture, source, dest, rl.Vector2(0, 0), 0, rl.WHITE)
 
   def _cleanup_textures(self):
-    for tex in (self._pair_qr_texture, self._connect_qr_texture):
-      if tex and tex.id != 0:
-        rl.unload_texture(tex)
+    if self._connect_qr_texture and self._connect_qr_texture.id != 0:
+      rl.unload_texture(self._connect_qr_texture)
 
 
 # -- Big (normal) layout: two side-by-side cards --
@@ -135,7 +110,7 @@ CLOSE_BTN_PRESSED = rl.Color(59, 59, 59, 255)
 
 
 class BodyPairingScreen(_BodyPairingBase, Widget):
-  """Two-panel pairing screen for comma body: account pairing (left) and one-time connection (right)."""
+  """Connection screen for comma body: shows one-time connection QR and manual connect info."""
 
   def __init__(self):
     Widget.__init__(self)
@@ -158,7 +133,6 @@ class BodyPairingScreen(_BodyPairingBase, Widget):
     rl.clear_background(SCREEN_BG)
 
     margin = 40
-    gap = 30
 
     # Close button (settings-style)
     close_btn_rect = rl.Rectangle(rect.x + margin, rect.y + 40, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE)
@@ -194,107 +168,89 @@ class BodyPairingScreen(_BodyPairingBase, Widget):
 
     cards_y = rect.y + 60 + CLOSE_BTN_SIZE + 20
     cards_h = rect.height - (cards_y - rect.y) - margin
-    card_w = (rect.width - 2 * margin - gap) / 2
+    card_w = rect.width - 2 * margin
 
-    left_rect = rl.Rectangle(rect.x + margin, cards_y, card_w, cards_h)
-    right_rect = rl.Rectangle(rect.x + margin + card_w + gap, cards_y, card_w, cards_h)
-
-    is_paired = ui_state.prime_state.is_paired()
-
-    self._render_pair_card(left_rect, is_paired)
-    self._render_connect_card(right_rect)
-
-  def _render_pair_card(self, rect: rl.Rectangle, is_paired: bool):
-    rl.draw_rectangle_rounded(rect, CARD_RADIUS, 20, CARD_BG)
-
-    pad = 40
-    x = rect.x + pad
-    y = rect.y + pad
-    w = rect.width - 2 * pad
-
-    title = "PAIR with COMMA BODY"
-    rl.draw_text_ex(self._font_bold, title, rl.Vector2(x, y), 48, 0, TEXT_COLOR)
-    y += 70
-
-    if is_paired:
-      self._render_paired_state(x, y, w)
-    else:
-      self._render_unpaired_state(x, y, w, rect)
-
-  def _render_paired_state(self, x: float, y: float, w: float):
-    circle_x = x + w / 2
-    circle_y = y + 80
-    rl.draw_circle(int(circle_x), int(circle_y), 40, rl.Color(75, 180, 75, 255))
-    check_font = gui_app.font(FontWeight.BOLD)
-    check_size = measure_text_cached(check_font, "\u2713", 50)
-    rl.draw_text_ex(check_font, "\u2713", rl.Vector2(circle_x - check_size.x / 2, circle_y - check_size.y / 2), 50, 0, rl.WHITE)
-
-    y = circle_y + 70
-
-    paired_text = "This comma body is paired"
-    text_size = measure_text_cached(self._font_semi, paired_text, 38)
-    rl.draw_text_ex(self._font_semi, paired_text, rl.Vector2(x + (w - text_size.x) / 2, y), 38, 0, TEXT_COLOR)
-    y += 50
-
-    sub_text = "Manage your device at connect.comma.ai"
-    sub_size = measure_text_cached(self._font, sub_text, 30)
-    rl.draw_text_ex(self._font, sub_text, rl.Vector2(x + (w - sub_size.x) / 2, y), 30, 0, TEXT_DIM)
-
-  def _render_unpaired_state(self, x: float, y: float, w: float, card_rect: rl.Rectangle):
-    desc = "With connect prime, you can control your comma body from anywhere in the world!"
-    wrapped = wrap_text(self._font, desc, 34, int(w))
-    for line in wrapped:
-      rl.draw_text_ex(self._font, line, rl.Vector2(x, y), 34, 0, TEXT_DIM)
-      y += 42
-
-    y += 20
-
-    self._refresh_pair_qr()
-    remaining_h = card_rect.y + card_rect.height - y - 40
-    qr_size = min(int(w * 0.6), int(remaining_h))
-    if qr_size > 0 and self._pair_qr_texture:
-      qr_x = x + (w - qr_size) / 2
-      self._draw_qr_texture(self._pair_qr_texture, qr_x, y, qr_size)
+    connect_rect = rl.Rectangle(rect.x + margin, cards_y, card_w, cards_h)
+    self._render_connect_card(connect_rect)
 
   def _render_connect_card(self, rect: rl.Rectangle):
     rl.draw_rectangle_rounded(rect, CARD_RADIUS, 20, CARD_BG)
 
     pad = 40
     x = rect.x + pad
-    y = rect.y + pad
     w = rect.width - 2 * pad
+    h = rect.height - 2 * pad
 
-    title = "One-time connection to COMMA BODY"
-    rl.draw_text_ex(self._font_bold, title, rl.Vector2(x, y), 48, 0, TEXT_COLOR)
-    y += 70
-
-    desc = "You can connect to this comma one time by scanning the QR code on your connect app"
-    wrapped = wrap_text(self._font, desc, 34, int(w))
-    for line in wrapped:
-      rl.draw_text_ex(self._font, line, rl.Vector2(x, y), 34, 0, TEXT_DIM)
-      y += 42
-
-    y += 20
-
+    # QR on the right side
     self._refresh_connect_qr()
-    qr_avail_h = rect.y + rect.height - y - 180
-    qr_size = min(int(w * 0.5), int(qr_avail_h))
+    qr_size = min(int(h), int(w * 0.4))
+    qr_x = x + w - qr_size
+    qr_y = rect.y + (rect.height - qr_size) / 2
     if qr_size > 0 and self._connect_qr_texture:
-      qr_x = x + (w - qr_size) / 2
-      self._draw_qr_texture(self._connect_qr_texture, qr_x, y, qr_size)
-      y += qr_size + 20
+      self._draw_qr_texture(self._connect_qr_texture, qr_x, qr_y, qr_size)
 
-    bottom_y = rect.y + rect.height - pad - 120
-    y = max(y, bottom_y)
+    # Text on the left side, vertically centered
+    text_w = int(w - qr_size - pad)
 
-    rl.draw_text_ex(self._font_semi, "scan qr code or connect manually via:", rl.Vector2(x, y), 34, 0, TEXT_COLOR)
-    y += 42
+    title = "Connect to this COMMA Body"
+    desc = "connection options:"
+    wrapped = wrap_text(self._font, desc, 34, text_w)
 
-    rl.draw_text_ex(self._font, "connect.comma.ai", rl.Vector2(x, y), 34, 0, TEXT_COLOR)
-    y += 42
+    # Layout constants
+    circle_r = 18
+    text_offset = circle_r * 2 + 14
+    line_h = 42
+    option_line_h = 48  # taller for circle rows
 
-    ip_text = f"IP: {self._ip_address}" if self._ip_address else "IP: not connected"
-    rl.draw_text_ex(self._font, ip_text, rl.Vector2(x, y), 34, 0, TEXT_COLOR)
+    # Calculate total text block height
+    # title + gap + desc lines + gap + option1 + or + option2 + 3 detail lines
+    total_text_h = (48 + 22 + len(wrapped) * line_h + 20 +
+                    option_line_h + line_h + option_line_h + line_h * 3)
+    text_y = rect.y + (rect.height - total_text_h) / 2
+
+    rl.draw_text_ex(self._font_bold, title, rl.Vector2(x, text_y), 48, 0, TEXT_COLOR)
+    text_y += 70
+
+    for line in wrapped:
+      rl.draw_text_ex(self._font, line, rl.Vector2(x, text_y), 34, 0, TEXT_DIM)
+      text_y += line_h
+
+    text_y += 20
+
+    # Option 1
+    circle_cy = text_y + option_line_h / 2
+    circle_cx = x + circle_r
+    rl.draw_circle_lines(int(circle_cx), int(circle_cy), circle_r, TEXT_COLOR)
+    num_size = measure_text_cached(self._font_semi, "1", 28)
+    rl.draw_text_ex(self._font_semi, "1", rl.Vector2(circle_cx - num_size.x / 2, circle_cy - num_size.y / 2), 28, 0, TEXT_COLOR)
+    opt1_text = "scan qr code"
+    opt1_size = measure_text_cached(self._font_semi, opt1_text, 34)
+    rl.draw_text_ex(self._font_semi, opt1_text, rl.Vector2(x + text_offset, circle_cy - opt1_size.y / 2), 34, 0, TEXT_COLOR)
+    text_y += option_line_h
+
+    # OR
+    or_size = measure_text_cached(self._font, "OR", 30)
+    rl.draw_text_ex(self._font, "OR", rl.Vector2(x + text_offset + (opt1_size.x - or_size.x) / 2, text_y + (line_h - or_size.y) / 2), 30, 0, TEXT_DIM)
+    text_y += line_h
+
+    # Option 2
+    circle_cy = text_y + option_line_h / 2
+    rl.draw_circle_lines(int(circle_cx), int(circle_cy), circle_r, TEXT_COLOR)
+    num_size = measure_text_cached(self._font_semi, "2", 28)
+    rl.draw_text_ex(self._font_semi, "2", rl.Vector2(circle_cx - num_size.x / 2, circle_cy - num_size.y / 2), 28, 0, TEXT_COLOR)
+    opt2_text = "connect manually"
+    opt2_size = measure_text_cached(self._font_semi, opt2_text, 34)
+    rl.draw_text_ex(self._font_semi, opt2_text, rl.Vector2(x + text_offset, circle_cy - opt2_size.y / 2), 34, 0, TEXT_COLOR)
+    text_y += option_line_h
+
+    rl.draw_text_ex(self._font, "visit connect.comma.ai", rl.Vector2(x + text_offset, text_y), 34, 0, TEXT_COLOR)
+    text_y += line_h
+
+    rl.draw_text_ex(self._font, "click add new device", rl.Vector2(x + text_offset, text_y), 34, 0, TEXT_COLOR)
+    text_y += line_h
+
+    ip_text = f"enter IP: {self._ip_address}" if self._ip_address else "IP: not connected"
+    rl.draw_text_ex(self._font, ip_text, rl.Vector2(x + text_offset, text_y), 34, 0, TEXT_COLOR)
 
   def __del__(self):
     self._cleanup_textures()
@@ -309,55 +265,7 @@ MICI_DESC_SIZE = 26
 MICI_LINE_HEIGHT = 32
 
 
-class _AccountPairingPanel(_BodyPairingBase, NavWidget):
-  """Detail panel showing account pairing QR code. Swipe down to go back."""
-
-  def __init__(self):
-    NavWidget.__init__(self)
-    self._init_pairing_state()
-
-    self._font = gui_app.font(FontWeight.ROMAN)
-    self._font_bold = gui_app.font(FontWeight.BOLD)
-    self._font_semi = gui_app.font(FontWeight.SEMI_BOLD)
-
-  def show_event(self):
-    super().show_event()
-    device.set_override_interactive_timeout(300)
-
-  def hide_event(self):
-    super().hide_event()
-    device.set_override_interactive_timeout(None)
-
-  def _update_state(self):
-    super()._update_state()
-    if ui_state.prime_state.is_paired() and not self.is_dismissing:
-      self.dismiss()
-
-  def _render(self, rect: rl.Rectangle):
-    self._refresh_pair_qr()
-
-    # QR code scaled to fit, left-aligned
-    qr_size = int(rect.height)
-    if self._pair_qr_texture and qr_size > 0:
-      self._draw_qr_texture(self._pair_qr_texture, rect.x + 8, rect.y, qr_size)
-
-    # Label to the right of the QR
-    label_x = rect.x + 8 + qr_size + 24
-    label_w = rect.width - label_x
-
-    title = "pair with\ncomma connect"
-    title_font = gui_app.font(FontWeight.BOLD)
-    wrapped = wrap_text(title_font, title, 48, int(label_w))
-    y = rect.y + 16
-    for line in wrapped:
-      rl.draw_text_ex(title_font, line, rl.Vector2(label_x, y), 48, 0, MICI_TEXT_COLOR)
-      y += 52
-
-  def __del__(self):
-    self._cleanup_textures()
-
-
-class _OneTimeConnectPanel(_BodyPairingBase, NavWidget):
+class OneTimeConnectPanel(_BodyPairingBase, NavWidget):
   """Detail panel showing one-time connection QR code with manual IP/port info. Swipe down to go back."""
 
   def __init__(self):
@@ -428,19 +336,13 @@ class MiciBodyPairingScreen(NavScroller):
     self._wifi_manager = WifiManager()
     self._wifi_manager.set_active(False)
 
-    self._pair_panel = _AccountPairingPanel()
-    pair_btn = _PairingBigButton("pair account", "connect.comma.ai",
-                                 gui_app.texture("icons_mici/settings/comma_icon.png", 33, 60))
-    pair_btn.set_click_callback(lambda: gui_app.push_widget(self._pair_panel))
-
-    self._connect_panel = _OneTimeConnectPanel()
-    connect_btn = _PairingBigButton("1-time connect", "",
+    self._connect_panel = OneTimeConnectPanel()
+    connect_btn = _PairingBigButton("connect", "",
                                     gui_app.texture("icons_mici/settings/network/wifi_strength_full.png", 76, 56))
     connect_btn.set_click_callback(lambda: gui_app.push_widget(self._connect_panel))
 
-    self._pair_btn = pair_btn
     self._connect_btn = connect_btn
-    self._scroller.add_widgets([connect_btn, pair_btn])
+    self._scroller.add_widgets([connect_btn])
 
   def show_event(self):
     super().show_event()
@@ -452,13 +354,6 @@ class MiciBodyPairingScreen(NavScroller):
 
   def _update_state(self):
     super()._update_state()
-    if ui_state.prime_state.is_paired():
-      self._pair_btn.set_text("paired")
-      self._pair_btn.set_value("connected")
-    else:
-      self._pair_btn.set_text("pair account")
-      self._pair_btn.set_value("connect.comma.ai")
-
     ssid = self._wifi_manager.connected_ssid
     self._connect_btn.set_value(ssid or "")
 
