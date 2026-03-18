@@ -15,10 +15,10 @@ class MiciBodyHomeLayout(MiciHomeLayout):
   def _get_pair_btn_rect(self) -> rl.Rectangle:
     text = "PAIR"
     text_size = measure_text_cached(self._font_bold, text, PAIR_BTN_FONT_SIZE)
-    btn_w = int(text_size.x + 220)
-    btn_h = 85
+    btn_w = int(text_size.x + 210)
+    btn_h = 120
     btn_x = int(self._rect.x + self._rect.width - btn_w - PAIR_BTN_MARGIN)
-    btn_y = int(self._rect.y + self._rect.height - btn_h - PAIR_BTN_MARGIN)
+    btn_y = int(self._rect.y + self._rect.height - btn_h - 5 - PAIR_BTN_MARGIN)
     return rl.Rectangle(btn_x, btn_y, btn_w, btn_h)
 
   def _draw_pair_button(self):

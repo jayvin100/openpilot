@@ -116,14 +116,13 @@ class MiciMainLayout(Scroller):
     # - Disconnected (True->False): scroll to home so user can reconnect,
     #   then after inactivity timeout, scroll back to onroad (asleep)
     if self._is_body and ui_state.joystick_debug_mode != self._prev_joystick_debug_mode:
-      if ui_state.started:
-        if ui_state.joystick_debug_mode:
-          self._joystick_disconnect_home = False
-          gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
-        else:
-          self._joystick_disconnect_home = True
-          self._scroll_to(self._home_layout)
-          device._reset_interactive_timeout()
+      if ui_state.joystick_debug_mode:
+        self._joystick_disconnect_home = False
+        gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
+      else:
+        self._joystick_disconnect_home = True
+        self._scroll_to(self._home_layout)
+        device.set_override_interactive_timeout(30)
       self._prev_joystick_debug_mode = ui_state.joystick_debug_mode
 
   def _on_interactive_timeout(self):

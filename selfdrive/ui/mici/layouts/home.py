@@ -191,7 +191,7 @@ class MiciHomeLayout(Widget):
       self._branch_label.set_position(version_pos.x + self._version_label.text_width + self._date_label.text_width + 20, version_pos.y)
       self._branch_label.render()
 
-      if not release_branch:
+      if not release_branch and ui_state.CP is not None and ui_state.CP.notCar:
         # 2nd line
         self._version_commit_label.set_text(self._version_text[2])
         self._version_commit_label.set_position(version_pos.x, version_pos.y + self._date_label.font_size + 7)
