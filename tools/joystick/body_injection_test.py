@@ -31,9 +31,9 @@ def publish_phase(pm: messaging.PubMaster, rk: Ratekeeper, accel: float, duratio
 
 def main():
   parser = argparse.ArgumentParser(description='Body injection test: forward -> stop -> backward')
-  parser.add_argument('--forward-duration', type=float, default=3.0, help='Seconds at full forward')
-  parser.add_argument('--backward-duration', type=float, default=3.0, help='Seconds at full backward')
-  parser.add_argument('--stop-duration', type=float, default=5.0, help='Seconds at zero')
+  parser.add_argument('--forward-duration', type=float, default=5.0, help='Seconds at full forward')
+  parser.add_argument('--backward-duration', type=float, default=5.0, help='Seconds at full backward')
+  parser.add_argument('--stop-duration', type=float, default=3.0, help='Seconds at zero')
   args = parser.parse_args()
 
   params = Params()
@@ -48,9 +48,9 @@ def main():
   # Allow joystickd to start and connect
   time.sleep(1.0)
 
-  publish_phase(pm, rk, 1.0, args.forward_duration, "FULL FORWARD")
+  publish_phase(pm, rk, -1.0, args.forward_duration, "FULL FORWARD")
   publish_phase(pm, rk, 0.0, args.stop_duration, "STOP")
-  publish_phase(pm, rk, -1.0, args.backward_duration, "FULL BACKWARD")
+  publish_phase(pm, rk, 1.0, args.backward_duration, "FULL BACKWARD")
 
   # Send zero for a bit to cleanly stop
   publish_phase(pm, rk, 0.0, 0.5, "COOLDOWN")
