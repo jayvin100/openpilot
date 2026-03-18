@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 from openpilot.system.webrtc.schema import generate_field
 from cereal import messaging, log
+from openpilot.common.params import Params
 
 
 class CerealOutgoingMessageProxy:
@@ -195,6 +196,7 @@ class StreamSession:
     await self.stream.stop()
     if self.outgoing_bridge is not None:
       self.outgoing_bridge_runner.stop()
+    Params().put_bool("JoystickDebugMode", False)
 
 
 @dataclass

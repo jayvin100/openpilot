@@ -83,7 +83,7 @@ class BodyLayout(Widget):
     sm = ui_state.sm
 
     active = ui_state.is_onroad()
-    if active:
+    if active and ui_state.joystick_debug_mode:
       if not self._was_active:
         self._last_input_time = time.monotonic()
         self._was_active = True
@@ -97,6 +97,9 @@ class BodyLayout(Widget):
         self._animator.set_animation(INQUISITIVE)
       else:
         self._animator.set_animation(NORMAL)
+    elif active:
+      self._was_active = False
+      self._animator.set_animation(ASLEEP)
     else:
       self._was_active = False
       self._animator.set_animation(ASLEEP)
