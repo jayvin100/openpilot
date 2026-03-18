@@ -261,6 +261,13 @@ async def get_stream(request: 'web.Request'):
 
     _cleanup_stale_streams(stream_dict)
 
+    active_streams = _get_active_streams(stream_dict)
+    if active_streams:
+      raise web.HTTPConflict(
+        text=json.dumps({"error": "already_connected", "message": "Another device is already connected to the stream"}),
+        content_type="application/json",
+      )
+
     raw_body = await request.json()
     body = StreamRequestBody(**raw_body)
     _validate_sdp_video_codecs(body.sdp)
