@@ -13,6 +13,9 @@
 #include "media/cam_sensor_cmn_header.h"
 #include "media/cam_sync.h"
 
+#include "cereal/gen/cpp/car.capnp.h"
+#include "cereal/messaging/messaging.h"
+#include "common/params.h"
 #include "common/util.h"
 #include "common/swaglog.h"
 #include "system/camerad/cameras/ife.h"
@@ -551,9 +554,23 @@ void SpectraCamera::config_bps(int idx, int request_id) {
     }
 
     if (bps_ccm_reg.size() == 0) {
+      // Use a visible-light CCM on body (notCar) to remove IR purple tint
+      std::vector<uint32_t> ccm = sensor->color_correct_matrix;
+      std::string cp_bytes = Params().get("CarParamsPersistent");
+      if (cp_bytes.size() > 0) {
+        AlignedBuffer aligned_buf;
+        capnp::FlatArrayMessageReader cmsg(aligned_buf.align(cp_bytes.data(), cp_bytes.size()));
+        if (cmsg.getRoot<cereal::CarParams>().getNotCar()) {
+          ccm = {
+            0x000000b6, 0x00000ff1, 0x00000fda,
+            0x00000fcc, 0x000000b9, 0x00000ffb,
+            0x00000fc2, 0x00000ff6, 0x000000c9,
+          };
+        }
+      }
       for (int i = 0; i < 3; i++) {
-        bps_ccm_reg.push_back(sensor->color_correct_matrix[i] | (sensor->color_correct_matrix[i+3] << 0x10));
-        bps_ccm_reg.push_back(sensor->color_correct_matrix[i+6]);
+        bps_ccm_reg.push_back(ccm[i] | (ccm[i+3] << 0x10));
+        bps_ccm_reg.push_back(ccm[i+6]);
       }
     }
 
