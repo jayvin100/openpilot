@@ -25,6 +25,8 @@ class MiciMainLayout(Scroller):
     self._is_body = ui_state.CP is not None and ui_state.CP.notCar
     self._prev_onroad = False
     self._prev_standstill = False
+    self._prev_joystick_debug_mode = False
+    self._joystick_disconnect_home = False
     self._onroad_time_delay: float | None = None
     self._setup = False
 
@@ -99,7 +101,8 @@ class MiciMainLayout(Scroller):
 
     # FIXME: these two pops can interrupt user interacting in the settings
     if self._onroad_time_delay is not None and rl.get_time() - self._onroad_time_delay >= ONROAD_DELAY:
-      gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
+      if not self._joystick_disconnect_home:
+        gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
       self._onroad_time_delay = None
 
     # When car leaves standstill, pop nav stack and scroll to onroad
@@ -108,12 +111,28 @@ class MiciMainLayout(Scroller):
       gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
     self._prev_standstill = CS.standstill
 
+    # On body, react to joystick debug mode changes while onroad:
+    # - Connected (False->True): scroll to onroad to show awake face
+    # - Disconnected (True->False): scroll to home so user can reconnect,
+    #   then after inactivity timeout, scroll back to onroad (asleep)
+    if self._is_body and ui_state.joystick_debug_mode != self._prev_joystick_debug_mode:
+      if ui_state.started:
+        if ui_state.joystick_debug_mode:
+          self._joystick_disconnect_home = False
+          gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
+        else:
+          self._joystick_disconnect_home = True
+          self._scroll_to(self._home_layout)
+          device._reset_interactive_timeout()
+      self._prev_joystick_debug_mode = ui_state.joystick_debug_mode
+
   def _on_interactive_timeout(self):
     # Don't pop if onboarding
     if gui_app.widget_in_stack(self._onboarding_window):
       return
 
     if ui_state.started:
+      self._joystick_disconnect_home = False
       # Don't pop if at standstill
       if not ui_state.sm["carState"].standstill:
         gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))

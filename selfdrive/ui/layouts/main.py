@@ -28,7 +28,6 @@ class MainLayout(Widget):
     self._sidebar = BodySidebar() if self._is_body else Sidebar()
     self._current_mode = MainState.HOME
     self._prev_onroad = False
-    self._prev_joystick_debug_mode = False
 
     # Initialize layouts
     if self._is_body:
@@ -84,15 +83,6 @@ class MainLayout(Widget):
     if ui_state.started != self._prev_onroad:
       self._prev_onroad = ui_state.started
       self._set_mode_for_state()
-
-    # On body, when joystick debug mode is disconnected while onroad,
-    # show the home page so the user can reconnect. After inactivity
-    # timeout, _set_mode_for_state will switch back to ONROAD (asleep).
-    if self._is_body and ui_state.started:
-      if self._prev_joystick_debug_mode and not ui_state.joystick_debug_mode:
-        self._set_current_layout(MainState.HOME)
-        device._reset_interactive_timeout()
-      self._prev_joystick_debug_mode = ui_state.joystick_debug_mode
 
   def _set_mode_for_state(self):
     if ui_state.started:
