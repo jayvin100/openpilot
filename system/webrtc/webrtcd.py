@@ -277,6 +277,7 @@ async def get_stream(request: 'web.Request'):
     session = StreamSession(body.sdp, body.cameras, body.bridge_services_in, body.bridge_services_out, debug_mode)
     answer = await session.get_answer()
     session.start()
+    Params().put_bool("JoystickDebugMode", True)
 
     stream_dict[session.identifier] = session
 
