@@ -11,11 +11,11 @@ from openpilot.common.api import Api
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.ui_state import device, ui_state
-from openpilot.system.ui.lib.application import FontWeight, gui_app
+from openpilot.system.ui.lib.application import FontWeight, MousePos, gui_app
 from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.system.ui.lib.wifi_manager import WifiManager
 from openpilot.system.ui.lib.wrap_text import wrap_text
 from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.widgets.button import IconButton
 from openpilot.system.ui.widgets.nav_widget import NavWidget
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton
@@ -48,6 +48,9 @@ class _BodyPairingBase:
 
     self._ip_address = ""
     self._last_ip_check = float('-inf')
+
+    self._wifi_manager = WifiManager()
+    self._wifi_manager.set_active(False)
 
   def _refresh_ip(self):
     now = time.monotonic()
@@ -125,6 +128,11 @@ TEXT_COLOR = rl.WHITE
 TEXT_DIM = rl.Color(255, 255, 255, 150)
 SCREEN_BG = rl.Color(20, 20, 20, 255)
 
+CLOSE_BTN_SIZE = 125
+CLOSE_ICON_SIZE = 50
+CLOSE_BTN_COLOR = rl.Color(41, 41, 41, 255)
+CLOSE_BTN_PRESSED = rl.Color(59, 59, 59, 255)
+
 
 class BodyPairingScreen(_BodyPairingBase, Widget):
   """Two-panel pairing screen for comma body: account pairing (left) and one-time connection (right)."""
@@ -132,8 +140,8 @@ class BodyPairingScreen(_BodyPairingBase, Widget):
   def __init__(self):
     Widget.__init__(self)
     self._init_pairing_state()
-    self._close_btn = self._child(IconButton(gui_app.texture("icons/close.png", 80, 80)))
-    self._close_btn.set_click_callback(gui_app.pop_widget)
+    self._close_icon = gui_app.texture("icons/close2.png", CLOSE_ICON_SIZE, CLOSE_ICON_SIZE)
+    self._close_btn_rect = rl.Rectangle(0, 0, 0, 0)
 
     self._font = gui_app.font(FontWeight.NORMAL)
     self._font_bold = gui_app.font(FontWeight.BOLD)
@@ -142,18 +150,50 @@ class BodyPairingScreen(_BodyPairingBase, Widget):
   def _update_state(self):
     self._refresh_ip()
 
+  def _handle_mouse_release(self, mouse_pos: MousePos) -> None:
+    if rl.check_collision_point_rec(mouse_pos, self._close_btn_rect):
+      gui_app.pop_widget()
+
   def _render(self, rect: rl.Rectangle):
     rl.clear_background(SCREEN_BG)
 
     margin = 40
     gap = 30
-    close_size = 60
 
-    close_rect = rl.Rectangle(rect.x + margin, rect.y + margin, close_size, close_size)
-    self._close_btn.render(close_rect)
+    # Close button (settings-style)
+    close_btn_rect = rl.Rectangle(rect.x + margin, rect.y + 40, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE)
+    self._close_btn_rect = close_btn_rect
 
-    cards_y = rect.y + margin + close_size + 20
-    cards_h = rect.height - margin - close_size - 20 - margin
+    pressed = (rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT) and
+               rl.check_collision_point_rec(rl.get_mouse_position(), close_btn_rect))
+    close_color = CLOSE_BTN_PRESSED if pressed else CLOSE_BTN_COLOR
+    rl.draw_rectangle_rounded(close_btn_rect, 1.0, 20, close_color)
+
+    icon_color = rl.Color(220, 220, 220, 255) if pressed else rl.Color(255, 255, 255, 255)
+    icon_dest = rl.Rectangle(
+      close_btn_rect.x + (close_btn_rect.width - self._close_icon.width) / 2,
+      close_btn_rect.y + (close_btn_rect.height - self._close_icon.height) / 2,
+      self._close_icon.width,
+      self._close_icon.height,
+    )
+    rl.draw_texture_pro(
+      self._close_icon,
+      rl.Rectangle(0, 0, self._close_icon.width, self._close_icon.height),
+      icon_dest,
+      rl.Vector2(0, 0),
+      0,
+      icon_color,
+    )
+
+    ssid = self._wifi_manager.connected_ssid
+    wifi_text = f"WiFi: {ssid}" if ssid else "WiFi: not connected"
+    wifi_size = measure_text_cached(self._font_semi, wifi_text, 38)
+    wifi_x = rect.x + (rect.width - wifi_size.x) / 2
+    wifi_y = rect.y + 60 + (CLOSE_BTN_SIZE - wifi_size.y) / 2
+    rl.draw_text_ex(self._font_semi, wifi_text, rl.Vector2(wifi_x, wifi_y), 38, 0, TEXT_COLOR)
+
+    cards_y = rect.y + 60 + CLOSE_BTN_SIZE + 20
+    cards_h = rect.height - (cards_y - rect.y) - margin
     card_w = (rect.width - 2 * margin - gap) / 2
 
     left_rect = rl.Rectangle(rect.x + margin, cards_y, card_w, cards_h)
@@ -224,7 +264,7 @@ class BodyPairingScreen(_BodyPairingBase, Widget):
     y = rect.y + pad
     w = rect.width - 2 * pad
 
-    title = "Connect to COMMA BODY"
+    title = "One-time connection to COMMA BODY"
     rl.draw_text_ex(self._font_bold, title, rl.Vector2(x, y), 48, 0, TEXT_COLOR)
     y += 70
 
@@ -247,13 +287,14 @@ class BodyPairingScreen(_BodyPairingBase, Widget):
     bottom_y = rect.y + rect.height - pad - 120
     y = max(y, bottom_y)
 
-    rl.draw_text_ex(self._font, "Can't use the QR code? Input the following manually:", rl.Vector2(x, y), 30, 0, TEXT_DIM)
-    y += 40
+    rl.draw_text_ex(self._font_semi, "scan qr code or connect manually via:", rl.Vector2(x, y), 34, 0, TEXT_COLOR)
+    y += 42
+
+    rl.draw_text_ex(self._font, "connect.comma.ai", rl.Vector2(x, y), 34, 0, TEXT_COLOR)
+    y += 42
 
     ip_text = f"IP: {self._ip_address}" if self._ip_address else "IP: not connected"
-    rl.draw_text_ex(self._font_semi, ip_text, rl.Vector2(x, y), 34, 0, TEXT_COLOR)
-    y += 42
-    rl.draw_text_ex(self._font_semi, f"Port: {WEBRTC_PORT}", rl.Vector2(x, y), 34, 0, TEXT_COLOR)
+    rl.draw_text_ex(self._font, ip_text, rl.Vector2(x, y), 34, 0, TEXT_COLOR)
 
   def __del__(self):
     self._cleanup_textures()
@@ -349,19 +390,25 @@ class _OneTimeConnectPanel(_BodyPairingBase, NavWidget):
       self._draw_qr_texture(self._connect_qr_texture, rect.x + 8, rect.y, qr_size)
 
     # Label and manual info to the right
-    label_x = rect.x + 8 + qr_size + 24
-    y = rect.y + 16
+    label_x = rect.x + 8 + qr_size
+    y = rect.y + 24
 
-    title_font = gui_app.font(FontWeight.BOLD)
-    rl.draw_text_ex(title_font, "one-time", rl.Vector2(label_x, y), 48, 0, MICI_TEXT_COLOR)
-    y += 40
-    rl.draw_text_ex(title_font, "connection", rl.Vector2(label_x, y), 48, 0, MICI_TEXT_COLOR)
-    y += 80
+    ssid = self._wifi_manager.connected_ssid
+    wifi_text = f"WiFi: {ssid}" if ssid else "WiFi: not connected"
+    rl.draw_text_ex(self._font, wifi_text, rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
+    y += MICI_LABEL_SIZE + 20
+
+    rl.draw_text_ex(self._font_semi, "scan qr code or", rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
+    y += MICI_LABEL_SIZE + 6
+
+    rl.draw_text_ex(self._font_semi, "connect manually via:", rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
+    y += MICI_LABEL_SIZE + 12
+
+    rl.draw_text_ex(self._font, "connect.comma.ai", rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
+    y += MICI_LABEL_SIZE + 6
 
     ip_text = f"IP: {self._ip_address}" if self._ip_address else "IP: not connected"
-    rl.draw_text_ex(self._font_semi, ip_text, rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
-    y += MICI_LABEL_SIZE + 6
-    rl.draw_text_ex(self._font_semi, f"Port: {WEBRTC_PORT}", rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
+    rl.draw_text_ex(self._font, ip_text, rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
 
   def __del__(self):
     self._cleanup_textures()
@@ -378,6 +425,9 @@ class MiciBodyPairingScreen(NavScroller):
   def __init__(self):
     super().__init__()
 
+    self._wifi_manager = WifiManager()
+    self._wifi_manager.set_active(False)
+
     self._pair_panel = _AccountPairingPanel()
     pair_btn = _PairingBigButton("pair account", "connect.comma.ai",
                                  gui_app.texture("icons_mici/settings/comma_icon.png", 33, 60))
@@ -389,6 +439,7 @@ class MiciBodyPairingScreen(NavScroller):
     connect_btn.set_click_callback(lambda: gui_app.push_widget(self._connect_panel))
 
     self._pair_btn = pair_btn
+    self._connect_btn = connect_btn
     self._scroller.add_widgets([connect_btn, pair_btn])
 
   def show_event(self):
@@ -407,6 +458,9 @@ class MiciBodyPairingScreen(NavScroller):
     else:
       self._pair_btn.set_text("pair account")
       self._pair_btn.set_value("connect.comma.ai")
+
+    ssid = self._wifi_manager.connected_ssid
+    self._connect_btn.set_value(ssid or "")
 
 
 if __name__ == "__main__":
