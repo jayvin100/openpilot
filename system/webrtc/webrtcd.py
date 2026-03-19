@@ -4,8 +4,11 @@ import argparse
 import asyncio
 import ipaddress
 import json
-import uuid
 import logging
+import os
+import ssl
+import subprocess
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 from urllib.parse import urlparse
@@ -299,6 +302,32 @@ async def get_schema(request: 'web.Request'):
   schema_dict = {s: generate_field(log.Event.schema.fields[s]) for s in services}
   return web.json_response(schema_dict)
 
+TRUST_HTML = """<!DOCTYPE html>
+<html><head><title>comma body</title>
+<style>
+  body { background: #111; color: #fff; font-family: -apple-system, system-ui, sans-serif;
+         display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+  .card { text-align: center; max-width: 400px; padding: 40px; }
+  h1 { font-size: 24px; margin-bottom: 8px; }
+  p { color: #aaa; font-size: 14px; }
+  .check { font-size: 64px; margin-bottom: 16px; }
+</style></head>
+<body><div class="card">
+  <div class="check">&#x2705;</div>
+  <h1>SSL Certificate Accepted</h1>
+  <p>You can close this tab and return to the connect app.</p>
+  <script>
+    if (window.opener) {
+      window.opener.postMessage({ type: 'ssl_cert_accepted' }, '*');
+    }
+  </script>
+</div></body></html>"""
+
+
+async def get_trust(request: 'web.Request'):
+  return web.Response(content_type="text/html", text=TRUST_HTML)
+
+
 async def post_notify(request: 'web.Request'):
   try:
     payload = await request.json()
@@ -320,6 +349,36 @@ async def on_shutdown(app: 'web.Application'):
   del app['streams']
 
 
+CERT_PATH = "/data/webrtc_cert.pem"
+KEY_PATH = "/data/webrtc_key.pem"
+
+
+def create_ssl_cert():
+  logger = logging.getLogger("webrtcd")
+  try:
+    proc = subprocess.run(
+      f'openssl req -x509 -newkey rsa:4096 -nodes -out {CERT_PATH} -keyout {KEY_PATH} '
+      f'-days 365 -subj "/C=US/ST=California/O=commaai/OU=comma body"',
+      capture_output=True, shell=True,
+    )
+    proc.check_returncode()
+  except subprocess.CalledProcessError as ex:
+    raise ValueError(f"Error creating SSL certificate:\n[stdout]\n{proc.stdout.decode()}\n[stderr]\n{proc.stderr.decode()}") from ex
+  logger.info("SSL certificate created")
+
+
+def create_ssl_context():
+  logger = logging.getLogger("webrtcd")
+  if not os.path.exists(CERT_PATH) or not os.path.exists(KEY_PATH):
+    logger.info("Creating SSL certificate...")
+    create_ssl_cert()
+  else:
+    logger.info("SSL certificate exists")
+  ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+  ssl_ctx.load_cert_chain(CERT_PATH, KEY_PATH)
+  return ssl_ctx
+
+
 def webrtcd_thread(host: str, port: int, debug: bool):
   logging.basicConfig(level=logging.CRITICAL, handlers=[logging.StreamHandler()])
   logging_level = logging.DEBUG if debug else logging.INFO
@@ -335,8 +394,9 @@ def webrtcd_thread(host: str, port: int, debug: bool):
   app.router.add_post("/stream", get_stream)
   app.router.add_post("/notify", post_notify)
   app.router.add_get("/schema", get_schema)
+  app.router.add_get("/trust", get_trust)
 
-  web.run_app(app, host=host, port=port)
+  web.run_app(app, host=host, port=port, ssl_context=create_ssl_context())
 
 
 def main():
