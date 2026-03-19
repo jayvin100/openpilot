@@ -22,6 +22,13 @@ def logging(started: bool, params: Params, CP: car.CarParams) -> bool:
   run = (not CP.notCar) or not params.get_bool("DisableLogging")
   return started and run
 
+def logging_or_smolcar(started: bool, params: Params, CP: car.CarParams) -> bool:
+  run = (not CP.notCar) or not params.get_bool("DisableLogging")
+  return (started or smolcar(started, params, CP)) and run
+
+def onroad_or_smolcar(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return started or smolcar(started, params, CP)
+
 def ublox_available() -> bool:
   return os.path.exists('/dev/ttyHS0') and not os.path.exists('/persist/comma/use-quectel-gps')
 
@@ -77,8 +84,8 @@ def and_(*fns):
 procs = [
   DaemonProcess("manage_athenad", "system.athena.manage_athenad", "AthenadPid"),
 
-  NativeProcess("loggerd", "system/loggerd", ["./loggerd"], logging),
-  NativeProcess("encoderd", "system/loggerd", ["./encoderd"], only_onroad),
+  NativeProcess("loggerd", "system/loggerd", ["./loggerd"], logging_or_smolcar),
+  NativeProcess("encoderd", "system/loggerd", ["./encoderd"], onroad_or_smolcar),
   NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], or_(notcar, smolcar)),
   PythonProcess("logmessaged", "system.logmessaged", always_run),
 
