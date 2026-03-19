@@ -19,9 +19,6 @@ from openpilot.system.ui.widgets.nav_widget import NavWidget
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton
 
-WEBRTC_PORT = 5001
-
-
 def _get_local_ip() -> str:
   try:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -54,7 +51,7 @@ class _BodyPairingBase:
 
   def _get_connect_url(self) -> str:
     ip = self._ip_address or "unknown"
-    return f"{CONNECT_HOST}/?body={ip}:{WEBRTC_PORT}"
+    return f"{CONNECT_HOST}/?body={ip}"
 
   def _generate_qr(self, data: str, invert: bool = False) -> rl.Texture | None:
     try:

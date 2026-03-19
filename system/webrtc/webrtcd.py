@@ -385,8 +385,9 @@ def webrtcd_thread(host: str, port: int, debug: bool):
   logging.getLogger("WebRTCStream").setLevel(logging_level)
   logging.getLogger("webrtcd").setLevel(logging_level)
 
-  app = web.Application(middlewares=[cors_middleware])
+  logger = logging.getLogger("webrtcd")
 
+  app = web.Application(middlewares=[cors_middleware])
   app['streams'] = dict()
   app['debug'] = debug
   app.on_shutdown.append(on_shutdown)
@@ -396,7 +397,26 @@ def webrtcd_thread(host: str, port: int, debug: bool):
   app.router.add_get("/schema", get_schema)
   app.router.add_get("/trust", get_trust)
 
-  web.run_app(app, host=host, port=port, ssl_context=create_ssl_context())
+  https_port = port + 1
+
+  loop = asyncio.new_event_loop()
+  asyncio.set_event_loop(loop)
+
+  runner = web.AppRunner(app)
+
+  async def start():
+    await runner.setup()
+
+    http_site = web.TCPSite(runner, host, port)
+    await http_site.start()
+    logger.info("HTTP server running on %s:%d", host, port)
+
+    https_site = web.TCPSite(runner, host, https_port, ssl_context=create_ssl_context())
+    await https_site.start()
+    logger.info("HTTPS server running on %s:%d", host, https_port)
+
+  loop.run_until_complete(start())
+  loop.run_forever()
 
 
 def main():
