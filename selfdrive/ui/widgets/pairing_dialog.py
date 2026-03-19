@@ -3,7 +3,7 @@ import qrcode
 import numpy as np
 import time
 
-from openpilot.common.api import Api
+from openpilot.common.api import Api, CONNECT_HOST, CONNECT_HOST_DISPLAY
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.system.ui.widgets import Widget
@@ -35,7 +35,7 @@ class PairingDialog(Widget):
     except Exception:
       cloudlog.exception("Failed to get pairing token")
       token = ""
-    return f"https://connect.comma.ai/?pair={token}"
+    return f"{CONNECT_HOST}/?pair={token}"
 
   def _generate_qr_code(self) -> None:
     try:
@@ -114,9 +114,9 @@ class PairingDialog(Widget):
 
   def _render_instructions(self, rect: rl.Rectangle) -> None:
     instructions = [
-      tr("Go to https://connect.comma.ai on your phone"),
+      tr("Go to {url} on your phone").format(url=CONNECT_HOST_DISPLAY),
       tr("Click \"add new device\" and scan the QR code on the right"),
-      tr("Bookmark connect.comma.ai to your home screen to use it like an app"),
+      tr("Bookmark {url} to your home screen to use it like an app").format(url=CONNECT_HOST_DISPLAY),
     ]
 
     font = gui_app.font(FontWeight.BOLD)

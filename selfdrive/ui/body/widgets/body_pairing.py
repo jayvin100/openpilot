@@ -7,6 +7,7 @@ import numpy as np
 import pyray as rl
 import qrcode
 
+from openpilot.common.api import CONNECT_HOST, CONNECT_HOST_DISPLAY
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.ui_state import device
 from openpilot.system.ui.lib.application import FontWeight, MousePos, gui_app
@@ -53,7 +54,7 @@ class _BodyPairingBase:
 
   def _get_connect_url(self) -> str:
     ip = self._ip_address or "unknown"
-    return f"https://connect.comma.ai/?body={ip}:{WEBRTC_PORT}"
+    return f"{CONNECT_HOST}/?body={ip}:{WEBRTC_PORT}"
 
   def _generate_qr(self, data: str, invert: bool = False) -> rl.Texture | None:
     try:
@@ -243,7 +244,7 @@ class BodyPairingScreen(_BodyPairingBase, Widget):
     rl.draw_text_ex(self._font_semi, opt2_text, rl.Vector2(x + text_offset, circle_cy - opt2_size.y / 2), 34, 0, TEXT_COLOR)
     text_y += option_line_h
 
-    rl.draw_text_ex(self._font, "visit connect.comma.ai", rl.Vector2(x + text_offset, text_y), 34, 0, TEXT_COLOR)
+    rl.draw_text_ex(self._font, f"visit {CONNECT_HOST_DISPLAY}", rl.Vector2(x + text_offset, text_y), 34, 0, TEXT_COLOR)
     text_y += line_h
 
     rl.draw_text_ex(self._font, "click add new device", rl.Vector2(x + text_offset, text_y), 34, 0, TEXT_COLOR)
@@ -316,7 +317,7 @@ class OneTimeConnectPanel(_BodyPairingBase, NavWidget):
     gap = 8
     num_font_size = step_font_size - 4
     row_h = circle_d
-    for i, step in enumerate(("connect.comma.ai", "add new device", "connect to comma body"), 1):
+    for i, step in enumerate((CONNECT_HOST_DISPLAY, "add new device", "connect to comma body"), 1):
       cx = int(label_x + circle_r)
       cy = int(y + row_h // 2)
       rl.draw_circle_lines(cx, cy, circle_r, MICI_TEXT_COLOR)
