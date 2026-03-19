@@ -313,13 +313,13 @@ TRUST_HTML = """<!DOCTYPE html>
   .check { font-size: 64px; margin-bottom: 16px; }
 </style></head>
 <body><div class="card">
-  <div class="check">&#x2705;</div>
   <h1>SSL Certificate Accepted</h1>
   <p>You can close this tab and return to the connect app.</p>
   <script>
     if (window.opener) {
       window.opener.postMessage({ type: 'ssl_cert_accepted' }, '*');
     }
+    setTimeout(() => window.close(), 100);
   </script>
 </div></body></html>"""
 
