@@ -210,6 +210,7 @@ def _add_cors_headers(request: 'web.Request', response: 'web.Response'):
   response.headers["Access-Control-Allow-Origin"] = "*"
   response.headers["Access-Control-Allow-Headers"] = "Content-Type"
   response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+  response.headers["Access-Control-Allow-Private-Network"] = "true"
 
 
 @web.middleware
