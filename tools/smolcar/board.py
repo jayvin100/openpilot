@@ -45,7 +45,7 @@ def _crc8(data: bytes) -> int:
 
 
 def _find_device() -> str:
-  ports = glob.glob("/dev/ttyACM*")
+  ports = sorted(glob.glob("/dev/ttyACM*"))
   if not ports:
     raise RuntimeError("no /dev/ttyACM* device found — is the STM32 board plugged in?")
   return ports[0]
@@ -58,10 +58,11 @@ class Board:
     self.device = device
     self.baudrate = baudrate
     self._battery_mv = 0  # last battery reading in millivolts
+    self._port_lock = threading.RLock()
     self._open()
 
   def _open(self) -> None:
-    self.port = serial.Serial(None, self.baudrate, timeout=0.5, write_timeout=0.5)
+    self.port = serial.Serial(None, self.baudrate, timeout=0.1, write_timeout=0.2)
     self.port.rts = False
     self.port.dtr = False
     self.port.setPort(self.device)
@@ -91,9 +92,9 @@ class Board:
 
     while self._drain_running:
       try:
-        raw = self.port.read(256)
+        raw = self.port.read(self.port.in_waiting or 1)
       except Exception:
-        time.sleep(0.1)
+        time.sleep(0.05)
         continue
       for b in raw:
         if state == ST_START1:
@@ -128,19 +129,23 @@ class Board:
 
   def reconnect(self) -> None:
     self._drain_running = False
-    try:
-      self.port.close()
-    except Exception:
-      pass
-    time.sleep(0.5)
+    with self._port_lock:
+      try:
+        self.port.close()
+      except Exception:
+        pass
+    if hasattr(self, "_drain_thread") and self._drain_thread.is_alive():
+      self._drain_thread.join(timeout=1.0)
+    time.sleep(0.1)
+    self.device = _find_device()
     self._open()
 
   def _write(self, func: int, data: bytes | list[int]) -> None:
     buf = bytearray([0xAA, 0x55, func, len(data)])
     buf.extend(data)
     buf.append(_crc8(buf[2:]))
-    self.port.write(buf)
-    self.port.flush()
+    with self._port_lock:
+      self.port.write(buf)
 
   def set_motor_speed(self, speeds: list[tuple[int, float]]) -> None:
     """Set motor speeds. speeds is list of (motor_id, speed) where speed is in pulse/10ms."""
@@ -172,4 +177,7 @@ class Board:
   def close(self) -> None:
     self.stop()
     self._drain_running = False
-    self.port.close()
+    with self._port_lock:
+      self.port.close()
+    if hasattr(self, "_drain_thread") and self._drain_thread.is_alive():
+      self._drain_thread.join(timeout=1.0)

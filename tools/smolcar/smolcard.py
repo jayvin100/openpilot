@@ -24,6 +24,7 @@ MAX_SPEED = 1.0          # max motor speed (pulse count per 10ms)
 SERVO_CENTER = 1500      # steering servo center pulse
 SERVO_RANGE = 444        # max deflection from center (~40 degrees)
 STEERING_SERVO_ID = 3    # PWM servo channel for steering
+COMMAND_KEEPALIVE_S = 0.25
 
 
 def write_car_params(params: Params) -> None:
@@ -82,6 +83,9 @@ def main():
   SERIAL_RATE = 5  # send serial commands every N loops (100Hz / 5 = 20Hz)
   serial_errors = 0
   MAX_SERIAL_ERRORS = 10  # only reconnect after this many consecutive failures
+  last_speed = None
+  last_pulse = None
+  last_send_t = 0.0
 
   try:
     while True:
@@ -99,14 +103,25 @@ def main():
         throttle = max(-1.0, min(1.0, axes[0]))
         steer = max(-1.0, min(1.0, axes[1]))
 
-      # throttle serial commands to 20Hz to avoid overwhelming the STM32
-      if sm.frame % SERIAL_RATE == 0:
-        # motors: positive throttle = forward
-        # motors 1,2 on one side, 3,4 on the other (reversed)
-        speed = -throttle * MAX_SPEED
+      # Match the vendor control path more closely: avoid re-sending identical
+      # commands every 50 ms, but still issue a periodic keepalive.
+      speed = -throttle * MAX_SPEED
+      pulse = SERVO_CENTER + int(steer * SERVO_RANGE)
+      should_send = (
+        (sm.frame % SERIAL_RATE == 0) and (
+          speed != last_speed or
+          pulse != last_pulse or
+          (time.monotonic() - last_send_t) >= COMMAND_KEEPALIVE_S
+        )
+      )
+      if should_send:
         try:
           board.set_motor_speed([(1, speed), (2, speed), (3, -speed), (4, -speed)])
+          board.set_steering(pulse, servo_id=STEERING_SERVO_ID)
           serial_errors = 0
+          last_speed = speed
+          last_pulse = pulse
+          last_send_t = time.monotonic()
         except Exception as e:
           serial_errors += 1
           if serial_errors >= MAX_SERIAL_ERRORS:
@@ -117,13 +132,6 @@ def main():
               cloudlog.info("smolcard: reconnected to %s", board.port.port)
             except Exception as e2:
               cloudlog.error("smolcard: reconnect failed: %s", e2)
-
-        # steering: negative steer = right, positive = left
-        pulse = SERVO_CENTER + int(steer * SERVO_RANGE)
-        try:
-          board.set_steering(pulse, servo_id=STEERING_SERVO_ID)
-        except Exception:
-          pass  # motor write handles reconnection
 
       # publish carState for webrtc telemetry
       publish_car_state(pm, sm.frame, battery_voltage=board.get_battery_voltage())
