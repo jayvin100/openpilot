@@ -9,6 +9,7 @@ import json
 import os
 import select
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
@@ -28,10 +29,12 @@ from openpilot.selfdrive.test.process_replay.migration import migrate_all
 from openpilot.tools.lib.logreader import LogReader, ReadMode, save_log
 from openpilot.tools.plotjuggler import juggle as plotjuggler_juggle
 
-ROOT = Path(BASEDIR) / "tools" / "jotpluggler"
+ROOT = Path(BASEDIR) / "tools" / "jotpluggler_validator"
 LAYOUT_DIR = Path(BASEDIR) / "tools" / "plotjuggler" / "layouts"
 VALIDATION_DIR = ROOT / "validation"
+LEGACY_VALIDATION_DIR = Path(BASEDIR) / "tools" / "jotpluggler" / "validation"
 FIXTURE_DIR = VALIDATION_DIR / "fixtures"
+ROUTE_FIXTURE_DIR = VALIDATION_DIR / "route_data"
 SANITIZED_LAYOUT_DIR = VALIDATION_DIR / "sanitized_layouts"
 BASELINE_DIR = VALIDATION_DIR / "baselines"
 REPORT_DIR = VALIDATION_DIR / "reports"
@@ -45,7 +48,7 @@ DEFAULT_SETTLE_TIME = 0.75
 DEFAULT_READY_TIMEOUT = 10.0
 READY_MARKER = "Done reading Rlog data"
 ALLOWED_PLUGIN_IDS = {"DataLoad Rlog", "Cereal Subscriber"}
-FIXTURE_SCHEMA_VERSION = 3
+FIXTURE_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,8 @@ class FixtureRecord:
   tab_index: int
   tab_name: str
   fixture_path: str
+  data_dir: str
+  route_name: str
   sanitized_layout_path: str
   services: tuple[str, ...]
   route: str
@@ -88,6 +93,10 @@ def sha256_bytes(data: bytes) -> str:
 
 def sha256_file(path: Path) -> str:
   return sha256_bytes(path.read_bytes())
+
+
+def route_fixture_name(layout_name: str) -> str:
+  return hashlib.sha256(layout_name.encode("utf-8")).hexdigest()[:20]
 
 
 def ensure_dir(path: Path) -> Path:
@@ -337,15 +346,31 @@ def write_sanitized_layout(spec: LayoutSpec, output_dir: Path, available_paths: 
   return output_path
 
 
+def write_route_fixture(spec: LayoutSpec, fixture_path: Path, route_fixture_dir: Path) -> tuple[str, Path]:
+  ensure_dir(route_fixture_dir)
+  timestamp = route_fixture_name(spec.name)
+  data_dir = route_fixture_dir / spec.name
+  segment_dir = ensure_dir(data_dir / f"{timestamp}--0")
+  route_log_path = segment_dir / "rlog"
+  route_log_path.unlink(missing_ok=True)
+  try:
+    os.link(fixture_path, route_log_path)
+  except OSError:
+    shutil.copyfile(fixture_path, route_log_path)
+  return f"{timestamp}/0", data_dir
+
+
 def build_fixtures(
   specs: list[LayoutSpec],
   route: str,
   fixture_dir: Path,
+  route_fixture_dir: Path,
   sanitized_layout_dir: Path,
   force: bool,
   should_migrate: bool,
 ) -> dict[str, FixtureRecord]:
   ensure_dir(fixture_dir)
+  ensure_dir(route_fixture_dir)
   ensure_dir(sanitized_layout_dir)
 
   existing = load_manifest(fixture_dir / "manifest.json")
@@ -358,6 +383,7 @@ def build_fixtures(
         and record.get("layout_hash") == spec.source_hash
         and record.get("schema_version") == FIXTURE_SCHEMA_VERSION
         and Path(record["fixture_path"]).exists()
+        and Path(record["data_dir"]).exists()
         and Path(record["sanitized_layout_path"]).exists()
       ):
         cached[spec.name] = FixtureRecord(
@@ -365,6 +391,8 @@ def build_fixtures(
           tab_index=record["tab_index"],
           tab_name=record["tab_name"],
           fixture_path=record["fixture_path"],
+          data_dir=record["data_dir"],
+          route_name=record["route_name"],
           sanitized_layout_path=record["sanitized_layout_path"],
           services=tuple(record["services"]),
           route=record["route"],
@@ -403,11 +431,14 @@ def build_fixtures(
     fixture_path = fixture_dir / f"{spec.name}.rlog"
     msgs = layout_buckets[spec.name]
     save_log(str(fixture_path), msgs, compress=False)
+    route_name, data_dir = write_route_fixture(spec, fixture_path, route_fixture_dir)
     record = FixtureRecord(
       layout=spec.name,
       tab_index=spec.tab_index,
       tab_name=spec.tab_name,
       fixture_path=str(fixture_path),
+      data_dir=str(data_dir),
+      route_name=route_name,
       sanitized_layout_path=str(sanitized_path),
       services=spec.services,
       route=route,
@@ -425,7 +456,30 @@ def build_fixtures(
 def load_manifest(path: Path) -> dict[str, dict[str, Any]]:
   if not path.exists():
     return {}
-  return json.loads(path.read_text())
+  return _rewrite_manifest_paths(json.loads(path.read_text()))
+
+
+def _rewrite_manifest_paths(payload: Any) -> Any:
+  if isinstance(payload, dict):
+    return {key: _rewrite_manifest_paths(value) for key, value in payload.items()}
+  if isinstance(payload, list):
+    return [_rewrite_manifest_paths(value) for value in payload]
+  if not isinstance(payload, str):
+    return payload
+
+  candidate = Path(payload)
+  if not candidate.is_absolute():
+    return payload
+
+  try:
+    relative = candidate.relative_to(LEGACY_VALIDATION_DIR)
+  except ValueError:
+    return payload
+
+  rewritten = VALIDATION_DIR / relative
+  if candidate.exists() or not rewritten.exists():
+    return payload
+  return str(rewritten)
 
 
 def ensure_plotjuggler_ready() -> None:
@@ -509,6 +563,17 @@ def capture_window(winid: str, output_path: Path, env: dict[str, str], retries: 
       time.sleep(0.5 * (attempt + 1))
   assert last_error is not None
   raise last_error
+
+
+def stop_process(proc: subprocess.Popen[str]) -> tuple[str, str]:
+  if proc.poll() is None:
+    proc.terminate()
+    try:
+      return proc.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+      proc.kill()
+      return proc.communicate(timeout=5)
+  return proc.communicate(timeout=5)
 
 
 def wait_for_plotjuggler_ready(proc: subprocess.Popen[str], timeout: float) -> tuple[bool, list[str]]:
@@ -626,6 +691,8 @@ def baseline_records_for_specs(specs: list[LayoutSpec], fixture_dir: Path) -> di
       tab_index=entry["tab_index"],
       tab_name=entry["tab_name"],
       fixture_path=entry["fixture_path"],
+      data_dir=entry.get("data_dir", ""),
+      route_name=entry.get("route_name", ""),
       sanitized_layout_path=entry["sanitized_layout_path"],
       services=tuple(entry["services"]),
       route=entry["route"],
@@ -883,6 +950,8 @@ def render_candidate_command(
   dpi: int,
   workers: int,
   timeout: float,
+  settle_time: float,
+  window_title: str,
 ) -> None:
   fixture_manifest = load_manifest(fixture_dir / "manifest.json")
   if not fixture_manifest:
@@ -898,6 +967,8 @@ def render_candidate_command(
       "layout": shlex.quote(spec.layout_path),
       "sanitized_layout": shlex.quote(str(sanitized_layout)),
       "fixture": shlex.quote(fixture_record["fixture_path"]),
+      "data_dir": shlex.quote(fixture_record["data_dir"]),
+      "route": shlex.quote(fixture_record["route_name"]),
       "output": shlex.quote(str(output_path)),
       "width": width,
       "height": height,
@@ -906,20 +977,34 @@ def render_candidate_command(
     }
     shell_cmd = command_template.format(**format_args)
     with xvfb_session(width, height, dpi) as env:
-      completed = subprocess.run(
+      with subprocess.Popen(
         ["/bin/bash", "-lc", shell_cmd],
         env=env,
         cwd=BASEDIR,
-        timeout=timeout,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-      )
-    if completed.returncode != 0:
-      raise RuntimeError(
-        f"Candidate command failed for {spec.name}\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
-      )
+      ) as proc:
+        stdout = ""
+        stderr = ""
+        try:
+          winid = wait_for_window(window_title, env, timeout=timeout)
+          resize_window(winid, width, height, env)
+          time.sleep(settle_time)
+          capture_window(winid, output_path, env)
+        except Exception as exc:
+          stdout, stderr = stop_process(proc)
+          raise RuntimeError(
+            f"Candidate command failed for {spec.name}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+          ) from exc
+        else:
+          stdout, stderr = stop_process(proc)
+          if proc.returncode not in (0, -15):
+            raise RuntimeError(
+              f"Candidate command exited unexpectedly for {spec.name}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
     if not output_path.exists():
-      raise FileNotFoundError(f"Candidate command did not create {output_path}")
+      raise FileNotFoundError(f"Validator did not capture {output_path}")
 
   if workers <= 1:
     for spec in specs:
@@ -963,6 +1048,7 @@ def cmd_prepare_fixtures(args: argparse.Namespace) -> int:
     specs,
     route=args.route,
     fixture_dir=Path(args.fixture_dir),
+    route_fixture_dir=Path(args.route_fixture_dir),
     sanitized_layout_dir=Path(args.sanitized_layout_dir),
     force=args.force,
     should_migrate=not args.no_migration,
@@ -1017,6 +1103,8 @@ def cmd_validate_command(args: argparse.Namespace) -> int:
     dpi=args.dpi,
     workers=workers,
     timeout=args.timeout,
+    settle_time=args.settle_time,
+    window_title=args.window_title,
   )
   summary = compare_candidate_dir(
     specs=specs,
@@ -1037,6 +1125,7 @@ def build_parser() -> argparse.ArgumentParser:
   prepare = subparsers.add_parser("prepare-fixtures", help="Create cached first-tab .rlog fixtures")
   prepare.add_argument("--route", default=plotjuggler_juggle.DEMO_ROUTE)
   prepare.add_argument("--fixture-dir", default=str(FIXTURE_DIR))
+  prepare.add_argument("--route-fixture-dir", default=str(ROUTE_FIXTURE_DIR))
   prepare.add_argument("--sanitized-layout-dir", default=str(SANITIZED_LAYOUT_DIR))
   prepare.add_argument("--layouts", nargs="*")
   prepare.add_argument("--force", action="store_true")
@@ -1076,6 +1165,8 @@ def build_parser() -> argparse.ArgumentParser:
   validate.add_argument("--dpi", type=int, default=DEFAULT_DPI)
   validate.add_argument("--workers", type=int)
   validate.add_argument("--timeout", type=float, default=60.0)
+  validate.add_argument("--settle-time", type=float, default=DEFAULT_SETTLE_TIME)
+  validate.add_argument("--window-title", default="jotpluggler")
   validate.add_argument("--score-threshold", type=float, default=DEFAULT_SCORE_THRESHOLD)
   validate.add_argument("--compare-size", default=f"{DEFAULT_COMPARE_SIZE[0]}x{DEFAULT_COMPARE_SIZE[1]}")
   validate.add_argument("--layouts", nargs="*")

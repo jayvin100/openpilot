@@ -1,93 +1,53 @@
 # JotPlugger
 
-This directory currently contains two pieces:
-- the fast screenshot validator against cached PlotJuggler baselines
-- the first GLFW-based `jotpluggler` shell for deterministic screenshot output
+`jotpluggler` is the product-side log plotting app.
 
-Phase 1 is intentionally narrow:
-- first tab only for each PlotJuggler layout
-- one-time PlotJuggler baseline generation
-- fast candidate image comparison with per-layout diff artifacts
-- a placeholder `sketch` renderer that only draws pane geometry, not real plots
+Current scope:
+- native C++ parsing of PlotJuggler layout XML
+- native C++ sampling of direct `/service/path` curves from routes
+- GLFW + Dear ImGui + ImPlot rendering
+- real PlotJuggler tab support with a docked workspace
+- route open/reload controls and pane/curve selection in the UI
+- fixed-size screenshot export for deterministic rendering and debugging
 
-The validator is designed for fast local iteration on a many-core machine. PlotJuggler baselines are generated once and cached. Normal validation only compares candidate renders against those stored references.
+Current non-goals:
+- PlotJuggler baseline management
+- screenshot diffing
+- `Xvfb` orchestration
+- fake baseline-copy modes
+- custom math / Lua snippets
 
 ## Build
-
-Build the local shell:
 
 ```bash
 scons tools/jotpluggler/jotpluggler
 ```
 
-Render a placeholder layout sketch:
+## Run
+
+Open the app interactively:
+
+```bash
+./tools/jotpluggler/jotpluggler --demo
+```
+
+Export a screenshot without opening a visible window:
 
 ```bash
 ./tools/jotpluggler/jotpluggler \
-  --mode sketch \
   --layout longitudinal \
+  --data-dir /tmp/routes \
   --width 1600 \
   --height 900 \
-  --output /tmp/longitudinal-sketch.png
+  --output /tmp/longitudinal.png \
+  0000010a--a51155e496/0
 ```
 
-Render a validator-passing mock image by copying the cached PlotJuggler baseline:
+`--demo` opens the default `longitudinal` layout on the bundled demo route.
+The app also accepts a positional `route` like the other log tools, plus `--data-dir`.
+Multi-tab PlotJuggler layouts now render as real app tabs, and the sidebar can target panes and toggle curve visibility.
+Curves without direct sampled data are shown as unsupported instead of being faked.
 
-```bash
-./tools/jotpluggler/jotpluggler \
-  --mode mock-reference \
-  --layout longitudinal \
-  --output /tmp/longitudinal.png
-```
+## Validation
 
-## Commands
-
-Prepare cached first-tab fixtures from the demo route:
-
-```bash
-./tools/jotpluggler/validate.py prepare-fixtures
-```
-
-Generate PlotJuggler baselines:
-
-```bash
-./tools/jotpluggler/validate.py capture-baselines
-```
-
-Compare an existing directory of candidate screenshots against the cached baselines:
-
-```bash
-./tools/jotpluggler/validate.py compare-images out/jotpluggler
-```
-
-Run a candidate renderer command under `Xvfb`, collect PNGs, and compare them:
-
-```bash
-./tools/jotpluggler/validate.py validate-command \
-  --command-template 'tools/jotpluggler/jotpluggler --mode mock-reference --layout {layout} --output {output}'
-```
-
-The command template receives these placeholders:
-- `{layout}`
-- `{sanitized_layout}`
-- `{fixture}`
-- `{output}`
-- `{width}`
-- `{height}`
-- `{tab_index}`
-- `{tab_name}`
-
-## Output
-
-Generated artifacts live under `tools/jotpluggler/validation/`:
-- `fixtures/`
-- `sanitized_layouts/`
-- `baselines/`
-- `reports/`
-
-Each comparison run writes:
-- `candidate.png`
-- `reference.png`
-- `diff.png`
-- `metrics.json`
-- `summary.json`
+The screenshot validator is intentionally separate and disposable. It now lives under [tools/jotpluggler_validator](/home/batman/threepilot/tools/jotpluggler_validator).

@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from openpilot.tools.jotpluggler.validate import compare_image_pair, message_series_paths, parse_layout_spec, sanitized_layout_bytes
+from openpilot.tools.jotpluggler_validator.validate import compare_image_pair, message_series_paths, parse_layout_spec, sanitized_layout_bytes
 
 
 class _FakeStruct:

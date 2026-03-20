@@ -6,17 +6,24 @@
 
 namespace {
 
+constexpr const char *kDemoRoute = "5beb9b58bd12b691/0000010a--a51155e496";
+constexpr const char *kDefaultLayout = "longitudinal";
+
 void print_usage(const char *argv0) {
   std::cerr
-      << "Usage: " << argv0 << " --layout <layout> --output <png> [options]\n"
+      << "Usage: " << argv0 << " [--layout <layout>] [options] [route]\n"
       << "\n"
       << "Options:\n"
-      << "  --mode <mock-reference|sketch>\n"
+      << "  --demo\n"
+      << "  --data-dir <dir>\n"
       << "  --width <pixels>\n"
       << "  --height <pixels>\n"
-      << "  --baseline-root <dir>\n"
-      << "  --python <python>\n"
-      << "  --show\n";
+      << "  --output <png>\n"
+      << "  --show\n"
+      << "\n"
+      << "Examples:\n"
+      << "  " << argv0 << " --demo\n"
+      << "  " << argv0 << " --layout longitudinal --demo --output /tmp/longitudinal.png\n";
 }
 
 bool parse_int(const char *value, int *out) {
@@ -33,6 +40,7 @@ bool parse_int(const char *value, int *out) {
 
 int main(int argc, char *argv[]) {
   jotpluggler::Options options;
+  bool demo_requested = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     const auto require_value = [&](const char *flag) -> const char * {
@@ -46,19 +54,13 @@ int main(int argc, char *argv[]) {
 
     if (arg == "--layout") {
       options.layout = require_value("--layout");
+    } else if (arg == "--demo") {
+      demo_requested = true;
+      options.route_name = kDemoRoute;
+    } else if (arg == "--data-dir") {
+      options.data_dir = require_value("--data-dir");
     } else if (arg == "--output") {
       options.output_path = require_value("--output");
-    } else if (arg == "--mode") {
-      const std::string mode = require_value("--mode");
-      if (mode == "mock-reference") {
-        options.mode = jotpluggler::Mode::MockReference;
-      } else if (mode == "sketch") {
-        options.mode = jotpluggler::Mode::Sketch;
-      } else {
-        std::cerr << "Unknown mode: " << mode << "\n";
-        print_usage(argv[0]);
-        return 2;
-      }
     } else if (arg == "--width") {
       if (!parse_int(require_value("--width"), &options.width)) {
         std::cerr << "Invalid width\n";
@@ -69,15 +71,13 @@ int main(int argc, char *argv[]) {
         std::cerr << "Invalid height\n";
         return 2;
       }
-    } else if (arg == "--baseline-root") {
-      options.baseline_root = require_value("--baseline-root");
-    } else if (arg == "--python") {
-      options.python = require_value("--python");
     } else if (arg == "--show") {
       options.show = true;
     } else if (arg == "--help" || arg == "-h") {
       print_usage(argv[0]);
       return 0;
+    } else if (!arg.empty() && arg[0] != '-' && options.route_name.empty()) {
+      options.route_name = arg;
     } else {
       std::cerr << "Unknown argument: " << arg << "\n";
       print_usage(argv[0]);
@@ -85,7 +85,14 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  if (options.layout.empty() || options.output_path.empty()) {
+  if (demo_requested && options.layout.empty()) {
+    options.layout = kDefaultLayout;
+  }
+  if (options.output_path.empty() && !options.show) {
+    options.show = true;
+  }
+
+  if (options.layout.empty() || options.route_name.empty()) {
     print_usage(argv[0]);
     return 2;
   }

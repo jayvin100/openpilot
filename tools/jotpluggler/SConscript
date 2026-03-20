@@ -1,18 +1,51 @@
+import os
 import subprocess
 
-Import('env', 'arch', 'common')
+import imgui
+
+Import('env', 'arch', 'common', 'cereal')
 
 if arch == "Darwin":
   Return()
 
 try:
   subprocess.check_call(["pkg-config", "--exists", "glfw3"])
+  libxml_cflags = subprocess.check_output(["pkg-config", "--cflags-only-I", "libxml-2.0"], encoding="utf8").split()
 except (FileNotFoundError, subprocess.CalledProcessError):
   Return()
 
 jot_env = env.Clone()
-jot_env.Program(
-  "jotpluggler",
-  ["main.cc", "app.cc"],
-  LIBS=[common, "glfw", "GL"],
-)
+jot_env["CPPPATH"] += [imgui.INCLUDE_DIR, imgui.SRC_DIR]
+jot_env["CPPPATH"] += [flag[2:] for flag in libxml_cflags if flag.startswith("-I")]
+jot_env["CXXFLAGS"] += ["-DGLFW_INCLUDE_NONE"]
+
+core_sources = {
+  "jot_main": "main.cc",
+  "jot_app": "app.cc",
+  "jot_sketch_layout": "sketch_layout.cc",
+  "jot_logreader": "../replay/logreader.cc",
+  "jot_replay_util": "../replay/util.cc",
+  "jot_filereader": "../replay/filereader.cc",
+  "jot_py_downloader": "../replay/py_downloader.cc",
+}
+imgui_sources = [
+  f"{imgui.SRC_DIR}/imgui.cpp",
+  f"{imgui.SRC_DIR}/imgui_draw.cpp",
+  f"{imgui.SRC_DIR}/imgui_widgets.cpp",
+  f"{imgui.SRC_DIR}/imgui_tables.cpp",
+  f"{imgui.SRC_DIR}/imgui_impl_opengl3.cpp",
+  f"{imgui.SRC_DIR}/implot.cpp",
+  f"{imgui.SRC_DIR}/implot_items.cpp",
+  "imgui_impl_glfw.cpp",
+]
+
+objects = [jot_env.Object(target=name, source=src) for name, src in core_sources.items()]
+for source in imgui_sources:
+  basename = os.path.splitext(os.path.basename(source))[0]
+  objects.append(jot_env.Object(target=f"jot_{basename}", source=source))
+
+libs = [common, cereal, "glfw", "GL", "capnp", "kj", "bz2", "zstd", "xml2", "m", "pthread"]
+if arch != "Darwin":
+  libs += ["dl"]
+
+jot_env.Program("jotpluggler", objects, LIBS=libs)
