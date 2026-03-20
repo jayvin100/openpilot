@@ -411,8 +411,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   EventName.lateralManeuver: {
     ET.WARNING: longitudinal_maneuver_alert,
-    ET.PERMANENT: NormalPermanentAlert("Lateral Maneuver Mode",
-                                       "Ensure adjacent lanes are clear"),
+    ET.PERMANENT: NormalPermanentAlert("Lateral Maneuver Mode"),
   },
 
   EventName.selfdriveInitializing: {

@@ -1,6 +1,7 @@
 # Lateral Maneuvers Testing Tool
 
-**Disclaimer: Do not use this tool on public roads.**
+> [!WARNING]
+> Use caution when using this tool.
 
 Test your vehicle's lateral control tuning with this tool. The tool will test the vehicle's ability to follow a few lateral maneuvers and includes a tool to generate a report from the route.
 
