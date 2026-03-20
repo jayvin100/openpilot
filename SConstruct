@@ -48,7 +48,7 @@ pkgs = [importlib.import_module(name) for name in pkg_names]
 # vendored in commaai/dependencies.
 allowed_system_libs = {
   "EGL", "GLESv2", "GL", "Qt5Charts", "Qt5Core", "Qt5Gui", "Qt5Widgets",
-  "dl", "drm", "gbm", "m", "pthread",
+  "dl", "drm", "gbm", "glfw", "m", "pthread",
 }
 
 def _resolve_lib(env, name):
@@ -255,6 +255,9 @@ SConscript([
 
 if Dir('#tools/cabana/').exists() and arch != "larch64":
   SConscript(['tools/cabana/SConscript'])
+
+if Dir('#tools/jotpluggler/').exists() and arch != "larch64":
+  SConscript(['tools/jotpluggler/SConscript'])
 
 
 env.CompilationDatabase('compile_commands.json')

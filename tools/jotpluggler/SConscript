@@ -1,0 +1,18 @@
+import subprocess
+
+Import('env', 'arch', 'common')
+
+if arch == "Darwin":
+  Return()
+
+try:
+  subprocess.check_call(["pkg-config", "--exists", "glfw3"])
+except (FileNotFoundError, subprocess.CalledProcessError):
+  Return()
+
+jot_env = env.Clone()
+jot_env.Program(
+  "jotpluggler",
+  ["main.cc", "app.cc"],
+  LIBS=[common, "glfw", "GL"],
+)
