@@ -198,9 +198,11 @@ class PoseCalibrator:
 
 class PoseSmoother:
   def __init__(self, k: int, sigma: float):
+    assert k >= 1 and k % 2 == 1, "k must be positive and odd"
+    assert sigma > 0, "sigma must be positive"
     self.k, self.sigma = k, sigma
-    self.t_buf = deque(maxlen=k)
-    self.pose_buf = deque(maxlen=k)
+    self.t_buf = deque[float](maxlen=k)
+    self.pose_buf = deque[Pose](maxlen=k)
     self.w = self._symmetric_average_weights(k, sigma)
 
   def _symmetric_average_weights(self, k, sigma) -> np.ndarray:
@@ -216,11 +218,11 @@ class PoseSmoother:
     avg_xyz_std = np.einsum('i,ij->j', self.w, xyz_std)
     return Measurement(avg_xyz, avg_xyz_std)
 
-  def feed_pose(self, t: int, pose: Pose):
+  def feed_pose(self, t: float, pose: Pose):
     self.t_buf.append(t)
     self.pose_buf.append(pose)
 
-  def build_smoothed_pose(self) -> tuple[int, Pose] | None:
+  def build_smoothed_pose(self) -> tuple[float, Pose] | None:
     if len(self.pose_buf) != self.k or len(self.t_buf) != self.k:
       return None
 
