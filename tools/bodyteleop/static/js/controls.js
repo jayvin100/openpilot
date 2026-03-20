@@ -1,4 +1,14 @@
 const keyVals = {w: 0, a: 0, s: 0, d: 0}
+const CONTROL_KEYS = ['w', 'a', 's', 'd'];
+
+function updateUi() {
+  for (const key of CONTROL_KEYS) {
+    const color = keyVals[key] === 1 ? "#e74c3c" : "#333";
+    $("#key-" + key).css('background', color);
+  }
+  const {x, y} = getXY();
+  $("#pos-vals").text(x + "," + y);
+}
 
 export function getXY() {
   let x = -keyVals.w + keyVals.s
@@ -7,16 +17,21 @@ export function getXY() {
 }
 
 export const handleKeyX = (key, setValue) => {
-  if (['w', 'a', 's', 'd'].includes(key)){
+  if (CONTROL_KEYS.includes(key)){
     keyVals[key] = setValue;
-    let color = "#333";
-    if (setValue === 1){
-      color = "#e74c3c";
-    }
-    $("#key-"+key).css('background', color);
-    const {x, y} = getXY();
-    $("#pos-vals").text(x+","+y);
+    updateUi();
   }
+};
+
+export const clearKeys = () => {
+  let changed = false;
+  for (const key of CONTROL_KEYS) {
+    if (keyVals[key] !== 0) {
+      keyVals[key] = 0;
+      changed = true;
+    }
+  }
+  if (changed) updateUi();
 };
 
 export async function executePlan() {

@@ -169,10 +169,19 @@ class Board:
     """Return last battery voltage in volts (0.0 if not yet received)."""
     return self._battery_mv / 1000.0
 
-  def stop(self) -> None:
-    """Stop all motors and center steering."""
-    self.set_motor_speed([(1, 0), (2, 0), (3, 0), (4, 0)])
-    self.set_steering(1500)
+  def stop(self, repeats: int = 3, delay_s: float = 0.05) -> None:
+    """Stop all motors and center steering, retrying to overcome dropped packets."""
+    last_exc = None
+    for _ in range(max(1, repeats)):
+      try:
+        self.set_motor_speed([(1, 0), (2, 0), (3, 0), (4, 0)])
+        self.set_steering(1500)
+        last_exc = None
+      except Exception as e:
+        last_exc = e
+      time.sleep(delay_s)
+    if last_exc is not None:
+      raise last_exc
 
   def close(self) -> None:
     self.stop()
