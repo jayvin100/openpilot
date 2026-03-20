@@ -170,7 +170,8 @@ def report(platform, route, _description, CP, ID, maneuvers):
       ax[2].grid(linewidth=4)
       ax[2].plot(t_accel, filtered_jerk, label='actual jerk', linewidth=6)
       if CP.steerControlType == car.CarParams.SteerControlType.torque:
-        ax[2].plot(t_controlsState[:len(controlsState)], [cs.lateralControlState.torqueState.desiredLateralJerk for cs in controlsState], label='desired jerk', linewidth=6)
+        desired_jerk = [cs.lateralControlState.torqueState.desiredLateralJerk for cs in controlsState]
+        ax[2].plot(t_controlsState[:len(controlsState)], desired_jerk, label='desired jerk', linewidth=6)
       ax[2].set_ylabel('Jerk (m/s^3)')
       ax[2].legend()
 
