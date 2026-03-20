@@ -11,7 +11,7 @@ from cereal.services import SERVICE_LIST
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
 from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose, fft_next_good_size, parabolic_peak_interp
+from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose, fft_next_good_size, parabolic_peak_interp, masked_symmetric_moving_average
 
 BLOCK_SIZE = 100
 BLOCK_NUM = 50
@@ -35,18 +35,6 @@ LAG_CANDIDATE_CORR_THRESHOLD = 0.9
 SMOOTH_K = 5
 SMOOTH_SIGMA = 1.0
 
-
-def masked_symmetric_moving_average(x: np.ndarray, mask: np.ndarray, k: int, sigma: float) -> np.ndarray:
-  assert k >= 1 and k % 2 == 1, "k must be positive and odd"
-  pad = k // 2
-  i = np.arange(k) - pad
-  w = np.exp(-0.5 * (i / sigma) ** 2)
-  w /= w.sum()
-  xp = np.pad(x * mask, pad, mode="edge")
-  mp = np.pad(mask, pad, mode="edge")
-  num = np.convolve(xp, w, mode="valid")
-  den = np.convolve(mp, w, mode="valid")
-  return np.divide(num, den, out=np.full_like(num, np.nan, dtype=np.float64), where=den != 0)
 
 def masked_normalized_cross_correlation(expected_sig: np.ndarray, actual_sig: np.ndarray, mask: np.ndarray, n: int):
   """

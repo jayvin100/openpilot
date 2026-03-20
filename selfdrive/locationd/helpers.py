@@ -1,9 +1,23 @@
 import numpy as np
 from typing import Any
 from functools import cache
+from collections import deque
 
 from cereal import log
 from openpilot.common.transformations.orientation import rot_from_euler, euler_from_rot
+
+
+def masked_symmetric_moving_average(x: np.ndarray, mask: np.ndarray, k: int, sigma: float) -> np.ndarray:
+  assert k >= 1 and k % 2 == 1, "k must be positive and odd"
+  pad = k // 2
+  i = np.arange(k) - pad
+  w = np.exp(-0.5 * (i / sigma) ** 2)
+  w /= w.sum()
+  xp = np.pad(x * mask, pad, mode="edge")
+  mp = np.pad(mask, pad, mode="edge")
+  num = np.convolve(xp, w, mode="valid")
+  den = np.convolve(mp, w, mode="valid")
+  return np.divide(num, den, out=np.full_like(num, np.nan, dtype=np.float64), where=den != 0)
 
 
 @cache
@@ -45,7 +59,6 @@ def parabolic_peak_interp(R, max_index):
 
 def rotate_cov(rot_matrix, cov_in):
   return rot_matrix @ cov_in @ rot_matrix.T
-
 
 def rotate_std(rot_matrix, std_in):
   return np.sqrt(np.diag(rotate_cov(rot_matrix, np.diag(std_in**2))))
@@ -181,3 +194,39 @@ class PoseCalibrator:
     device_from_calib = rot_from_euler(calib_rpy)
     self.calib_from_device = device_from_calib.T
     self.calib_valid = live_calib.calStatus == log.LiveCalibrationData.Status.calibrated
+
+
+class PoseSmoother:
+  def __init__(self, k: int, sigma: float):
+    self.k, self.sigma = k, sigma
+    self.t_buf = deque(maxlen=k)
+    self.pose_buf = deque(maxlen=k)
+    self.w = self._symmetric_average_weights(k, sigma)
+
+  def _symmetric_average_weights(self, k, sigma) -> np.ndarray:
+    i = np.arange(k) - (k // 2)
+    w = np.exp(-0.5 * (i / sigma) ** 2)
+    w /= w.sum()
+    return w
+
+  def _symmetric_average(self, meas: list[Measurement]) -> Measurement:
+    xyz = np.array([meas_i.xyz for meas_i in meas])
+    xyz_std = np.array([meas_i.xyz_std for meas_i in meas])
+    avg_xyz = np.einsum('i,ij->j', self.w, xyz)
+    avg_xyz_std = np.einsum('i,ij->j', self.w, xyz_std)
+    return Measurement(avg_xyz, avg_xyz_std)
+
+  def feed_pose(self, t: int, pose: Pose):
+    self.t_buf.append(t)
+    self.pose_buf.append(pose)
+
+  def build_smoothed_pose(self) -> tuple[int, Pose] | None:
+    if len(self.pose_buf) != self.k or len(self.t_buf) != self.k:
+      return None
+
+    t = self.t_buf[self.k // 2]
+    ned_from_calib_smooth = self._symmetric_average([pose.orientation for pose in self.pose_buf])
+    velocity_smooth = self._symmetric_average([pose.velocity for pose in self.pose_buf])
+    acceleration_smooth = self._symmetric_average([pose.acceleration for pose in self.pose_buf])
+    angular_velocity_smooth = self._symmetric_average([pose.angular_velocity for pose in self.pose_buf])
+    return t, Pose(ned_from_calib_smooth, velocity_smooth, acceleration_smooth, angular_velocity_smooth)
