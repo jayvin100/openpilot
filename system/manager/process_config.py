@@ -36,7 +36,7 @@ def ublox(started: bool, params: Params, CP: car.CarParams) -> bool:
   use_ublox = ublox_available()
   if use_ublox != params.get_bool("UbloxAvailable"):
     params.put_bool("UbloxAvailable", use_ublox)
-  return started and use_ublox
+  return (started or smolcar(started, params, CP)) and use_ublox
 
 def joystick(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and params.get_bool("JoystickDebugMode")
@@ -64,7 +64,7 @@ def not_long_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not params.get_bool("LongitudinalManeuverMode")
 
 def qcomgps(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return started and not ublox_available()
+  return (started or smolcar(started, params, CP)) and not ublox_available()
 
 def always_run(started: bool, params: Params, CP: car.CarParams) -> bool:
   return True
