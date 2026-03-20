@@ -1,7 +1,9 @@
 import math
 import numpy as np
+import threading
 import time
 import wave
+from collections import deque
 
 
 from cereal import car, messaging
@@ -73,6 +75,10 @@ class Soundd:
 
     self.spl_filter_weighted = FirstOrderFilter(0, 2.5, FILTER_DT, initialized=False)
 
+    self._webrtc_lock = threading.Lock()
+    self._webrtc_chunks: deque[np.ndarray] = deque()
+    self._webrtc_size = 0
+
   def load_sounds(self):
     self.loaded_sounds: dict[int, np.ndarray] = {}
 
@@ -109,10 +115,38 @@ class Soundd:
 
     return ret * self.current_volume
 
+  def push_webrtc_audio(self, samples: np.ndarray):
+    with self._webrtc_lock:
+      if self._webrtc_size > SAMPLE_RATE:  # 1 second max buffer
+        self._webrtc_chunks.clear()
+        self._webrtc_size = 0
+      self._webrtc_chunks.append(samples)
+      self._webrtc_size += samples.size
+
+  def pop_webrtc_audio(self, frames: int) -> np.ndarray:
+    out = np.zeros(frames, dtype=np.float32)
+    written = 0
+    with self._webrtc_lock:
+      while written < frames and self._webrtc_chunks:
+        chunk = self._webrtc_chunks[0]
+        take = min(frames - written, chunk.size)
+        out[written:written + take] = chunk[:take]
+        written += take
+        if take >= chunk.size:
+          self._webrtc_chunks.popleft()
+        else:
+          self._webrtc_chunks[0] = chunk[take:]
+        self._webrtc_size -= take
+    return out
+
   def callback(self, data_out: np.ndarray, frames: int, time, status) -> None:
     if status:
       cloudlog.warning(f"soundd stream over/underflow: {status}")
-    data_out[:frames, 0] = self.get_sound_data(frames)
+    sound = self.get_sound_data(frames)
+    webrtc = self.pop_webrtc_audio(frames)
+    np.add(sound, webrtc, out=sound)
+    np.clip(sound, -1.0, 1.0, out=sound)
+    data_out[:frames, 0] = sound
 
   def update_alert(self, new_alert):
     current_alert_played_once = self.current_alert == AudibleAlert.none or self.current_sound_frame > len(self.loaded_sounds[self.current_alert])
@@ -121,6 +155,11 @@ class Soundd:
       self.current_sound_frame = 0
 
   def get_audible_alert(self, sm):
+    if sm.updated['soundRequest']:
+      new_alert = sm['soundRequest'].sound.raw
+      if new_alert != AudibleAlert.none:
+        self.update_alert(new_alert)
+
     if sm.updated['selfdriveState']:
       new_alert = sm['selfdriveState'].alertSound.raw
       self.update_alert(new_alert)
@@ -146,7 +185,7 @@ class Soundd:
     # sounddevice must be imported after forking processes
     import sounddevice as sd
 
-    sm = messaging.SubMaster(['selfdriveState', 'soundPressure'])
+    sm = messaging.SubMaster(['selfdriveState', 'soundPressure', 'soundRequest', 'webrtcAudioData'])
 
     with self.get_stream(sd) as stream:
       rk = Ratekeeper(20)
@@ -158,6 +197,13 @@ class Soundd:
         if sm.updated['soundPressure'] and self.current_alert == AudibleAlert.none: # only update volume filter when not playing alert
           self.spl_filter_weighted.update(sm["soundPressure"].soundPressureWeightedDb)
           self.current_volume = self.calculate_volume(float(self.spl_filter_weighted.x))
+
+        if sm.updated['webrtcAudioData']:
+          raw_bytes = sm['webrtcAudioData'].data
+          if len(raw_bytes) > 0:
+            pcm_float = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32)
+            pcm_float /= 32768.0
+            self.push_webrtc_audio(pcm_float)
 
         self.get_audible_alert(sm)
 

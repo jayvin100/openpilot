@@ -9,9 +9,10 @@ warnings.filterwarnings("ignore", category=RuntimeWarning) # TODO: remove this w
 from aiortc import RTCDataChannel
 from aiortc.mediastreams import VIDEO_CLOCK_RATE, VIDEO_TIME_BASE
 import capnp
+import pytest
 from cereal import messaging, log
 
-from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy
+from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy, parse_body_sound_request
 from openpilot.system.webrtc.device.video import LiveStreamVideoStreamTrack
 
 
@@ -85,3 +86,10 @@ class TestStreamSession:
       assert abs(i + packet.pts - (start_pts + (((time.monotonic_ns() - start_ns) * VIDEO_CLOCK_RATE) // 1_000_000_000))) < 450 #5ms
       assert packet.size == 0
 
+  def test_parse_body_sound_request(self):
+    assert parse_body_sound_request(json.dumps({"type": "bodySound", "data": {"sound": "engage"}}).encode()) == "engage"
+    assert parse_body_sound_request(json.dumps({"type": "testJoystick", "data": {"axes": [0, 0], "buttons": [False]}}).encode()) is None
+
+  def test_parse_body_sound_request_rejects_unknown_sound(self):
+    with pytest.raises(ValueError):
+      parse_body_sound_request(json.dumps({"type": "bodySound", "data": {"sound": "unknown"}}).encode())
