@@ -6,7 +6,7 @@ import wave
 from collections import deque
 
 
-from cereal import car, messaging
+from cereal import car, log, messaging
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import Ratekeeper
@@ -181,11 +181,28 @@ class Soundd:
     sd._initialize()
     return sd.OutputStream(channels=1, samplerate=SAMPLE_RATE, callback=self.callback, blocksize=SAMPLE_BUFFER)
 
+  def _drain_webrtc_audio(self, webrtc_sock):
+    """Drain all pending webrtcAudioData messages from the raw socket.
+    SubMaster only reads one message per socket per update(), which drops
+    ~60% of audio frames at the 20 Hz loop rate. Using a raw socket lets
+    us read every queued message."""
+    while True:
+      raw = webrtc_sock.receive(non_blocking=True)
+      if raw is None:
+        break
+      evt = log.Event.from_bytes(raw)
+      raw_bytes = evt.webrtcAudioData.data
+      if len(raw_bytes) > 0:
+        pcm_float = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32)
+        pcm_float /= 32768.0
+        self.push_webrtc_audio(pcm_float)
+
   def soundd_thread(self):
     # sounddevice must be imported after forking processes
     import sounddevice as sd
 
-    sm = messaging.SubMaster(['selfdriveState', 'soundPressure', 'soundRequest', 'webrtcAudioData'])
+    sm = messaging.SubMaster(['selfdriveState', 'soundPressure', 'soundRequest'])
+    webrtc_sock = messaging.sub_sock('webrtcAudioData')
 
     with self.get_stream(sd) as stream:
       rk = Ratekeeper(20)
@@ -198,12 +215,7 @@ class Soundd:
           self.spl_filter_weighted.update(sm["soundPressure"].soundPressureWeightedDb)
           self.current_volume = self.calculate_volume(float(self.spl_filter_weighted.x))
 
-        if sm.updated['webrtcAudioData']:
-          raw_bytes = sm['webrtcAudioData'].data
-          if len(raw_bytes) > 0:
-            pcm_float = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32)
-            pcm_float /= 32768.0
-            self.push_webrtc_audio(pcm_float)
+        self._drain_webrtc_audio(webrtc_sock)
 
         self.get_audible_alert(sm)
 
