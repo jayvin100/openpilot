@@ -24,6 +24,11 @@ struct BrowserNode {
   std::vector<BrowserNode> children;
 };
 
+struct BrowserSeriesDisplayInfo {
+  int decimals = 3;
+  bool integer_like = false;
+};
+
 struct AppSession {
   std::filesystem::path layout_path;
   std::filesystem::path autosave_path;
@@ -32,6 +37,7 @@ struct AppSession {
   SketchLayout layout;
   RouteData route_data;
   std::unordered_map<std::string, const RouteSeries *> series_by_path;
+  std::unordered_map<std::string, BrowserSeriesDisplayInfo> browser_display_by_path;
   std::vector<BrowserNode> browser_nodes;
   std::unique_ptr<AsyncRouteLoader> route_loader;
   std::unique_ptr<SidebarCameraFeed> camera_feed;

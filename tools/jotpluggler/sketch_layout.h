@@ -37,6 +37,7 @@ struct Curve {
   std::array<uint8_t, 3> color = {160, 170, 180};
   bool visible = true;
   bool derivative = false;
+  double derivative_dt = 0.0;
   double value_scale = 1.0;
   double value_offset = 0.0;
   bool runtime_only = false;

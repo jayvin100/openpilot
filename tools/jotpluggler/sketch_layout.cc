@@ -690,6 +690,7 @@ Curve parse_curve(const json11::Json &curve_node) {
   const std::string transform_name = curve_node["transform"].string_value();
   if (transform_name == "derivative") {
     curve.derivative = true;
+    curve.derivative_dt = curve_node["derivative_dt"].is_number() ? curve_node["derivative_dt"].number_value() : 0.0;
   } else if (transform_name == "scale") {
     curve.value_scale = curve_node["scale"].is_number() ? curve_node["scale"].number_value() : 1.0;
     curve.value_offset = curve_node["offset"].is_number() ? curve_node["offset"].number_value() : 0.0;
@@ -1091,6 +1092,9 @@ void append_events_fast_range(const std::vector<Event> &events,
                               SeriesAccumulator *series) {
   for (size_t i = begin; i < end; ++i) {
     const Event &event_record = events[i];
+    if (event_record.eidx_segnum != -1) {
+      continue;
+    }
     const uint16_t which = static_cast<uint16_t>(event_record.which);
     if (which >= schema.by_which.size() || !schema.by_which[which].has_value()) {
       continue;

@@ -28,6 +28,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -656,6 +657,9 @@ json11::Json curve_to_json(const Curve &curve) {
   };
   if (curve.derivative) {
     obj["transform"] = "derivative";
+    if (curve.derivative_dt > 0.0) {
+      obj["derivative_dt"] = curve.derivative_dt;
+    }
   } else if (std::abs(curve.value_scale - 1.0) > 1.0e-9 || std::abs(curve.value_offset) > 1.0e-9) {
     obj["transform"] = "scale";
     obj["scale"] = curve.value_scale;
@@ -967,10 +971,68 @@ void rebuild_browser_nodes(AppSession *session, UiState *state) {
   prune_browser_selection(state, paths);
 }
 
+BrowserSeriesDisplayInfo compute_browser_display_info(const AppSession &session, const RouteSeries &series) {
+  BrowserSeriesDisplayInfo info;
+  if (series.values.empty()) {
+    return info;
+  }
+  if (session.route_data.enum_info.find(series.path) != session.route_data.enum_info.end()) {
+    info.integer_like = true;
+    info.decimals = 0;
+    return info;
+  }
+
+  const size_t sample_limit = 128;
+  const size_t step = std::max<size_t>(1, series.values.size() / sample_limit);
+  double peak_abs = 0.0;
+  bool integer_like = true;
+  std::vector<int> unique_levels;
+  unique_levels.reserve(8);
+  for (size_t i = 0; i < series.values.size(); i += step) {
+    const double value = series.values[i];
+    if (!std::isfinite(value)) {
+      continue;
+    }
+    peak_abs = std::max(peak_abs, std::abs(value));
+    const double rounded = std::round(value);
+    if (std::abs(value - rounded) > 1.0e-6) {
+      integer_like = false;
+      continue;
+    }
+    const int level = static_cast<int>(rounded);
+    if (std::find(unique_levels.begin(), unique_levels.end(), level) == unique_levels.end()) {
+      unique_levels.push_back(level);
+      if (unique_levels.size() > 8) {
+        integer_like = false;
+      }
+    }
+  }
+
+  info.integer_like = integer_like;
+  if (integer_like) {
+    info.decimals = 0;
+    return info;
+  }
+  if (peak_abs >= 1000.0) {
+    info.decimals = 0;
+  } else if (peak_abs >= 100.0) {
+    info.decimals = 1;
+  } else if (peak_abs >= 10.0) {
+    info.decimals = 2;
+  } else if (peak_abs >= 0.01) {
+    info.decimals = 3;
+  } else {
+    info.decimals = 4;
+  }
+  return info;
+}
+
 void rebuild_route_index(AppSession *session) {
   session->series_by_path.clear();
+  session->browser_display_by_path.clear();
   for (const RouteSeries &series : session->route_data.series) {
     session->series_by_path.emplace(series.path, &series);
+    session->browser_display_by_path.emplace(series.path, compute_browser_display_info(*session, series));
   }
 }
 
@@ -1052,6 +1114,11 @@ std::string browser_series_value_text(const AppSession &session, const UiState &
     return {};
   }
 
+  const auto display_it = session.browser_display_by_path.find(series.path);
+  const BrowserSeriesDisplayInfo display_info = display_it == session.browser_display_by_path.end()
+    ? BrowserSeriesDisplayInfo{}
+    : display_it->second;
+
   if (enum_info != nullptr) {
     const int idx = static_cast<int>(std::llround(*value));
     if (idx >= 0 && std::abs(*value - static_cast<double>(idx)) < 0.01
@@ -1067,23 +1134,12 @@ std::string browser_series_value_text(const AppSession &session, const UiState &
   }
 
   char buf[64] = {};
-  const double abs_value = std::abs(display_value);
-  if (abs_value < 1.0e-6) {
+  if (display_info.integer_like) {
+    std::snprintf(buf, sizeof(buf), "%.0f", std::round(display_value));
+  } else if (std::abs(display_value) < 1.0e-6) {
     std::snprintf(buf, sizeof(buf), "0");
-  } else if (abs_value >= 1000.0) {
-    std::snprintf(buf, sizeof(buf), "%.0f", display_value);
-  } else if (abs_value >= 100.0) {
-    std::snprintf(buf, sizeof(buf), "%.1f", display_value);
-  } else if (abs_value >= 10.0) {
-    std::snprintf(buf, sizeof(buf), "%.2f", display_value);
-  } else if (abs_value >= 1.0) {
-    std::snprintf(buf, sizeof(buf), "%.3f", display_value);
-  } else if (abs_value >= 0.1) {
-    std::snprintf(buf, sizeof(buf), "%.3f", display_value);
-  } else if (abs_value >= 0.01) {
-    std::snprintf(buf, sizeof(buf), "%.4f", display_value);
   } else {
-    std::snprintf(buf, sizeof(buf), "%.5f", display_value);
+    std::snprintf(buf, sizeof(buf), "%.*f", display_info.decimals, display_value);
   }
   return buf;
 }
@@ -1928,16 +1984,41 @@ void decimate_samples(const std::vector<double> &xs_in,
     return;
   }
 
-  const size_t step = std::max<size_t>(1, static_cast<size_t>(std::ceil(static_cast<double>(xs_in.size()) / max_points)));
-  xs_out->reserve(xs_in.size() / step + 2);
-  ys_out->reserve(ys_in.size() / step + 2);
-  for (size_t i = 0; i < xs_in.size(); i += step) {
-    xs_out->push_back(xs_in[i]);
-    ys_out->push_back(ys_in[i]);
-  }
-  if (xs_out->empty() || xs_out->back() != xs_in.back()) {
-    xs_out->push_back(xs_in.back());
-    ys_out->push_back(ys_in.back());
+  const size_t bucket_count = std::max<size_t>(1, static_cast<size_t>(max_points / 4));
+  const size_t bucket_size = std::max<size_t>(
+    1,
+    static_cast<size_t>(std::ceil(static_cast<double>(xs_in.size()) / static_cast<double>(bucket_count))));
+  xs_out->reserve(bucket_count * 4 + 2);
+  ys_out->reserve(bucket_count * 4 + 2);
+
+  size_t last_index = std::numeric_limits<size_t>::max();
+  auto append_index = [&](size_t index) {
+    if (index >= xs_in.size() || index == last_index) {
+      return;
+    }
+    xs_out->push_back(xs_in[index]);
+    ys_out->push_back(ys_in[index]);
+    last_index = index;
+  };
+
+  for (size_t start = 0; start < xs_in.size(); start += bucket_size) {
+    const size_t end = std::min(xs_in.size(), start + bucket_size);
+    size_t min_index = start;
+    size_t max_index = start;
+    for (size_t index = start + 1; index < end; ++index) {
+      if (ys_in[index] < ys_in[min_index]) {
+        min_index = index;
+      }
+      if (ys_in[index] > ys_in[max_index]) {
+        max_index = index;
+      }
+    }
+
+    std::array<size_t, 4> indices = {start, min_index, max_index, end - 1};
+    std::sort(indices.begin(), indices.end());
+    for (size_t index : indices) {
+      append_index(index);
+    }
   }
 }
 
@@ -2115,7 +2196,7 @@ bool build_curve_series(const AppSession &session,
     transformed_xs.reserve(xs.size() - 1);
     transformed_ys.reserve(ys.size() - 1);
     for (size_t i = 1; i < xs.size(); ++i) {
-      const double dt = xs[i] - xs[i - 1];
+      const double dt = curve.derivative_dt > 0.0 ? curve.derivative_dt : (xs[i] - xs[i - 1]);
       if (dt <= 0.0) {
         continue;
       }
@@ -3269,6 +3350,9 @@ int run_app(const Options &options) {
   } else {
     render_frame(glfw_runtime.window(), &session, &ui_state, nullptr);
     if (should_capture) {
+      for (int i = 0; i < 3; ++i) {
+        render_frame(glfw_runtime.window(), &session, &ui_state, nullptr);
+      }
       render_frame(glfw_runtime.window(), &session, &ui_state, &output_path);
     }
   }
