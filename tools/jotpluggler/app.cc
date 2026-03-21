@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -37,9 +38,9 @@ namespace {
 constexpr const char *kUntitledPaneTitle = "...";
 
 constexpr float kSidebarWidth = 282.0f;
-constexpr float kContentGap = 12.0f;
-constexpr float kContentRightPadding = 8.0f;
-constexpr float kStatusBarHeight = 28.0f;
+constexpr float kContentGap = 0.0f;
+constexpr float kContentRightPadding = 0.0f;
+constexpr float kStatusBarHeight = 40.0f;
 
 struct UiMetrics {
   float width = 0.0f;
@@ -85,10 +86,10 @@ struct UiState {
   bool streaming = false;
   int buffer_size = 5;
   int source_index = 0;
-  bool open_about = false;
   bool open_custom_series = false;
   bool open_open_route = false;
-  bool open_save_screenshot = false;
+  bool open_load_layout = false;
+  bool open_save_layout = false;
   bool request_close = false;
   bool reset_plot_view = false;
   bool request_reload = false;
@@ -98,6 +99,9 @@ struct UiState {
   bool follow_latest = false;
   bool has_shared_range = false;
   bool has_hover_time = false;
+  bool has_tracker_time = false;
+  bool playback_loop = false;
+  bool playback_playing = false;
   int active_tab_index = 0;
   int requested_tab_index = -1;
   int rename_tab_index = -1;
@@ -107,6 +111,8 @@ struct UiState {
   std::array<char, 128> rename_tab_buffer = {};
   std::array<char, 128> browser_filter = {};
   std::array<char, 512> data_dir_buffer = {};
+  std::array<char, 512> load_layout_buffer = {};
+  std::array<char, 512> save_layout_buffer = {};
   std::string selected_browser_path;
   std::string error_text;
   bool open_error_popup = false;
@@ -116,6 +122,9 @@ struct UiState {
   double x_view_min = 0.0;
   double x_view_max = 1.0;
   double hovered_time = 0.0;
+  double tracker_time = 0.0;
+  double playback_rate = 1.0;
+  double playback_step = 0.1;
 };
 
 void glfw_error_callback(int error, const char *description) {
@@ -343,6 +352,34 @@ fs::path resolve_layout_path(const std::string &layout_arg) {
   return candidate;
 }
 
+std::string xml_escape(std::string_view text) {
+  std::string escaped;
+  escaped.reserve(text.size());
+  for (const char c : text) {
+    switch (c) {
+      case '&': escaped += "&amp;"; break;
+      case '<': escaped += "&lt;"; break;
+      case '>': escaped += "&gt;"; break;
+      case '"': escaped += "&quot;"; break;
+      case '\'': escaped += "&apos;"; break;
+      default: escaped.push_back(c); break;
+    }
+  }
+  return escaped;
+}
+
+std::string curve_color_hex(const std::array<uint8_t, 3> &color) {
+  char buf[8] = {};
+  std::snprintf(buf, sizeof(buf), "#%02x%02x%02x", color[0], color[1], color[2]);
+  return buf;
+}
+
+std::string format_xml_double(double value) {
+  std::ostringstream out;
+  out << std::fixed << std::setprecision(6) << value;
+  return out.str();
+}
+
 void ensure_parent_dir(const fs::path &path) {
   const fs::path parent = path.parent_path();
   if (!parent.empty()) {
@@ -405,6 +442,7 @@ void configure_style() {
   style.Colors[ImGuiCol_HeaderHovered] = color_rgb(237, 240, 244);
   style.Colors[ImGuiCol_HeaderActive] = color_rgb(232, 236, 240);
   style.Colors[ImGuiCol_PopupBg] = color_rgb(248, 249, 251);
+  style.Colors[ImGuiCol_MenuBarBg] = color_rgb(232, 236, 241);
   style.Colors[ImGuiCol_Separator] = color_rgb(194, 198, 204);
   style.Colors[ImGuiCol_ScrollbarBg] = color_rgb(240, 242, 245);
   style.Colors[ImGuiCol_ScrollbarGrab] = color_rgb(202, 207, 214);
@@ -422,11 +460,19 @@ void configure_style() {
 
   ImPlotStyle &plot_style = ImPlot::GetStyle();
   plot_style.PlotBorderSize = 1.0f;
-  plot_style.MinorAlpha = 0.4f;
+  plot_style.MinorAlpha = 0.65f;
   plot_style.LegendPadding = ImVec2(6.0f, 6.0f);
   plot_style.LegendInnerPadding = ImVec2(6.0f, 4.0f);
   plot_style.LegendSpacing = ImVec2(8.0f, 3.0f);
-  plot_style.PlotPadding = ImVec2(3.0f, 5.0f);
+  plot_style.PlotPadding = ImVec2(1.0f, 4.0f);
+
+  ImPlot::MapInputDefault();
+  ImPlotInputMap &input_map = ImPlot::GetInputMap();
+  input_map.Pan = ImGuiMouseButton_Right;
+  input_map.PanMod = ImGuiMod_None;
+  input_map.Select = ImGuiMouseButton_Left;
+  input_map.SelectCancel = ImGuiMouseButton_Right;
+  input_map.SelectMod = ImGuiMod_None;
 }
 
 UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset) {
@@ -481,6 +527,15 @@ void sync_ui_state(UiState *state, const SketchLayout &layout) {
 void sync_route_buffers(UiState *state, const AppSession &session) {
   copy_to_buffer(session.route_name, &state->route_buffer);
   copy_to_buffer(session.data_dir, &state->data_dir_buffer);
+}
+
+fs::path default_layout_save_path(const AppSession &session) {
+  return session.layout_path.empty() ? fs::current_path() / "jotpluggler-layout.xml" : session.layout_path;
+}
+
+void sync_layout_buffers(UiState *state, const AppSession &session) {
+  copy_to_buffer(session.layout_path.empty() ? std::string() : session.layout_path.string(), &state->load_layout_buffer);
+  copy_to_buffer(default_layout_save_path(session).string(), &state->save_layout_buffer);
 }
 
 const WorkspaceTab *active_tab(const SketchLayout &layout, const UiState &state) {
@@ -554,6 +609,7 @@ enum class PaneMenuActionKind {
   SplitRight,
   SplitTop,
   SplitBottom,
+  ResetView,
   Clear,
   Close,
 };
@@ -717,6 +773,7 @@ SketchLayout make_empty_layout() {
   SketchLayout layout;
   layout.tabs.push_back(make_empty_tab("tab1"));
   layout.current_tab_index = 0;
+  layout.roots.push_back("layout");
   return layout;
 }
 
@@ -752,12 +809,121 @@ std::string next_tab_name(const SketchLayout &layout, const std::string &base_na
   return base + " copy";
 }
 
-std::string route_summary(const AppSession &session) {
-  std::string summary = session.route_name;
-  if (!session.data_dir.empty()) {
-    summary += " (local)";
+std::string layout_summary(const AppSession &session) {
+  if (session.layout_path.empty()) {
+    return "untitled";
   }
-  return summary;
+  return session.layout_path.filename().string();
+}
+
+void write_indent(std::ostream &out, int spaces) {
+  out << std::string(static_cast<size_t>(std::max(spaces, 0)), ' ');
+}
+
+void write_curve_xml(std::ostream &out, const Curve &curve, int indent) {
+  write_indent(out, indent);
+  out << "<curve name=\"" << xml_escape(curve.name) << "\" color=\"" << curve_color_hex(curve.color) << "\"";
+  const bool has_transform = curve.derivative
+    || std::abs(curve.value_scale - 1.0) > 1.0e-9
+    || std::abs(curve.value_offset) > 1.0e-9;
+  if (!has_transform) {
+    out << "/>\n";
+    return;
+  }
+
+  out << ">\n";
+  if (curve.derivative) {
+    write_indent(out, indent + 1);
+    out << "<transform name=\"Derivative\"/>\n";
+  }
+  if (std::abs(curve.value_scale - 1.0) > 1.0e-9 || std::abs(curve.value_offset) > 1.0e-9) {
+    write_indent(out, indent + 1);
+    out << "<transform name=\"Scale/Offset\">\n";
+    write_indent(out, indent + 2);
+    out << "<options value_scale=\"" << format_xml_double(curve.value_scale)
+        << "\" value_offset=\"" << format_xml_double(curve.value_offset) << "\"/>\n";
+    write_indent(out, indent + 1);
+    out << "</transform>\n";
+  }
+  write_indent(out, indent);
+  out << "</curve>\n";
+}
+
+void write_workspace_node_xml(std::ostream &out, const WorkspaceNode &node, const WorkspaceTab &tab, int indent) {
+  if (node.is_pane) {
+    if (node.pane_index < 0 || node.pane_index >= static_cast<int>(tab.panes.size())) {
+      return;
+    }
+    const Pane &pane = tab.panes[static_cast<size_t>(node.pane_index)];
+    write_indent(out, indent);
+    out << "<DockArea name=\"" << xml_escape(pane.title.empty() ? std::string(kUntitledPaneTitle) : pane.title) << "\">\n";
+    write_indent(out, indent + 1);
+    out << "<plot flip_y=\"false\" flip_x=\"false\" mode=\"TimeSeries\" style=\"Lines\">\n";
+    write_indent(out, indent + 2);
+    out << "<range left=\"" << format_xml_double(pane.range.left)
+        << "\" top=\"" << format_xml_double(pane.range.top)
+        << "\" bottom=\"" << format_xml_double(pane.range.bottom)
+        << "\" right=\"" << format_xml_double(pane.range.right) << "\"/>\n";
+    write_indent(out, indent + 2);
+    out << "<limitY/>\n";
+    for (const Curve &curve : pane.curves) {
+      write_curve_xml(out, curve, indent + 2);
+    }
+    write_indent(out, indent + 1);
+    out << "</plot>\n";
+    write_indent(out, indent);
+    out << "</DockArea>\n";
+    return;
+  }
+
+  if (node.children.empty()) {
+    return;
+  }
+  const char orientation = node.orientation == SplitOrientation::Horizontal ? '-' : '|';
+  write_indent(out, indent);
+  out << "<DockSplitter orientation=\"" << orientation << "\" sizes=\"";
+  for (size_t i = 0; i < node.children.size(); ++i) {
+    if (i != 0) {
+      out << ';';
+    }
+    const float size = i < node.sizes.size() ? node.sizes[i] : 1.0f / static_cast<float>(node.children.size());
+    out << format_xml_double(size);
+  }
+  out << "\" count=\"" << node.children.size() << "\">\n";
+  for (const WorkspaceNode &child : node.children) {
+    write_workspace_node_xml(out, child, tab, indent + 1);
+  }
+  write_indent(out, indent);
+  out << "</DockSplitter>\n";
+}
+
+void save_layout_xml(const SketchLayout &layout, const fs::path &path) {
+  ensure_parent_dir(path);
+  std::ofstream out(path);
+  if (!out) {
+    throw std::runtime_error("Failed to open layout for writing: " + path.string());
+  }
+
+  out << "<?xml version='1.0' encoding='UTF-8'?>\n";
+  out << "<root>\n";
+  out << " <tabbed_widget name=\"Main Window\" parent=\"main_window\">\n";
+  for (const WorkspaceTab &tab : layout.tabs) {
+    out << "  <Tab tab_name=\"" << xml_escape(tab.tab_name) << "\" containers=\"1\">\n";
+    out << "   <Container>\n";
+    write_workspace_node_xml(out, tab.root, tab, 4);
+    out << "   </Container>\n";
+    out << "  </Tab>\n";
+  }
+  out << "  <currentTabIndex index=\"" << std::clamp(layout.current_tab_index, 0, std::max(0, static_cast<int>(layout.tabs.size()) - 1)) << "\"/>\n";
+  out << " </tabbed_widget>\n";
+  out << " <use_relative_time_offset enabled=\"1\"/>\n";
+  out << " <Plugins>\n";
+  out << "  <plugin ID=\"DataLoad Rlog\"/>\n";
+  out << "  <plugin ID=\"Cereal Subscriber\"/>\n";
+  out << " </Plugins>\n";
+  out << " <customMathEquations/>\n";
+  out << " <snippets/>\n";
+  out << "</root>\n";
 }
 
 std::array<uint8_t, 3> next_curve_color(const Pane &pane) {
@@ -909,6 +1075,10 @@ void ensure_shared_range(UiState *state, const AppSession &session) {
     state->x_view_max = state->x_view_min + 1.0;
   }
   state->has_shared_range = true;
+  if (!state->has_tracker_time || state->tracker_time < state->route_x_min || state->tracker_time > state->route_x_max) {
+    state->tracker_time = state->route_x_min;
+    state->has_tracker_time = true;
+  }
 }
 
 void clamp_shared_range(UiState *state) {
@@ -939,6 +1109,9 @@ void clamp_shared_range(UiState *state) {
       state->x_view_max = std::min(state->route_x_max, state->x_view_min + min_span);
     }
   }
+  if (state->has_tracker_time) {
+    state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
+  }
 }
 
 void reset_shared_range(UiState *state, const AppSession &session) {
@@ -966,6 +1139,37 @@ void update_follow_range(UiState *state) {
   clamp_shared_range(state);
 }
 
+void advance_playback(UiState *state) {
+  if (!state->playback_playing || !state->has_shared_range || state->route_x_max <= state->route_x_min) {
+    return;
+  }
+
+  state->tracker_time += std::max(0.0, static_cast<double>(ImGui::GetIO().DeltaTime)) * state->playback_rate;
+  if (state->tracker_time >= state->route_x_max) {
+    if (state->playback_loop) {
+      state->tracker_time = state->route_x_min;
+    } else {
+      state->tracker_time = state->route_x_max;
+      state->playback_playing = false;
+    }
+  }
+
+  const double span = std::max(0.1, state->x_view_max - state->x_view_min);
+  if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
+    state->x_view_min = state->tracker_time - span * 0.5;
+    state->x_view_max = state->tracker_time + span * 0.5;
+    clamp_shared_range(state);
+  }
+}
+
+void step_tracker(UiState *state, double direction) {
+  if (!state->has_shared_range) {
+    return;
+  }
+  state->tracker_time += direction * std::max(0.001, state->playback_step);
+  state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
+}
+
 void show_not_implemented_modal(const char *popup_name, const char *title, const char *body) {
   if (ImGui::BeginPopupModal(popup_name, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted(title);
@@ -981,7 +1185,6 @@ void show_not_implemented_modal(const char *popup_name, const char *title, const
 
 float draw_main_menu_bar(UiState *state) {
   float height = ImGui::GetFrameHeight();
-  ImGui::PushStyleColor(ImGuiCol_MenuBarBg, color_rgb(238, 240, 244));
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("File")) {
       if (ImGui::MenuItem("Open Route...")) {
@@ -992,9 +1195,11 @@ float draw_main_menu_bar(UiState *state) {
         state->status_text = "Reloading route";
       }
       ImGui::Separator();
-      if (ImGui::MenuItem("Save Screenshot...")) {
-        state->open_save_screenshot = true;
-        state->status_text = "Screenshot export is CLI-driven for now";
+      if (ImGui::MenuItem("Load Layout...")) {
+        state->open_load_layout = true;
+      }
+      if (ImGui::MenuItem("Save Layout...")) {
+        state->open_save_layout = true;
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Close")) {
@@ -1017,81 +1222,61 @@ float draw_main_menu_bar(UiState *state) {
       if (ImGui::MenuItem("Close Tab", nullptr, false, state->tabs.size() > 1)) {
         state->request_close_tab = true;
       }
-      ImGui::Separator();
-      if (ImGui::MenuItem("Custom Series...")) {
-        state->open_custom_series = true;
-      }
-      ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Help")) {
-      if (ImGui::MenuItem("About JotPlugger")) {
-        state->open_about = true;
-      }
       ImGui::EndMenu();
     }
     height = ImGui::GetWindowSize().y;
     ImGui::EndMainMenuBar();
   }
-  ImGui::PopStyleColor();
   return height;
 }
 
-void draw_status_bar(const UiMetrics &ui, UiState *state) {
-  ImGui::SetNextWindowPos(ImVec2(0.0f, ui.status_bar_y));
-  ImGui::SetNextWindowSize(ImVec2(ui.width, kStatusBarHeight));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(248, 248, 249));
+void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *state) {
+  ImGui::SetNextWindowPos(ImVec2(ui.content_x, ui.status_bar_y));
+  ImGui::SetNextWindowSize(ImVec2(ui.content_w, kStatusBarHeight));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 5.0f));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(247, 248, 250));
   ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(188, 193, 199));
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
                                  ImGuiWindowFlags_NoMove |
                                  ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoSavedSettings;
   if (ImGui::Begin("##status_bar", nullptr, flags)) {
-    if (ImGui::Button(state->streaming ? "Live" : "Ready", ImVec2(52.0f, 0.0f))) {
+    char tracker_text[64] = {};
+    std::snprintf(tracker_text, sizeof(tracker_text), "%.3f", state->has_tracker_time ? state->tracker_time : 0.0);
+    ImGui::SetNextItemWidth(96.0f);
+    ImGui::InputText("##display_time", tracker_text, sizeof(tracker_text), ImGuiInputTextFlags_ReadOnly);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!session.route_data.has_time_range);
+    if (ImGui::Checkbox("Loop", &state->playback_loop)) {
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", state->status_text.c_str());
-    ImGui::SameLine();
-    if (ImGui::Button("Reset", ImVec2(54.0f, 0.0f))) {
-      state->reset_plot_view = true;
-      state->status_text = "Plot view reset";
+    if (ImGui::Button(state->playback_playing ? "Pause" : "Play", ImVec2(56.0f, 0.0f))) {
+      state->playback_playing = !state->playback_playing;
     }
     ImGui::SameLine();
-    if (ImGui::Checkbox("Follow", &state->follow_latest)) {
-      state->status_text = state->follow_latest ? "Following latest samples" : "Follow disabled";
-    }
-    if (state->has_shared_range) {
+    ImGui::SetNextItemWidth(std::max(160.0f, ImGui::GetContentRegionAvail().x - 240.0f));
+    if (ImGui::SliderScalar("##time_slider",
+                            ImGuiDataType_Double,
+                            &state->tracker_time,
+                            &state->route_x_min,
+                            &state->route_x_max,
+                            "%.3f")) {
       const double span = std::max(0.1, state->x_view_max - state->x_view_min);
-      double center = 0.5 * (state->x_view_min + state->x_view_max);
-      const double min_center = state->route_x_min + span * 0.5;
-      const double max_center = state->route_x_max - span * 0.5;
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(std::max(120.0f, ui.width - 600.0f));
-      if (ImGui::SliderScalar("##timeline_center", ImGuiDataType_Double, &center, &min_center, &max_center, "%.1f s")) {
-        state->x_view_min = center - span * 0.5;
-        state->x_view_max = center + span * 0.5;
-        state->follow_latest = false;
-      }
-      ImGui::SameLine();
-      double span_value = span;
-      const double max_span = std::max(span, state->route_x_max - state->route_x_min);
-      const double min_span = 0.1;
-      ImGui::SetNextItemWidth(90.0f);
-      if (ImGui::DragScalar("Span", ImGuiDataType_Double, &span_value, 0.1, &min_span, &max_span, "%.1f")) {
-        span_value = std::clamp(span_value, min_span, max_span);
-        const double current_center = 0.5 * (state->x_view_min + state->x_view_max);
-        state->x_view_min = current_center - span_value * 0.5;
-        state->x_view_max = current_center + span_value * 0.5;
-        state->follow_latest = false;
+      if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
+        state->x_view_min = state->tracker_time - span * 0.5;
+        state->x_view_max = state->tracker_time + span * 0.5;
         clamp_shared_range(state);
       }
-      ImGui::SameLine();
-      ImGui::TextDisabled("x %.1f to %.1f", state->x_view_min, state->x_view_max);
-      if (state->has_hover_time) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("| cursor %.3f", state->hovered_time);
-      }
     }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(74.0f);
+    ImGui::DragScalar("Speed", ImGuiDataType_Double, &state->playback_rate, 0.1, nullptr, nullptr, "%.1f");
+    state->playback_rate = std::clamp(state->playback_rate, 0.1, 10.0);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80.0f);
+    ImGui::DragScalar("Step", ImGuiDataType_Double, &state->playback_step, 0.01, nullptr, nullptr, "%.3f");
+    state->playback_step = std::clamp(state->playback_step, 0.001, 10.0);
+    ImGui::EndDisabled();
   }
   ImGui::End();
   ImGui::PopStyleColor(2);
@@ -1150,7 +1335,7 @@ void draw_browser_node(AppSession *session, const BrowserNode &node, UiState *st
 
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.top_offset));
-  ImGui::SetNextWindowSize(ImVec2(ui.sidebar_width, std::max(1.0f, ui.height - ui.top_offset - kStatusBarHeight)));
+  ImGui::SetNextWindowSize(ImVec2(ui.sidebar_width, std::max(1.0f, ui.height - ui.top_offset)));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(238, 240, 244));
   ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(190, 197, 205));
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
@@ -1158,42 +1343,22 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
                                  ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoSavedSettings;
   if (ImGui::Begin("##sidebar", nullptr, flags)) {
-    ImGui::SeparatorText("Data");
-    ImGui::TextUnformatted(route_summary(*session).c_str());
-    if (ImGui::Button("Open...", ImVec2(72.0f, 0.0f))) {
-      state->open_open_route = true;
+    ImGui::SeparatorText("Layout");
+    ImGui::TextUnformatted(layout_summary(*session).c_str());
+    if (ImGui::Button("Load...", ImVec2(72.0f, 0.0f))) {
+      state->open_load_layout = true;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Reload", ImVec2(72.0f, 0.0f))) {
-      state->request_reload = true;
-      state->status_text = "Reloading route";
-    }
-    ImGui::Spacing();
-
-    ImGui::SeparatorText("Timeline");
-    if (ImGui::Checkbox("Follow latest", &state->follow_latest)) {
-      state->status_text = state->follow_latest ? "Following latest samples" : "Follow disabled";
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Reset View", ImVec2(88.0f, 0.0f))) {
-      state->reset_plot_view = true;
-      state->status_text = "Plot view reset";
-    }
-    if (state->has_shared_range) {
-      ImGui::TextDisabled("View %.2f to %.2f", state->x_view_min, state->x_view_max);
-    }
-    if (session->route_data.has_time_range) {
-      ImGui::TextDisabled("Route %.2f to %.2f", session->route_data.x_min, session->route_data.x_max);
-    }
-    if (state->has_hover_time) {
-      ImGui::TextDisabled("Cursor %.3f", state->hovered_time);
+    if (ImGui::Button("Save...", ImVec2(72.0f, 0.0f))) {
+      state->open_save_layout = true;
     }
     ImGui::Spacing();
 
     ImGui::SeparatorText("Timeseries List");
-    ImGui::InputTextWithHint("##browser_filter", "filter paths", state->browser_filter.data(), state->browser_filter.size());
-    ImGui::TextDisabled("%zu available", session->route_data.paths.size());
-    if (ImGui::BeginChild("##timeseries_browser", ImVec2(0.0f, 170.0f), true)) {
+    ImGui::InputTextWithHint("##browser_filter", "Filter...", state->browser_filter.data(), state->browser_filter.size());
+    const float footer_height = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetTextLineHeightWithSpacing() + 16.0f;
+    const float browser_height = std::max(1.0f, ImGui::GetContentRegionAvail().y - footer_height);
+    if (ImGui::BeginChild("##timeseries_browser", ImVec2(0.0f, browser_height), true)) {
       const std::string filter = string_from_buffer(state->browser_filter);
       for (const BrowserNode &node : session->browser_nodes) {
         draw_browser_node(session, node, state, filter);
@@ -1201,7 +1366,8 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
     }
     ImGui::EndChild();
 
-    if (ImGui::Button("Custom Series", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
+    ImGui::SeparatorText("Custom Series");
+    if (ImGui::Button("Create...", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
       state->open_custom_series = true;
     }
   }
@@ -1223,23 +1389,7 @@ std::string path_curve_label(std::string_view path) {
   if (path.empty() || path.front() != '/') {
     return std::string(path);
   }
-  std::vector<std::string_view> parts;
-  size_t start = 1;
-  while (start < path.size()) {
-    const size_t end = path.find('/', start);
-    parts.push_back(path.substr(start, end == std::string_view::npos ? path.size() - start : end - start));
-    if (end == std::string_view::npos) {
-      break;
-    }
-    start = end + 1;
-  }
-  if (parts.size() >= 2) {
-    const std::string_view parent = parts[parts.size() - 2];
-    if (parent.find("canState") == 0 || std::all_of(parent.begin(), parent.end(), ::isdigit)) {
-      return std::string(parent) + "/" + std::string(parts.back());
-    }
-  }
-  return parts.empty() ? std::string(path) : std::string(parts.back());
+  return std::string(path.substr(1));
 }
 
 Curve make_curve_for_path(const Pane &pane, const std::string &path) {
@@ -1663,10 +1813,10 @@ void draw_plot(const AppSession &session, const Pane &pane, UiState *state) {
   ImPlot::PushStyleColor(ImPlotCol_PlotBorder, color_rgb(186, 190, 196));
   ImPlot::PushStyleColor(ImPlotCol_LegendBg, color_rgb(248, 249, 251, 0.92f));
   ImPlot::PushStyleColor(ImPlotCol_LegendBorder, color_rgb(168, 175, 184));
-  ImPlot::PushStyleColor(ImPlotCol_AxisGrid, color_rgb(212, 218, 225));
+  ImPlot::PushStyleColor(ImPlotCol_AxisGrid, color_rgb(188, 196, 206));
   ImPlot::PushStyleColor(ImPlotCol_AxisText, color_rgb(95, 103, 112));
 
-  ImPlotFlags plot_flags = ImPlotFlags_NoTitle | ImPlotFlags_NoMenus | ImPlotFlags_Crosshairs;
+  ImPlotFlags plot_flags = ImPlotFlags_NoTitle | ImPlotFlags_NoMenus;
   if (supported_count == 0) {
     plot_flags |= ImPlotFlags_NoLegend;
   }
@@ -1712,12 +1862,12 @@ void draw_plot(const AppSession &session, const Pane &pane, UiState *state) {
         }
       }
     }
-    if (state->has_hover_time) {
+    if (state->has_tracker_time) {
       ImPlotSpec cursor_spec;
       cursor_spec.LineColor = color_rgb(108, 118, 128, 0.7f);
       cursor_spec.LineWeight = 1.0f;
       cursor_spec.Flags = ImPlotItemFlags_NoLegend;
-      ImPlot::PlotInfLines("##hover_cursor", &state->hovered_time, 1, cursor_spec);
+      ImPlot::PlotInfLines("##tracker_cursor", &state->tracker_time, 1, cursor_spec);
     }
     if (ImPlot::IsPlotHovered()) {
       state->hovered_time = ImPlot::GetPlotMousePos().x;
@@ -1742,17 +1892,37 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
 
   PaneMenuAction action;
   action.pane_index = pane_index;
-  if (ImGui::MenuItem("Split Left")) {
-    action.kind = PaneMenuActionKind::SplitLeft;
-  } else if (ImGui::MenuItem("Split Right")) {
-    action.kind = PaneMenuActionKind::SplitRight;
-  } else if (ImGui::MenuItem("Split Top")) {
+  ImGui::MenuItem("Edit Axis Limits...", nullptr, false, false);
+  ImGui::MenuItem("Edit Curve Style...", nullptr, false, false);
+  ImGui::MenuItem("Add Custom Curve...", nullptr, false, false);
+  ImGui::Separator();
+  if (ImGui::MenuItem("Split Horizontally")) {
     action.kind = PaneMenuActionKind::SplitTop;
-  } else if (ImGui::MenuItem("Split Bottom")) {
-    action.kind = PaneMenuActionKind::SplitBottom;
-  } else if (ImGui::MenuItem("Clear Pane")) {
+  } else if (ImGui::MenuItem("Split Vertically")) {
+    action.kind = PaneMenuActionKind::SplitLeft;
+  }
+  ImGui::Separator();
+  if (ImGui::MenuItem("Zoom Out")) {
+    action.kind = PaneMenuActionKind::ResetView;
+  } else if (ImGui::MenuItem("Zoom Out Horizontally")) {
+    action.kind = PaneMenuActionKind::ResetView;
+  }
+  ImGui::MenuItem("Zoom Out Vertically", nullptr, false, false);
+  ImGui::Separator();
+  if (ImGui::MenuItem("Remove ALL curves")) {
     action.kind = PaneMenuActionKind::Clear;
-  } else if (ImGui::MenuItem("Close Pane", nullptr, false, tab.panes.size() > 1)) {
+  }
+  ImGui::Separator();
+  ImGui::MenuItem("Flip Horizontal Axis", nullptr, false, false);
+  ImGui::MenuItem("Flip Vertical Axis", nullptr, false, false);
+  ImGui::Separator();
+  ImGui::MenuItem("Copy", nullptr, false, false);
+  ImGui::MenuItem("Paste", nullptr, false, false);
+  ImGui::MenuItem("Copy image to clipboard", nullptr, false, false);
+  ImGui::MenuItem("Save plot to file", nullptr, false, false);
+  ImGui::MenuItem("Show data statistics", nullptr, false, false);
+  ImGui::Separator();
+  if (ImGui::MenuItem("Close Pane", nullptr, false, tab.panes.size() > 1)) {
     action.kind = PaneMenuActionKind::Close;
   }
   ImGui::EndPopup();
@@ -1870,6 +2040,9 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
       if (split_pane(tab, pane_index, PaneDropZone::Bottom)) {
         tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
       }
+      break;
+    case PaneMenuActionKind::ResetView:
+      state->reset_plot_view = true;
       break;
     case PaneMenuActionKind::Clear:
       clear_pane(tab, pane_index);
@@ -2156,6 +2329,46 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
   ImGui::PopStyleColor(2);
 }
 
+bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg) {
+  try {
+    const fs::path layout_path = resolve_layout_path(layout_arg);
+    session->layout = load_sketch_layout(layout_path);
+    session->layout_path = layout_path;
+    cancel_rename_tab(state);
+    sync_ui_state(state, session->layout);
+    sync_layout_buffers(state, *session);
+    mark_all_docks_dirty(state);
+    reset_shared_range(state, *session);
+    state->status_text = "Loaded layout " + layout_path.filename().string();
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    state->status_text = "Failed to load layout";
+    return false;
+  }
+}
+
+bool save_layout(AppSession *session, UiState *state, const std::string &layout_path) {
+  try {
+    if (layout_path.empty()) {
+      throw std::runtime_error("Layout path is empty");
+    }
+    session->layout.current_tab_index = state->active_tab_index;
+    const fs::path output = fs::absolute(fs::path(layout_path));
+    save_layout_xml(session->layout, output);
+    session->layout_path = output;
+    sync_layout_buffers(state, *session);
+    state->status_text = "Saved layout " + output.filename().string();
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    state->status_text = "Failed to save layout";
+    return false;
+  }
+}
+
 void rebuild_session_route_data(AppSession *session, UiState *state,
                                 const RouteLoadProgressCallback &progress = {}) {
   session->route_data = load_route_data(session->route_name, session->data_dir, progress);
@@ -2166,6 +2379,7 @@ void rebuild_session_route_data(AppSession *session, UiState *state,
   }
   state->has_shared_range = false;
   state->has_hover_time = false;
+  state->has_tracker_time = false;
   reset_shared_range(state, *session);
 }
 
@@ -2186,10 +2400,6 @@ bool reload_session(AppSession *session, UiState *state, const std::string &rout
 }
 
 void draw_popups(AppSession *session, UiState *state) {
-  if (state->open_about) {
-    ImGui::OpenPopup("About JotPlugger");
-    state->open_about = false;
-  }
   if (state->open_custom_series) {
     ImGui::OpenPopup("Custom Series");
     state->open_custom_series = false;
@@ -2198,23 +2408,21 @@ void draw_popups(AppSession *session, UiState *state) {
     ImGui::OpenPopup("Open Route");
     state->open_open_route = false;
   }
-  if (state->open_save_screenshot) {
-    ImGui::OpenPopup("Save Screenshot");
-    state->open_save_screenshot = false;
+  if (state->open_load_layout) {
+    sync_layout_buffers(state, *session);
+    ImGui::OpenPopup("Load Layout");
+    state->open_load_layout = false;
+  }
+  if (state->open_save_layout) {
+    sync_layout_buffers(state, *session);
+    ImGui::OpenPopup("Save Layout");
+    state->open_save_layout = false;
   }
 
-  show_not_implemented_modal(
-    "About JotPlugger",
-    "About JotPlugger",
-    "JotPlugger is the in-progress native Dear ImGui replacement for PlotJuggler in tools/jotpluggler.");
   show_not_implemented_modal(
     "Custom Series",
     "Custom Series",
     "Custom series editing is not implemented yet.");
-  show_not_implemented_modal(
-    "Save Screenshot",
-    "Save Screenshot",
-    "Screenshot export is currently driven by the CLI with --output <png>.");
   if (ImGui::BeginPopupModal("Open Route", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted("Load a route into the current layout.");
     ImGui::Separator();
@@ -2228,6 +2436,40 @@ void draw_popups(AppSession *session, UiState *state) {
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
       sync_route_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+  if (ImGui::BeginPopupModal("Load Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Load a PlotJuggler XML layout.");
+    ImGui::Separator();
+    ImGui::InputText("Layout", state->load_layout_buffer.data(), state->load_layout_buffer.size());
+    ImGui::Spacing();
+    if (ImGui::Button("Load", ImVec2(120.0f, 0.0f))) {
+      if (reload_layout(session, state, string_from_buffer(state->load_layout_buffer))) {
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+      sync_layout_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+  if (ImGui::BeginPopupModal("Save Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Save the current workspace as a PlotJuggler XML layout.");
+    ImGui::Separator();
+    ImGui::InputText("Layout", state->save_layout_buffer.data(), state->save_layout_buffer.size());
+    ImGui::Spacing();
+    if (ImGui::Button("Save", ImVec2(120.0f, 0.0f))) {
+      if (save_layout(session, state, string_from_buffer(state->save_layout_buffer))) {
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+      sync_layout_buffers(state, *session);
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -2255,12 +2497,19 @@ void render_layout(AppSession *session, UiState *state) {
   } else {
     clamp_shared_range(state);
   }
+  if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
+    step_tracker(state, -1.0);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+    step_tracker(state, 1.0);
+  }
+  advance_playback(state);
   const float menu_height = draw_main_menu_bar(state);
   const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height);
   draw_sidebar(session, ui, state);
   draw_workspace(session, ui, state);
   draw_pane_windows(session, state);
-  draw_status_bar(ui, state);
+  draw_status_bar(*session, ui, state);
   draw_popups(session, state);
 }
 
@@ -2342,6 +2591,7 @@ int run_app(const Options &options) {
   });
   route_progress.finish();
   sync_route_buffers(&ui_state, session);
+  sync_layout_buffers(&ui_state, session);
 
   GlfwRuntime glfw_runtime(options);
   ImGuiRuntime imgui_runtime(glfw_runtime.window());

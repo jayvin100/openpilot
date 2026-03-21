@@ -7,7 +7,7 @@ Current scope:
 - native C++ route-wide extraction of direct numeric `/service/path` series
 - GLFW + Dear ImGui + ImPlot rendering
 - real PlotJuggler tab support with a docked workspace
-- route open/reload controls, shared timeline navigation, and pane/curve selection in the UI
+- route open/reload controls, layout load/save controls, and pane/curve selection in the UI
 - hierarchical timeseries browser for adding route-backed curves to the active pane
 - fixed-size screenshot export for deterministic rendering and debugging
 
@@ -29,7 +29,7 @@ scons tools/jotpluggler/jotpluggler
 Open the app interactively:
 
 ```bash
-./tools/jotpluggler/jotpluggler --demo
+./tools/jotpluggler/jotpluggler
 ```
 
 Open a specific PlotJuggler layout:
@@ -51,10 +51,11 @@ Export a screenshot without opening a visible window:
 ```
 
 If you omit `--layout`, JotPlugger starts with a blank one-pane workspace.
+If you omit the route too, JotPlugger starts as an empty shell like PlotJuggler.
 `--demo` only provides the bundled demo route.
 The app also accepts a positional `route` like the other log tools, plus `--data-dir`.
-Multi-tab PlotJuggler layouts now render as real app tabs, and the sidebar can target panes, browse route series, add curves, and toggle visibility.
-Plots share a real x-range with follow/reset controls and route-backed direct curve rendering.
+Multi-tab PlotJuggler layouts now render as real app tabs, and the sidebar exposes PJ-style layout and timeseries sections.
+Plots use route-backed direct curve rendering with a shared `t=0` time base and a playback/timeline bar aligned to the plot region.
 Curves without direct sampled data are shown as unsupported instead of being faked.
 
 ## Validation

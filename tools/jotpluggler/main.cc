@@ -21,6 +21,7 @@ void print_usage(const char *argv0) {
       << "  --show\n"
       << "\n"
       << "Examples:\n"
+      << "  " << argv0 << "\n"
       << "  " << argv0 << " --demo\n"
       << "  " << argv0 << " --layout longitudinal --demo\n"
       << "  " << argv0 << " --layout longitudinal --demo --output /tmp/longitudinal.png\n";
@@ -85,11 +86,6 @@ int main(int argc, char *argv[]) {
 
   if (options.output_path.empty() && !options.show) {
     options.show = true;
-  }
-
-  if (options.route_name.empty()) {
-    print_usage(argv[0]);
-    return 2;
   }
   if (options.width <= 0 || options.height <= 0) {
     std::cerr << "Width and height must be positive\n";

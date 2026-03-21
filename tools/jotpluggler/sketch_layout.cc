@@ -734,6 +734,18 @@ RouteData load_route_data(const std::string &route_name,
   std::sort(route_data.series.begin(), route_data.series.end(), [](const RouteSeries &a, const RouteSeries &b) {
     return a.path < b.path;
   });
+
+  if (route_data.has_time_range) {
+    const double time_offset = route_data.x_min;
+    for (RouteSeries &series : route_data.series) {
+      for (double &tm : series.times) {
+        tm -= time_offset;
+      }
+    }
+    route_data.x_max -= time_offset;
+    route_data.x_min = 0.0;
+  }
+
   route_data.roots = collect_route_roots(route_data.paths);
   return route_data;
 }
