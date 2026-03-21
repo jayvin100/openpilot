@@ -1,15 +1,7 @@
 bool reset_layout(AppSession *session, UiState *state) {
   try {
     if (session->layout_path.empty()) {
-      session->layout = make_empty_layout();
-      session->autosave_path.clear();
-      state->layout_dirty = false;
-      state->tabs.clear();
-      cancel_rename_tab(state);
-      sync_ui_state(state, session->layout);
-      sync_layout_buffers(state, *session);
-      reset_shared_range(state, *session);
-      state->status_text = "Reset layout";
+      start_new_layout(session, state, "Reset layout");
       return true;
     }
     clear_layout_autosave(*session);

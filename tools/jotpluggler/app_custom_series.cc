@@ -15,7 +15,6 @@
 #include <optional>
 #include <regex>
 #include <set>
-#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <sys/wait.h>
@@ -81,20 +80,6 @@ bool input_text_multiline_string(const char *label,
                                    flags,
                                    input_text_resize_callback,
                                    text);
-}
-
-std::string shell_quote(const std::string &value) {
-  std::ostringstream quoted;
-  quoted << '\'';
-  for (const char c : value) {
-    if (c == '\'') {
-      quoted << "'\\''";
-    } else {
-      quoted << c;
-    }
-  }
-  quoted << '\'';
-  return quoted.str();
 }
 
 std::string trim_copy(std::string_view text) {

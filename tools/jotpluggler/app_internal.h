@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -177,12 +178,28 @@ inline ImVec4 color_rgb(const std::array<uint8_t, 3> &color, float alpha = 1.0f)
   return color_rgb(color[0], color[1], color[2], alpha);
 }
 
+inline std::string shell_quote(std::string_view value) {
+  std::string quoted;
+  quoted.reserve(value.size() + 8);
+  quoted.push_back('\'');
+  for (const char c : value) {
+    if (c == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted.push_back(c);
+    }
+  }
+  quoted.push_back('\'');
+  return quoted;
+}
+
 const WorkspaceTab *app_active_tab(const SketchLayout &layout, const UiState &state);
 WorkspaceTab *app_active_tab(SketchLayout *layout, const UiState &state);
 TabUiState *app_active_tab_state(UiState *state);
 
 void app_push_mono_font();
 void app_pop_mono_font();
+bool app_add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path);
 
 std::string app_curve_display_name(const Curve &curve);
 std::array<uint8_t, 3> app_next_curve_color(const Pane &pane);

@@ -1,3 +1,4 @@
+#include "tools/jotpluggler/app_browser.h"
 #include "tools/jotpluggler/app_custom_series.h"
 #include "tools/jotpluggler/app_internal.h"
 #include "tools/jotpluggler/app_logs.h"
@@ -32,7 +33,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -80,20 +80,6 @@ struct PlotBounds {
   double y_min = 0.0;
   double y_max = 1.0;
 };
-
-std::string shell_quote(const std::string &value) {
-  std::ostringstream quoted;
-  quoted << '\'';
-  for (const char c : value) {
-    if (c == '\'') {
-      quoted << "'\\''";
-    } else {
-      quoted << c;
-    }
-  }
-  quoted << '\'';
-  return quoted.str();
-}
 
 fs::path repo_root() {
   std::array<char, 4096> buf = {};
@@ -236,12 +222,44 @@ bool reload_layout(AppSession *session, UiState *state, const std::string &layou
 bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir);
 void reset_shared_range(UiState *state, const AppSession &session);
 std::string curve_display_name(const Curve &curve);
+SketchLayout make_empty_layout();
+void cancel_rename_tab(UiState *state);
+void sync_ui_state(UiState *state, const SketchLayout &layout);
+void sync_layout_buffers(UiState *state, const AppSession &session);
+void mark_all_docks_dirty(UiState *state);
 bool start_stream_session(AppSession *session,
                           UiState *state,
                           const std::string &address,
                           double buffer_seconds,
                           bool preserve_existing_data = false);
 void stop_stream_session(AppSession *session, UiState *state, bool preserve_data = true);
+
+void start_new_layout(AppSession *session, UiState *state, const std::string &status_text = "New untitled layout") {
+  session->layout = make_empty_layout();
+  session->layout_path.clear();
+  session->autosave_path.clear();
+  state->layout_dirty = false;
+  state->status_text = status_text;
+  state->tabs.clear();
+  cancel_rename_tab(state);
+  sync_ui_state(state, session->layout);
+  sync_layout_buffers(state, *session);
+  mark_all_docks_dirty(state);
+  reset_shared_range(state, *session);
+}
+
+void apply_dbc_override_change(AppSession *session, UiState *state, const std::string &dbc_override) {
+  session->dbc_override = dbc_override;
+  if (session->data_mode == SessionDataMode::Stream) {
+    start_stream_session(session, state, session->stream_address, session->stream_buffer_seconds, false);
+  } else if (!session->route_name.empty()) {
+    reload_session(session, state, session->route_name, session->data_dir);
+  } else if (dbc_override.empty()) {
+    state->status_text = "DBC auto-detect enabled";
+  } else {
+    state->status_text = "DBC set to " + dbc_override;
+  }
+}
 
 void configure_style() {
   ImGui::StyleColorsLight();
@@ -535,7 +553,7 @@ struct PaneDropAction {
 };
 
 std::string curve_display_name(const Curve &curve);
-bool add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path);
+bool add_curve_to_active_pane_impl(AppSession *session, UiState *state, const std::string &path);
 bool curve_has_samples(const AppSession &session, const Curve &curve);
 
 bool curve_has_local_samples(const Curve &curve) {
@@ -753,772 +771,8 @@ std::array<uint8_t, 3> next_curve_color(const Pane &pane) {
   return kPalette[pane.curves.size() % kPalette.size()];
 }
 
-std::string lowercase(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
-
-bool path_matches_filter(const std::string &path, const std::string &filter) {
-  if (filter.empty()) {
-    return true;
-  }
-  return lowercase(path).find(lowercase(filter)) != std::string::npos;
-}
-
-void insert_browser_path(std::vector<BrowserNode> *nodes, const std::string &path) {
-  size_t start = 0;
-  while (start < path.size() && path[start] == '/') {
-    ++start;
-  }
-  std::vector<std::string> parts;
-  while (start < path.size()) {
-    const size_t end = path.find('/', start);
-    parts.push_back(path.substr(start, end == std::string::npos ? std::string::npos : end - start));
-    if (end == std::string::npos) {
-      break;
-    }
-    start = end + 1;
-  }
-  if (parts.empty()) {
-    return;
-  }
-
-  std::vector<BrowserNode> *current_nodes = nodes;
-  std::string current_path;
-  for (size_t i = 0; i < parts.size(); ++i) {
-    if (!current_path.empty()) {
-      current_path += "/";
-    }
-    current_path += parts[i];
-    auto it = std::find_if(current_nodes->begin(), current_nodes->end(),
-                           [&](const BrowserNode &node) { return node.label == parts[i]; });
-    if (it == current_nodes->end()) {
-      current_nodes->push_back(BrowserNode{.label = parts[i]});
-      it = std::prev(current_nodes->end());
-    }
-    if (i + 1 == parts.size()) {
-      it->full_path = "/" + current_path;
-    }
-    current_nodes = &it->children;
-  }
-}
-
-void sort_browser_nodes(std::vector<BrowserNode> *nodes) {
-  std::sort(nodes->begin(), nodes->end(), [](const BrowserNode &a, const BrowserNode &b) {
-    if (a.children.empty() != b.children.empty()) {
-      return !a.children.empty();
-    }
-    return a.label < b.label;
-  });
-  for (BrowserNode &node : *nodes) {
-    sort_browser_nodes(&node.children);
-  }
-}
-
-std::vector<BrowserNode> build_browser_tree(const std::vector<std::string> &paths) {
-  std::vector<BrowserNode> nodes;
-  for (const std::string &path : paths) {
-    insert_browser_path(&nodes, path);
-  }
-  sort_browser_nodes(&nodes);
-  return nodes;
-}
-
 const RouteSeries *find_route_series(const AppSession &session, const std::string &path);
-bool browser_node_matches(const BrowserNode &node, const std::string &filter);
-
-bool is_deprecated_browser_path(const std::string &path) {
-  return path.find("DEPRECATED") != std::string::npos;
-}
-
-std::vector<std::string> visible_browser_paths(const RouteData &route_data, bool show_deprecated_fields) {
-  if (show_deprecated_fields) {
-    return route_data.paths;
-  }
-  std::vector<std::string> filtered;
-  filtered.reserve(route_data.paths.size());
-  for (const std::string &path : route_data.paths) {
-    if (!is_deprecated_browser_path(path)) {
-      filtered.push_back(path);
-    }
-  }
-  return filtered;
-}
-
-bool browser_selection_contains(const UiState &state, std::string_view path) {
-  return std::find(state.selected_browser_paths.begin(), state.selected_browser_paths.end(), path)
-    != state.selected_browser_paths.end();
-}
-
-std::vector<std::string> browser_drag_paths(const UiState &state, const std::string &dragged_path) {
-  if (browser_selection_contains(state, dragged_path) && !state.selected_browser_paths.empty()) {
-    return state.selected_browser_paths;
-  }
-  return {dragged_path};
-}
-
-std::string encode_browser_drag_payload(const std::vector<std::string> &paths) {
-  std::string payload;
-  for (size_t i = 0; i < paths.size(); ++i) {
-    if (i != 0) {
-      payload.push_back('\n');
-    }
-    payload += paths[i];
-  }
-  return payload;
-}
-
-std::vector<std::string> decode_browser_drag_payload(std::string_view payload) {
-  std::vector<std::string> out;
-  size_t begin = 0;
-  while (begin <= payload.size()) {
-    const size_t end = payload.find('\n', begin);
-    const size_t length = (end == std::string_view::npos ? payload.size() : end) - begin;
-    if (length > 0) {
-      out.emplace_back(payload.substr(begin, length));
-    }
-    if (end == std::string_view::npos) {
-      break;
-    }
-    begin = end + 1;
-  }
-  return out;
-}
-
-void set_browser_selection_single(UiState *state, const std::string &path) {
-  state->selected_browser_paths = {path};
-  state->selected_browser_path = path;
-  state->browser_selection_anchor = path;
-}
-
-void toggle_browser_selection(UiState *state, const std::string &path) {
-  auto it = std::find(state->selected_browser_paths.begin(), state->selected_browser_paths.end(), path);
-  if (it == state->selected_browser_paths.end()) {
-    state->selected_browser_paths.push_back(path);
-  } else {
-    state->selected_browser_paths.erase(it);
-  }
-  state->selected_browser_path = path;
-  state->browser_selection_anchor = path;
-  if (state->selected_browser_paths.empty()) {
-    state->selected_browser_path.clear();
-  }
-}
-
-void select_browser_range(UiState *state, const std::vector<std::string> &visible_paths, const std::string &clicked_path) {
-  if (visible_paths.empty()) {
-    set_browser_selection_single(state, clicked_path);
-    return;
-  }
-
-  const std::string anchor = state->browser_selection_anchor.empty() ? clicked_path : state->browser_selection_anchor;
-  const auto anchor_it = std::find(visible_paths.begin(), visible_paths.end(), anchor);
-  const auto clicked_it = std::find(visible_paths.begin(), visible_paths.end(), clicked_path);
-  if (clicked_it == visible_paths.end()) {
-    return;
-  }
-  if (anchor_it == visible_paths.end()) {
-    set_browser_selection_single(state, clicked_path);
-    return;
-  }
-
-  const auto [begin_it, end_it] = std::minmax(anchor_it, clicked_it);
-  std::vector<std::string> selected;
-  selected.reserve(static_cast<size_t>(std::distance(begin_it, end_it)) + 1);
-  for (auto it = begin_it; it != end_it + 1; ++it) {
-    selected.push_back(*it);
-  }
-  state->selected_browser_paths = std::move(selected);
-  state->selected_browser_path = clicked_path;
-}
-
-void prune_browser_selection(UiState *state, const std::vector<std::string> &visible_paths) {
-  auto is_visible = [&](const std::string &path) {
-    return std::find(visible_paths.begin(), visible_paths.end(), path) != visible_paths.end();
-  };
-
-  state->selected_browser_paths.erase(
-    std::remove_if(state->selected_browser_paths.begin(), state->selected_browser_paths.end(),
-                   [&](const std::string &path) { return !is_visible(path); }),
-    state->selected_browser_paths.end());
-
-  if (!state->selected_browser_path.empty() && !is_visible(state->selected_browser_path)) {
-    state->selected_browser_path.clear();
-  }
-  if (!state->browser_selection_anchor.empty() && !is_visible(state->browser_selection_anchor)) {
-    state->browser_selection_anchor.clear();
-  }
-  if (state->selected_browser_paths.empty()) {
-    state->selected_browser_path.clear();
-  } else if (state->selected_browser_path.empty()) {
-    state->selected_browser_path = state->selected_browser_paths.back();
-  }
-}
-
-void collect_visible_leaf_paths(const BrowserNode &node,
-                                const std::string &filter,
-                                std::vector<std::string> *out) {
-  if (!browser_node_matches(node, filter)) {
-    return;
-  }
-  if (node.children.empty()) {
-    if (!node.full_path.empty()) {
-      out->push_back(node.full_path);
-    }
-    return;
-  }
-  for (const BrowserNode &child : node.children) {
-    collect_visible_leaf_paths(child, filter, out);
-  }
-}
-
-void rebuild_browser_nodes(AppSession *session, UiState *state) {
-  const std::vector<std::string> paths = visible_browser_paths(session->route_data, state->show_deprecated_fields);
-  session->browser_nodes = build_browser_tree(paths);
-  prune_browser_selection(state, paths);
-}
-
-BrowserSeriesDisplayInfo compute_browser_display_info(const AppSession &session, const RouteSeries &series) {
-  const bool enum_like = session.route_data.enum_info.find(series.path) != session.route_data.enum_info.end();
-  BrowserSeriesDisplayInfo info;
-  if (series.values.empty()) {
-    return info;
-  }
-  const size_t sample_limit = 128;
-  const size_t step = std::max<size_t>(1, series.values.size() / sample_limit);
-  double peak_abs = 0.0;
-  bool integer_like = enum_like;
-  std::vector<int> unique_levels;
-  unique_levels.reserve(8);
-  for (size_t i = 0; i < series.values.size(); i += step) {
-    const double value = series.values[i];
-    if (!std::isfinite(value)) {
-      continue;
-    }
-    peak_abs = std::max(peak_abs, std::abs(value));
-    const double rounded = std::round(value);
-    if (std::abs(value - rounded) > 1.0e-6) {
-      integer_like = false;
-      continue;
-    }
-    const int level = static_cast<int>(rounded);
-    if (std::find(unique_levels.begin(), unique_levels.end(), level) == unique_levels.end()) {
-      unique_levels.push_back(level);
-      if (unique_levels.size() > 8) {
-        integer_like = false;
-      }
-    }
-  }
-
-  info.integer_like = integer_like;
-  if (integer_like || enum_like) {
-    info.decimals = 0;
-    return info;
-  }
-  if (peak_abs >= 1000.0) {
-    info.decimals = 0;
-  } else if (peak_abs >= 100.0) {
-    info.decimals = 1;
-  } else if (peak_abs >= 10.0) {
-    info.decimals = 2;
-  } else if (peak_abs >= 0.01) {
-    info.decimals = 3;
-  } else {
-    info.decimals = 4;
-  }
-  return info;
-}
-
-std::string format_display_value(double display_value,
-                                 const BrowserSeriesDisplayInfo &display_info,
-                                 const EnumInfo *enum_info) {
-  if (!std::isfinite(display_value)) {
-    return {};
-  }
-  if (enum_info != nullptr) {
-    const int idx = static_cast<int>(std::llround(display_value));
-    if (idx >= 0 && std::abs(display_value - static_cast<double>(idx)) < 0.01
-        && static_cast<size_t>(idx) < enum_info->names.size()
-        && !enum_info->names[static_cast<size_t>(idx)].empty()) {
-      return enum_info->names[static_cast<size_t>(idx)];
-    }
-  }
-
-  char buf[64] = {};
-  if (display_info.integer_like) {
-    std::snprintf(buf, sizeof(buf), "%.0f", std::round(display_value));
-  } else if (std::abs(display_value) < 1.0e-6) {
-    std::snprintf(buf, sizeof(buf), "0");
-  } else {
-    std::snprintf(buf, sizeof(buf), "%.*f", display_info.decimals, display_value);
-  }
-  return buf;
-}
-
-void rebuild_route_index(AppSession *session) {
-  session->series_by_path.clear();
-  session->browser_display_by_path.clear();
-  for (const RouteSeries &series : session->route_data.series) {
-    session->series_by_path.emplace(series.path, &series);
-    session->browser_display_by_path.emplace(series.path, compute_browser_display_info(*session, series));
-  }
-}
-
-void apply_route_data(AppSession *session, UiState *state, RouteData route_data) {
-  session->route_data = std::move(route_data);
-  rebuild_route_index(session);
-  rebuild_browser_nodes(session, state);
-  refresh_all_custom_curves(session, state);
-  if (session->camera_feed) {
-    session->camera_feed->set_route_data(session->route_data);
-  }
-  state->has_shared_range = false;
-  state->has_tracker_time = false;
-  reset_shared_range(state, *session);
-}
-
-#include "tools/jotpluggler/app_stream_flow.inc"
-
-const RouteSeries *find_route_series(const AppSession &session, const std::string &path) {
-  auto it = session.series_by_path.find(path);
-  return it == session.series_by_path.end() ? nullptr : it->second;
-}
-
-std::optional<double> sample_route_series_value(const RouteSeries &series, double tm, bool stairs) {
-  if (series.times.empty() || series.times.size() != series.values.size()) {
-    return std::nullopt;
-  }
-  if (tm <= series.times.front()) {
-    return series.values.front();
-  }
-  if (tm >= series.times.back()) {
-    return series.values.back();
-  }
-
-  const auto upper = std::lower_bound(series.times.begin(), series.times.end(), tm);
-  if (upper == series.times.begin()) {
-    return series.values.front();
-  }
-  if (upper == series.times.end()) {
-    return series.values.back();
-  }
-
-  const size_t upper_index = static_cast<size_t>(std::distance(series.times.begin(), upper));
-  const size_t lower_index = upper_index - 1;
-  const double x0 = series.times[lower_index];
-  const double x1 = series.times[upper_index];
-  const double y0 = series.values[lower_index];
-  const double y1 = series.values[upper_index];
-  if (stairs || std::abs(tm - x1) >= 1.0e-9) {
-    return y0;
-  }
-  if (x1 <= x0) {
-    return y0;
-  }
-  const double alpha = (tm - x0) / (x1 - x0);
-  return y0 + (y1 - y0) * alpha;
-}
-
-std::string browser_series_value_text(const AppSession &session, const UiState &state, std::string_view path) {
-  auto it = session.series_by_path.find(std::string(path));
-  if (it == session.series_by_path.end() || it->second == nullptr) {
-    return {};
-  }
-
-  const RouteSeries &series = *it->second;
-  if (series.values.empty()) {
-    return {};
-  }
-
-  const auto enum_it = session.route_data.enum_info.find(series.path);
-  const EnumInfo *enum_info = enum_it == session.route_data.enum_info.end() ? nullptr : &enum_it->second;
-  const bool stairs = enum_info != nullptr;
-
-  std::optional<double> value;
-  if (state.has_tracker_time) {
-    value = sample_route_series_value(series, state.tracker_time, stairs);
-  } else {
-    value = series.values.back();
-  }
-  if (!value.has_value()) {
-    return {};
-  }
-
-  const auto display_it = session.browser_display_by_path.find(series.path);
-  const BrowserSeriesDisplayInfo display_info = display_it == session.browser_display_by_path.end()
-    ? BrowserSeriesDisplayInfo{}
-    : display_it->second;
-
-  return format_display_value(*value, display_info, enum_info);
-}
-
-std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab &tab) {
-  bool found = false;
-  double min_value = 0.0;
-  double max_value = 1.0;
-  for (const Pane &pane : tab.panes) {
-    if (!pane.range.valid || pane.range.right <= pane.range.left) {
-      continue;
-    }
-    if (!found) {
-      min_value = pane.range.left;
-      max_value = pane.range.right;
-      found = true;
-    } else {
-      min_value = std::min(min_value, pane.range.left);
-      max_value = std::max(max_value, pane.range.right);
-    }
-  }
-  if (!found) {
-    return std::nullopt;
-  }
-  return std::make_pair(min_value, max_value);
-}
-
-void ensure_shared_range(UiState *state, const AppSession &session) {
-  if (session.route_data.has_time_range) {
-    state->route_x_min = session.route_data.x_min;
-    state->route_x_max = session.route_data.x_max;
-  } else {
-    state->route_x_min = 0.0;
-    state->route_x_max = 1.0;
-  }
-
-  if (state->has_shared_range) {
-    return;
-  }
-
-  if (session.data_mode == SessionDataMode::Stream) {
-    const double target_span = std::max(kMinHorizontalZoomSeconds, session.stream_buffer_seconds);
-    if (session.route_data.has_time_range) {
-      state->x_view_max = state->route_x_max;
-      state->x_view_min = state->x_view_max - target_span;
-    } else {
-      state->x_view_min = 0.0;
-      state->x_view_max = target_span;
-    }
-    if (state->x_view_max <= state->x_view_min) {
-      state->x_view_max = state->x_view_min + 1.0;
-    }
-    state->has_shared_range = true;
-    if (!state->has_tracker_time || state->tracker_time < state->route_x_min || state->tracker_time > state->route_x_max) {
-      state->tracker_time = state->route_x_max;
-      state->has_tracker_time = session.route_data.has_time_range;
-    }
-    return;
-  }
-
-  if (const WorkspaceTab *tab = active_tab(session.layout, *state); tab != nullptr) {
-    if (std::optional<std::pair<double, double>> tab_range = tab_default_x_range(*tab); tab_range.has_value()) {
-      state->x_view_min = tab_range->first;
-      state->x_view_max = tab_range->second;
-      state->has_shared_range = true;
-      if (!state->has_tracker_time || state->tracker_time < state->route_x_min || state->tracker_time > state->route_x_max) {
-        state->tracker_time = state->route_x_min;
-        state->has_tracker_time = true;
-      }
-      return;
-    }
-  }
-
-  state->x_view_min = state->route_x_min;
-  state->x_view_max = state->route_x_max;
-  if (state->x_view_max <= state->x_view_min) {
-    state->x_view_max = state->x_view_min + 1.0;
-  }
-  state->has_shared_range = true;
-  if (!state->has_tracker_time || state->tracker_time < state->route_x_min || state->tracker_time > state->route_x_max) {
-    state->tracker_time = state->route_x_min;
-    state->has_tracker_time = true;
-  }
-}
-
-void clamp_shared_range(UiState *state, const AppSession &session) {
-  if (!state->has_shared_range) {
-    return;
-  }
-  const double min_span = kMinHorizontalZoomSeconds;
-  double span = state->x_view_max - state->x_view_min;
-  if (span < min_span) {
-    const double center = 0.5 * (state->x_view_min + state->x_view_max);
-    span = min_span;
-    state->x_view_min = center - span * 0.5;
-    state->x_view_max = center + span * 0.5;
-  }
-  if (session.data_mode == SessionDataMode::Stream) {
-    if (session.route_data.has_time_range && state->x_view_max > state->route_x_max) {
-      state->x_view_min -= state->x_view_max - state->route_x_max;
-      state->x_view_max = state->route_x_max;
-    }
-    if (state->x_view_max <= state->x_view_min) {
-      state->x_view_max = state->x_view_min + min_span;
-    }
-    if (state->has_tracker_time && session.route_data.has_time_range) {
-      state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
-    }
-    return;
-  }
-  if (state->route_x_max > state->route_x_min) {
-    if (state->x_view_min < state->route_x_min) {
-      state->x_view_max += state->route_x_min - state->x_view_min;
-      state->x_view_min = state->route_x_min;
-    }
-    if (state->x_view_max > state->route_x_max) {
-      state->x_view_min -= state->x_view_max - state->route_x_max;
-      state->x_view_max = state->route_x_max;
-    }
-    if (state->x_view_min < state->route_x_min) {
-      state->x_view_min = state->route_x_min;
-    }
-    if (state->x_view_max <= state->x_view_min) {
-      state->x_view_max = std::min(state->route_x_max, state->x_view_min + min_span);
-    }
-  }
-  if (state->has_tracker_time) {
-    state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
-  }
-}
-
-void reset_shared_range(UiState *state, const AppSession &session) {
-  state->has_shared_range = false;
-  ensure_shared_range(state, session);
-  clamp_shared_range(state, session);
-}
-
-void update_follow_range(UiState *state, const AppSession &session) {
-  if (!state->follow_latest || !state->has_shared_range) {
-    return;
-  }
-  const double span = session.data_mode == SessionDataMode::Stream
-    ? std::max(kMinHorizontalZoomSeconds, session.stream_buffer_seconds)
-    : std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
-  const double route_span = state->route_x_max - state->route_x_min;
-  if (route_span <= 0.0) {
-    return;
-  }
-  state->x_view_max = state->route_x_max;
-  state->x_view_min = state->x_view_max - span;
-  clamp_shared_range(state, session);
-}
-
-void advance_playback(UiState *state, const AppSession &session) {
-  if (!state->playback_playing || !state->has_shared_range || state->route_x_max <= state->route_x_min) {
-    return;
-  }
-
-  state->tracker_time += std::max(0.0, static_cast<double>(ImGui::GetIO().DeltaTime)) * state->playback_rate;
-  if (state->tracker_time >= state->route_x_max) {
-    if (state->playback_loop) {
-      state->tracker_time = state->route_x_min;
-    } else {
-      state->tracker_time = state->route_x_max;
-      state->playback_playing = false;
-    }
-  }
-
-  const double span = std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
-  if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
-    state->x_view_min = state->tracker_time - span * 0.5;
-    state->x_view_max = state->tracker_time + span * 0.5;
-    clamp_shared_range(state, session);
-  }
-}
-
-void step_tracker(UiState *state, double direction) {
-  if (!state->has_shared_range) {
-    return;
-  }
-  state->tracker_time += direction * std::max(0.001, state->playback_step);
-  state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
-}
-
-void show_hover_tooltip(const char *text) {
-  if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-    return;
-  }
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
-  ImGui::BeginTooltip();
-  ImGui::TextUnformatted(text);
-  ImGui::EndTooltip();
-  ImGui::PopStyleVar();
-}
-
-std::string layout_combo_label(const AppSession &session, const UiState &state) {
-  const std::string base = session.layout_path.empty() ? std::string("untitled") : session.layout_path.stem().string();
-  return state.layout_dirty ? base + " *" : base;
-}
-
-float draw_main_menu_bar(AppSession *session, UiState *state) {
-  float height = ImGui::GetFrameHeight();
-  if (ImGui::BeginMainMenuBar()) {
-    if (ImGui::BeginMenu("File")) {
-      if (ImGui::MenuItem("Open Route...")) {
-        state->open_open_route = true;
-      }
-      if (ImGui::MenuItem("Stream...")) {
-        state->open_stream = true;
-      }
-      ImGui::Separator();
-      if (ImGui::MenuItem("New Layout")) {
-        session->layout = make_empty_layout();
-        session->layout_path.clear();
-        session->autosave_path.clear();
-        state->layout_dirty = false;
-        state->status_text = "New untitled layout";
-        state->tabs.clear();
-        cancel_rename_tab(state);
-        sync_ui_state(state, session->layout);
-        sync_layout_buffers(state, *session);
-        mark_all_docks_dirty(state);
-        reset_shared_range(state, *session);
-      }
-      if (ImGui::MenuItem("Load Layout...")) {
-        state->open_load_layout = true;
-      }
-      if (ImGui::MenuItem("Save Layout")) {
-        state->request_save_layout = true;
-      }
-      if (ImGui::MenuItem("Save Layout As...")) {
-        state->open_save_layout = true;
-      }
-      if (ImGui::MenuItem("Reset Layout")) {
-        state->request_reset_layout = true;
-      }
-      ImGui::Separator();
-      if (ImGui::MenuItem("Show DEPRECATED Fields", nullptr, state->show_deprecated_fields)) {
-        state->show_deprecated_fields = !state->show_deprecated_fields;
-        rebuild_browser_nodes(session, state);
-      }
-      ImGui::Separator();
-      if (ImGui::MenuItem("Reset Plot View")) {
-        reset_shared_range(state, *session);
-        state->follow_latest = false;
-        state->suppress_range_side_effects = true;
-        state->status_text = "Plot view reset";
-      }
-      ImGui::Separator();
-      if (ImGui::MenuItem("Close")) {
-        state->request_close = true;
-      }
-      ImGui::EndMenu();
-    }
-    height = ImGui::GetWindowSize().y;
-    ImGui::EndMainMenuBar();
-  }
-  return height;
-}
-
-bool browser_node_matches(const BrowserNode &node, const std::string &filter) {
-  if (filter.empty()) {
-    return true;
-  }
-  if (!node.full_path.empty() && path_matches_filter(node.full_path, filter)) {
-    return true;
-  }
-  for (const BrowserNode &child : node.children) {
-    if (browser_node_matches(child, filter)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void draw_browser_node(AppSession *session,
-                       const BrowserNode &node,
-                       UiState *state,
-                       const std::string &filter,
-                       const std::vector<std::string> &visible_paths) {
-  if (!browser_node_matches(node, filter)) {
-    return;
-  }
-
-  if (node.children.empty()) {
-    const bool selected = browser_selection_contains(*state, node.full_path);
-    const std::string value_text = browser_series_value_text(*session, *state, node.full_path);
-    const ImGuiStyle &style = ImGui::GetStyle();
-    const ImVec2 row_size(std::max(1.0f, ImGui::GetContentRegionAvail().x), ImGui::GetFrameHeight());
-    ImGui::PushID(node.full_path.c_str());
-    const bool clicked = ImGui::InvisibleButton("##browser_leaf", row_size);
-    const bool hovered = ImGui::IsItemHovered();
-    const bool held = ImGui::IsItemActive();
-    const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    ImDrawList *draw_list = ImGui::GetWindowDrawList();
-    if (selected || hovered) {
-      const ImU32 bg = ImGui::GetColorU32(selected
-        ? (held ? ImGuiCol_HeaderActive : ImGuiCol_Header)
-        : ImGuiCol_HeaderHovered);
-      draw_list->AddRectFilled(rect.Min, rect.Max, bg, 0.0f);
-    }
-
-    const float value_right = rect.Max.x - style.FramePadding.x;
-    const float value_left = value_right - (value_text.empty() ? 0.0f : kBrowserValueWidth);
-    const float label_left = rect.Min.x + style.FramePadding.x;
-    const float label_right = value_text.empty()
-      ? rect.Max.x - style.FramePadding.x
-      : std::max(label_left + 40.0f, value_left - 10.0f);
-    ImGui::RenderTextEllipsis(draw_list,
-                              ImVec2(label_left, rect.Min.y + style.FramePadding.y),
-                              ImVec2(label_right, rect.Max.y),
-                              label_right,
-                              node.label.c_str(),
-                              nullptr,
-                              nullptr);
-    if (!value_text.empty()) {
-      app_push_mono_font();
-      ImGui::PushStyleColor(ImGuiCol_Text, selected ? color_rgb(70, 77, 86) : color_rgb(116, 124, 133));
-      ImGui::RenderTextClipped(ImVec2(value_left, rect.Min.y + style.FramePadding.y),
-                               ImVec2(value_right, rect.Max.y),
-                               value_text.c_str(),
-                               nullptr,
-                               nullptr,
-                               ImVec2(1.0f, 0.0f));
-      ImGui::PopStyleColor();
-      app_pop_mono_font();
-    }
-
-    if (clicked) {
-      const bool shift_down = ImGui::GetIO().KeyShift;
-      const bool ctrl_down = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-      if (shift_down) {
-        select_browser_range(state, visible_paths, node.full_path);
-      } else if (ctrl_down) {
-        toggle_browser_selection(state, node.full_path);
-      } else {
-        set_browser_selection_single(state, node.full_path);
-      }
-    }
-    if (hovered && ImGui::IsMouseDoubleClicked(0)) {
-      set_browser_selection_single(state, node.full_path);
-      add_curve_to_active_pane(session, state, node.full_path);
-    }
-    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-      const std::vector<std::string> drag_paths = browser_drag_paths(*state, node.full_path);
-      const std::string payload = encode_browser_drag_payload(drag_paths);
-      ImGui::SetDragDropPayload("JOTP_BROWSER_PATHS", payload.c_str(), payload.size() + 1);
-      if (drag_paths.size() == 1) {
-        ImGui::TextUnformatted(drag_paths.front().c_str());
-      } else {
-        ImGui::Text("%zu timeseries", drag_paths.size());
-        ImGui::TextUnformatted(drag_paths.front().c_str());
-      }
-      ImGui::EndDragDropSource();
-    }
-    ImGui::PopID();
-    return;
-  }
-
-  ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth;
-  if (!filter.empty()) {
-    flags |= ImGuiTreeNodeFlags_DefaultOpen;
-  }
-  const bool open = ImGui::TreeNodeEx(node.label.c_str(), flags);
-  if (open) {
-    for (const BrowserNode &child : node.children) {
-      draw_browser_node(session, child, state, filter, visible_paths);
-    }
-    ImGui::TreePop();
-  }
-}
+#include "tools/jotpluggler/app_session_flow.inc"
 
 #include "tools/jotpluggler/app_sidebar_flow.inc"
 
@@ -1579,14 +833,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     if (ImGui::BeginCombo("##dbc_combo", dbc_combo_label(*session).c_str())) {
       const bool auto_selected = session->dbc_override.empty();
         if (ImGui::Selectable("Auto", auto_selected)) {
-          session->dbc_override.clear();
-          if (streaming) {
-            start_stream_session(session, state, session->stream_address, session->stream_buffer_seconds, false);
-          } else if (!session->route_name.empty()) {
-            reload_session(session, state, session->route_name, session->data_dir);
-          } else {
-            state->status_text = "DBC auto-detect enabled";
-          }
+          apply_dbc_override_change(session, state, {});
       }
       if (auto_selected) {
         ImGui::SetItemDefaultFocus();
@@ -1595,14 +842,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       for (const std::string &dbc_name : dbc_names) {
         const bool selected = session->dbc_override == dbc_name;
         if (ImGui::Selectable(dbc_name.c_str(), selected) && !selected) {
-          session->dbc_override = dbc_name;
-          if (streaming) {
-            start_stream_session(session, state, session->stream_address, session->stream_buffer_seconds, false);
-          } else if (!session->route_name.empty()) {
-            reload_session(session, state, session->route_name, session->data_dir);
-          } else {
-            state->status_text = "DBC set to " + dbc_name;
-          }
+          apply_dbc_override_change(session, state, dbc_name);
         }
         if (selected) {
           ImGui::SetItemDefaultFocus();
@@ -1617,17 +857,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##layout_combo", layout_combo_label(*session, *state).c_str())) {
       if (ImGui::Selectable("New Layout")) {
-        session->layout = make_empty_layout();
-        session->layout_path.clear();
-        session->autosave_path.clear();
-        state->layout_dirty = false;
-        state->status_text = "New untitled layout";
-        state->tabs.clear();
-        cancel_rename_tab(state);
-        sync_ui_state(state, session->layout);
-        sync_layout_buffers(state, *session);
-        mark_all_docks_dirty(state);
-        reset_shared_range(state, *session);
+        start_new_layout(session, state);
       }
       ImGui::Separator();
       const std::string current_layout = session->layout_path.empty() ? std::string("untitled") : session->layout_path.stem().string();
@@ -1646,17 +876,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     const float layout_row_width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
     const float layout_button_width = std::max(1.0f, (layout_row_width - 2.0f * layout_button_gap) / 3.0f);
     if (ImGui::Button("New", ImVec2(layout_button_width, 0.0f))) {
-      session->layout = make_empty_layout();
-      session->layout_path.clear();
-      session->autosave_path.clear();
-      state->layout_dirty = false;
-      state->status_text = "New untitled layout";
-      state->tabs.clear();
-      cancel_rename_tab(state);
-      sync_ui_state(state, session->layout);
-      sync_layout_buffers(state, *session);
-      mark_all_docks_dirty(state);
-      reset_shared_range(state, *session);
+      start_new_layout(session, state);
     }
     ImGui::SameLine(0.0f, layout_button_gap);
     if (ImGui::Button("Save", ImVec2(layout_button_width, 0.0f))) {
@@ -1717,14 +937,10 @@ std::string curve_display_name(const Curve &curve) {
   return "curve";
 }
 
-std::string path_curve_label(std::string_view path) {
-  return std::string(path);
-}
-
 Curve make_curve_for_path(const Pane &pane, const std::string &path) {
   Curve curve;
   curve.name = path;
-  curve.label = path_curve_label(path);
+  curve.label = path;
   curve.color = next_curve_color(pane);
   return curve;
 }
@@ -1804,11 +1020,7 @@ int add_path_curves_to_pane(AppSession *session, UiState *state, int pane_index,
   return 0;
 }
 
-bool copy_curve_to_pane(WorkspaceTab *tab, int pane_index, const Curve &curve) {
-  return add_curve_to_pane(tab, pane_index, curve);
-}
-
-bool add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path) {
+bool add_curve_to_active_pane_impl(AppSession *session, UiState *state, const std::string &path) {
   const TabUiState *tab_state = active_tab_state(state);
   if (tab_state == nullptr) {
     state->status_text = "No active pane";
@@ -2907,7 +2119,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
   const Curve curve = source_pane.curves[static_cast<size_t>(action.curve_ref.curve_index)];
 
   if (action.zone == PaneDropZone::Center) {
-    const bool inserted = copy_curve_to_pane(tab, action.target_pane_index, curve);
+    const bool inserted = add_curve_to_pane(tab, action.target_pane_index, curve);
     tab_state->active_pane_index = action.target_pane_index;
     if (inserted) {
       if (mark_layout_dirty(session, state)) {
@@ -3326,6 +2538,10 @@ void app_push_mono_font() {
 
 void app_pop_mono_font() {
   pop_mono_font_internal();
+}
+
+bool app_add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path) {
+  return add_curve_to_active_pane_impl(session, state, path);
 }
 
 void app_decimate_samples(const std::vector<double> &xs_in,
