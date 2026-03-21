@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unistd.h>
 #include <vector>
 
@@ -57,11 +58,20 @@ struct UiMetrics {
   float status_bar_y = 0.0f;
 };
 
+struct BrowserNode {
+  std::string label;
+  std::string full_path;
+  std::vector<BrowserNode> children;
+};
+
 struct AppSession {
   fs::path layout_path;
   std::string route_name;
   std::string data_dir;
   SketchLayout layout;
+  RouteData route_data;
+  std::unordered_map<std::string, const RouteSeries *> series_by_path;
+  std::vector<BrowserNode> browser_nodes;
 };
 
 struct PlotBounds {
@@ -92,13 +102,23 @@ struct UiState {
   bool request_close = false;
   bool reset_plot_view = false;
   bool request_reload = false;
+  bool follow_latest = false;
+  bool has_shared_range = false;
+  bool has_hover_time = false;
   int active_tab_index = 0;
   std::vector<TabUiState> tabs;
   std::array<char, 128> route_buffer = {};
+  std::array<char, 128> browser_filter = {};
   std::array<char, 512> data_dir_buffer = {};
+  std::string selected_browser_path;
   std::string error_text;
   bool open_error_popup = false;
   std::string status_text = "Ready";
+  double route_x_min = 0.0;
+  double route_x_max = 1.0;
+  double x_view_min = 0.0;
+  double x_view_max = 1.0;
+  double hovered_time = 0.0;
 };
 
 void glfw_error_callback(int error, const char *description) {
@@ -361,12 +381,6 @@ void sync_ui_state(UiState *state, const SketchLayout &layout) {
   }
 }
 
-void mark_docks_dirty(UiState *state) {
-  for (TabUiState &tab_state : state->tabs) {
-    tab_state.dock_needs_build = true;
-  }
-}
-
 void sync_route_buffers(UiState *state, const AppSession &session) {
   copy_to_buffer(session.route_name, &state->route_buffer);
   copy_to_buffer(session.data_dir, &state->data_dir_buffer);
@@ -426,9 +440,11 @@ ImGuiID dockspace_id_for_tab(int tab_index) {
 }
 
 std::string curve_display_name(const Curve &curve);
-std::vector<UnsupportedCurve> collect_unsupported_curves(const Pane &pane);
+bool add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path);
+bool curve_has_samples(const AppSession &session, const Curve &curve);
+std::vector<UnsupportedCurve> collect_unsupported_curves(const AppSession &session, const Pane &pane);
 
-bool curve_has_samples(const Curve &curve) {
+bool curve_has_local_samples(const Curve &curve) {
   return curve.xs.size() > 1 && curve.xs.size() == curve.ys.size();
 }
 
@@ -440,11 +456,11 @@ size_t total_curve_count(const WorkspaceTab &tab) {
   return total;
 }
 
-size_t sampled_curve_count(const WorkspaceTab &tab) {
+size_t sampled_curve_count(const AppSession &session, const WorkspaceTab &tab) {
   size_t total = 0;
   for (const Pane &pane : tab.panes) {
     for (const Curve &curve : pane.curves) {
-      total += curve.visible && curve_has_samples(curve) ? 1U : 0U;
+      total += curve.visible && curve_has_samples(session, curve) ? 1U : 0U;
     }
   }
   return total;
@@ -456,6 +472,212 @@ std::string route_summary(const AppSession &session) {
     summary += " (local)";
   }
   return summary;
+}
+
+std::array<uint8_t, 3> next_curve_color(const Pane &pane) {
+  static constexpr std::array<std::array<uint8_t, 3>, 10> kPalette = {{
+    {35, 107, 180},
+    {220, 82, 52},
+    {67, 160, 71},
+    {243, 156, 18},
+    {123, 97, 255},
+    {0, 150, 136},
+    {214, 48, 49},
+    {52, 73, 94},
+    {197, 90, 17},
+    {96, 125, 139},
+  }};
+  return kPalette[pane.curves.size() % kPalette.size()];
+}
+
+std::string lowercase(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
+}
+
+bool path_matches_filter(const std::string &path, const std::string &filter) {
+  if (filter.empty()) {
+    return true;
+  }
+  return lowercase(path).find(lowercase(filter)) != std::string::npos;
+}
+
+void insert_browser_path(std::vector<BrowserNode> *nodes, const std::string &path) {
+  size_t start = 0;
+  while (start < path.size() && path[start] == '/') {
+    ++start;
+  }
+  std::vector<std::string> parts;
+  while (start < path.size()) {
+    const size_t end = path.find('/', start);
+    parts.push_back(path.substr(start, end == std::string::npos ? std::string::npos : end - start));
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+  if (parts.empty()) {
+    return;
+  }
+
+  std::vector<BrowserNode> *current_nodes = nodes;
+  std::string current_path;
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (!current_path.empty()) {
+      current_path += "/";
+    }
+    current_path += parts[i];
+    auto it = std::find_if(current_nodes->begin(), current_nodes->end(),
+                           [&](const BrowserNode &node) { return node.label == parts[i]; });
+    if (it == current_nodes->end()) {
+      current_nodes->push_back(BrowserNode{.label = parts[i]});
+      it = std::prev(current_nodes->end());
+    }
+    if (i + 1 == parts.size()) {
+      it->full_path = "/" + current_path;
+    }
+    current_nodes = &it->children;
+  }
+}
+
+void sort_browser_nodes(std::vector<BrowserNode> *nodes) {
+  std::sort(nodes->begin(), nodes->end(), [](const BrowserNode &a, const BrowserNode &b) {
+    if (a.children.empty() != b.children.empty()) {
+      return !a.children.empty();
+    }
+    return a.label < b.label;
+  });
+  for (BrowserNode &node : *nodes) {
+    sort_browser_nodes(&node.children);
+  }
+}
+
+std::vector<BrowserNode> build_browser_tree(const std::vector<std::string> &paths) {
+  std::vector<BrowserNode> nodes;
+  for (const std::string &path : paths) {
+    insert_browser_path(&nodes, path);
+  }
+  sort_browser_nodes(&nodes);
+  return nodes;
+}
+
+void rebuild_route_index(AppSession *session) {
+  session->series_by_path.clear();
+  for (const RouteSeries &series : session->route_data.series) {
+    session->series_by_path.emplace(series.path, &series);
+  }
+}
+
+const RouteSeries *find_route_series(const AppSession &session, const std::string &path) {
+  auto it = session.series_by_path.find(path);
+  return it == session.series_by_path.end() ? nullptr : it->second;
+}
+
+std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab &tab) {
+  bool found = false;
+  double min_value = 0.0;
+  double max_value = 1.0;
+  for (const Pane &pane : tab.panes) {
+    if (!pane.range.valid || pane.range.right <= pane.range.left) {
+      continue;
+    }
+    if (!found) {
+      min_value = pane.range.left;
+      max_value = pane.range.right;
+      found = true;
+    } else {
+      min_value = std::min(min_value, pane.range.left);
+      max_value = std::max(max_value, pane.range.right);
+    }
+  }
+  if (!found) {
+    return std::nullopt;
+  }
+  return std::make_pair(min_value, max_value);
+}
+
+void ensure_shared_range(UiState *state, const AppSession &session) {
+  if (state->has_shared_range) {
+    return;
+  }
+  if (session.route_data.has_time_range) {
+    state->route_x_min = session.route_data.x_min;
+    state->route_x_max = session.route_data.x_max;
+  } else {
+    state->route_x_min = 0.0;
+    state->route_x_max = 1.0;
+  }
+
+  if (const WorkspaceTab *tab = active_tab(session.layout, *state); tab != nullptr) {
+    if (std::optional<std::pair<double, double>> tab_range = tab_default_x_range(*tab); tab_range.has_value()) {
+      state->x_view_min = tab_range->first;
+      state->x_view_max = tab_range->second;
+      state->has_shared_range = true;
+      return;
+    }
+  }
+
+  state->x_view_min = state->route_x_min;
+  state->x_view_max = state->route_x_max;
+  if (state->x_view_max <= state->x_view_min) {
+    state->x_view_max = state->x_view_min + 1.0;
+  }
+  state->has_shared_range = true;
+}
+
+void clamp_shared_range(UiState *state) {
+  if (!state->has_shared_range) {
+    return;
+  }
+  const double min_span = 0.1;
+  double span = state->x_view_max - state->x_view_min;
+  if (span < min_span) {
+    const double center = 0.5 * (state->x_view_min + state->x_view_max);
+    span = min_span;
+    state->x_view_min = center - span * 0.5;
+    state->x_view_max = center + span * 0.5;
+  }
+  if (state->route_x_max > state->route_x_min) {
+    if (state->x_view_min < state->route_x_min) {
+      state->x_view_max += state->route_x_min - state->x_view_min;
+      state->x_view_min = state->route_x_min;
+    }
+    if (state->x_view_max > state->route_x_max) {
+      state->x_view_min -= state->x_view_max - state->route_x_max;
+      state->x_view_max = state->route_x_max;
+    }
+    if (state->x_view_min < state->route_x_min) {
+      state->x_view_min = state->route_x_min;
+    }
+    if (state->x_view_max <= state->x_view_min) {
+      state->x_view_max = std::min(state->route_x_max, state->x_view_min + min_span);
+    }
+  }
+}
+
+void reset_shared_range(UiState *state, const AppSession &session) {
+  state->has_shared_range = false;
+  ensure_shared_range(state, session);
+  clamp_shared_range(state);
+}
+
+void update_follow_range(UiState *state) {
+  if (!state->follow_latest || !state->has_shared_range) {
+    return;
+  }
+  const double span = std::max(0.1, state->x_view_max - state->x_view_min);
+  const double route_span = state->route_x_max - state->route_x_min;
+  if (route_span <= 0.0) {
+    return;
+  }
+  if (route_span <= span) {
+    state->x_view_min = state->route_x_min;
+    state->x_view_max = state->route_x_max;
+  } else {
+    state->x_view_max = state->route_x_max;
+    state->x_view_min = state->x_view_max - span;
+  }
+  clamp_shared_range(state);
 }
 
 void show_not_implemented_modal(const char *popup_name, const char *title, const char *body) {
@@ -578,7 +800,7 @@ void draw_workspace_background(const UiMetrics &ui) {
   ImGui::PopStyleColor();
 }
 
-void draw_status_bar(const UiMetrics &ui, const UiState &state) {
+void draw_status_bar(const UiMetrics &ui, UiState *state) {
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.status_bar_y));
   ImGui::SetNextWindowSize(ImVec2(ui.width, kStatusBarHeight));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
@@ -589,25 +811,96 @@ void draw_status_bar(const UiMetrics &ui, const UiState &state) {
                                  ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoSavedSettings;
   if (ImGui::Begin("##status_bar", nullptr, flags)) {
-    if (ImGui::Button(state.streaming ? "Live" : "Ready", ImVec2(52.0f, 0.0f))) {
+    if (ImGui::Button(state->streaming ? "Live" : "Ready", ImVec2(52.0f, 0.0f))) {
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", state.status_text.c_str());
+    ImGui::TextDisabled("%s", state->status_text.c_str());
     ImGui::SameLine();
-    ImGui::SetCursorPosX(std::max(180.0f, ui.width - 220.0f));
-    ImGui::ProgressBar(state.streaming ? 0.25f : 0.0f, ImVec2(110.0f, 0.0f));
+    if (ImGui::Button("Reset", ImVec2(54.0f, 0.0f))) {
+      state->reset_plot_view = true;
+      state->status_text = "Plot view reset";
+    }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(72.0f);
-    if (ImGui::BeginCombo("##status_scale", "1.0")) {
-      ImGui::Selectable("0.5");
-      ImGui::Selectable("1.0", true);
-      ImGui::Selectable("2.0");
-      ImGui::EndCombo();
+    if (ImGui::Checkbox("Follow", &state->follow_latest)) {
+      state->status_text = state->follow_latest ? "Following latest samples" : "Follow disabled";
+    }
+    if (state->has_shared_range) {
+      const double span = std::max(0.1, state->x_view_max - state->x_view_min);
+      double center = 0.5 * (state->x_view_min + state->x_view_max);
+      const double min_center = state->route_x_min + span * 0.5;
+      const double max_center = state->route_x_max - span * 0.5;
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(std::max(120.0f, ui.width - 600.0f));
+      if (ImGui::SliderScalar("##timeline_center", ImGuiDataType_Double, &center, &min_center, &max_center, "%.1f s")) {
+        state->x_view_min = center - span * 0.5;
+        state->x_view_max = center + span * 0.5;
+        state->follow_latest = false;
+      }
+      ImGui::SameLine();
+      double span_value = span;
+      const double max_span = std::max(span, state->route_x_max - state->route_x_min);
+      const double min_span = 0.1;
+      ImGui::SetNextItemWidth(90.0f);
+      if (ImGui::DragScalar("Span", ImGuiDataType_Double, &span_value, 0.1, &min_span, &max_span, "%.1f")) {
+        span_value = std::clamp(span_value, min_span, max_span);
+        const double current_center = 0.5 * (state->x_view_min + state->x_view_max);
+        state->x_view_min = current_center - span_value * 0.5;
+        state->x_view_max = current_center + span_value * 0.5;
+        state->follow_latest = false;
+        clamp_shared_range(state);
+      }
+      ImGui::SameLine();
+      ImGui::TextDisabled("x %.1f to %.1f", state->x_view_min, state->x_view_max);
+      if (state->has_hover_time) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("| cursor %.3f", state->hovered_time);
+      }
     }
   }
   ImGui::End();
   ImGui::PopStyleColor(2);
   ImGui::PopStyleVar();
+}
+
+bool browser_node_matches(const BrowserNode &node, const std::string &filter) {
+  if (filter.empty()) {
+    return true;
+  }
+  if (!node.full_path.empty() && path_matches_filter(node.full_path, filter)) {
+    return true;
+  }
+  for (const BrowserNode &child : node.children) {
+    if (browser_node_matches(child, filter)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void draw_browser_node(const BrowserNode &node, UiState *state, const std::string &filter) {
+  if (!browser_node_matches(node, filter)) {
+    return;
+  }
+
+  if (node.children.empty()) {
+    const bool selected = state->selected_browser_path == node.full_path;
+    if (ImGui::Selectable(node.label.c_str(), selected)) {
+      state->selected_browser_path = node.full_path;
+    }
+    return;
+  }
+
+  ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth;
+  if (!filter.empty()) {
+    flags |= ImGuiTreeNodeFlags_DefaultOpen;
+  }
+  const bool open = ImGui::TreeNodeEx(node.label.c_str(), flags);
+  if (open) {
+    for (const BrowserNode &child : node.children) {
+      draw_browser_node(child, state, filter);
+    }
+    ImGui::TreePop();
+  }
 }
 
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
@@ -639,39 +932,23 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
     ImGui::TextUnformatted(tab == nullptr || tab->tab_name.empty() ? "tab0" : tab->tab_name.c_str());
     ImGui::Spacing();
 
-    ImGui::SeparatorText("Streaming");
-    if (ImGui::Button(state->streaming ? "Stop" : "Start", ImVec2(64.0f, 24.0f))) {
-      state->streaming = !state->streaming;
-      state->status_text = state->streaming ? "Streaming started" : "Streaming stopped";
+    ImGui::SeparatorText("Timeline");
+    if (ImGui::Checkbox("Follow latest", &state->follow_latest)) {
+      state->status_text = state->follow_latest ? "Following latest samples" : "Follow disabled";
     }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(60.0f);
-    if (ImGui::InputInt("##buffer_size", &state->buffer_size, 0, 0)) {
-      state->buffer_size = std::max(1, state->buffer_size);
+    if (ImGui::Button("Reset View", ImVec2(88.0f, 0.0f))) {
+      state->reset_plot_view = true;
+      state->status_text = "Plot view reset";
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("Buffer");
-    static constexpr std::array<const char *, 1> kSources = {"Cereal Subscriber"};
-    const char *source_label = kSources[std::clamp(state->source_index, 0, static_cast<int>(kSources.size()) - 1)];
-    if (ImGui::BeginCombo("##source_select", source_label)) {
-      for (int i = 0; i < static_cast<int>(kSources.size()); ++i) {
-        const bool selected = i == state->source_index;
-        if (ImGui::Selectable(kSources[i], selected)) {
-          state->source_index = i;
-          state->status_text = "Source updated";
-        }
-        if (selected) {
-          ImGui::SetItemDefaultFocus();
-        }
-      }
-      ImGui::EndCombo();
+    if (state->has_shared_range) {
+      ImGui::TextDisabled("View %.2f to %.2f", state->x_view_min, state->x_view_max);
     }
-    ImGui::Spacing();
-
-    ImGui::SeparatorText("Publishers");
-    if (ImGui::BeginListBox("##publishers", ImVec2(-FLT_MIN, 52.0f))) {
-      ImGui::TextDisabled("none");
-      ImGui::EndListBox();
+    if (session->route_data.has_time_range) {
+      ImGui::TextDisabled("Route %.2f to %.2f", session->route_data.x_min, session->route_data.x_max);
+    }
+    if (state->has_hover_time) {
+      ImGui::TextDisabled("Cursor %.3f", state->hovered_time);
     }
     ImGui::Spacing();
 
@@ -692,11 +969,11 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
     }
     ImGui::Spacing();
 
-    ImGui::SeparatorText("Timeseries List");
+    ImGui::SeparatorText("Pane Curves");
     const int total_curves = tab == nullptr ? 0 : static_cast<int>(total_curve_count(*tab));
-    const int sampled_curves = tab == nullptr ? 0 : static_cast<int>(sampled_curve_count(*tab));
+    const int sampled_curves = tab == nullptr ? 0 : static_cast<int>(sampled_curve_count(*session, *tab));
     ImGui::TextDisabled("%d of %d", sampled_curves, total_curves);
-    const float child_height = std::max(90.0f, ImGui::GetContentRegionAvail().y - 200.0f);
+    const float child_height = std::max(72.0f, ImGui::GetContentRegionAvail().y - 320.0f);
     if (pane != nullptr && ImGui::BeginListBox("##pane_curves", ImVec2(-FLT_MIN, child_height))) {
       for (Curve &curve : active_pane(&session->layout, state)->curves) {
         const std::string label = curve_display_name(curve);
@@ -707,16 +984,41 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
       ImGui::EndListBox();
     }
 
+    ImGui::SeparatorText("Timeseries Browser");
+    ImGui::InputTextWithHint("##browser_filter", "filter paths", state->browser_filter.data(), state->browser_filter.size());
+    ImGui::TextDisabled("%zu available", session->route_data.paths.size());
+    ImGui::BeginDisabled(state->selected_browser_path.empty());
+    if (ImGui::Button("Add To Pane", ImVec2(110.0f, 0.0f))) {
+      if (!state->selected_browser_path.empty()) {
+        add_curve_to_active_pane(session, state, state->selected_browser_path);
+      }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", state->selected_browser_path.empty() ? "no selection" : state->selected_browser_path.c_str());
+    if (ImGui::BeginChild("##timeseries_browser", ImVec2(0.0f, 170.0f), true)) {
+      const std::string filter = string_from_buffer(state->browser_filter);
+      for (const BrowserNode &node : session->browser_nodes) {
+        draw_browser_node(node, state, filter);
+      }
+    }
+    ImGui::EndChild();
+
     ImGui::SeparatorText("Sources");
     if (ImGui::BeginListBox("##timeseries_roots", ImVec2(-FLT_MIN, 84.0f))) {
-      for (const std::string &root : session->layout.roots) {
+      for (const std::string &root : session->route_data.roots) {
         ImGui::Selectable(root.c_str(), false, ImGuiSelectableFlags_Disabled);
+      }
+      if (session->route_data.roots.empty()) {
+        for (const std::string &root : session->layout.roots) {
+          ImGui::Selectable(root.c_str(), false, ImGuiSelectableFlags_Disabled);
+        }
       }
       ImGui::EndListBox();
     }
 
     if (pane != nullptr) {
-      const std::vector<UnsupportedCurve> unsupported = collect_unsupported_curves(*pane);
+      const std::vector<UnsupportedCurve> unsupported = collect_unsupported_curves(*session, *pane);
       if (!unsupported.empty()) {
         ImGui::SeparatorText("Unsupported");
         const size_t shown = std::min<size_t>(unsupported.size(), 4);
@@ -747,27 +1049,88 @@ std::string curve_display_name(const Curve &curve) {
   return "curve";
 }
 
-std::optional<UnsupportedCurve> unsupported_curve(const Curve &curve) {
+std::string path_curve_label(std::string_view path) {
+  if (path.empty() || path.front() != '/') {
+    return std::string(path);
+  }
+  std::vector<std::string_view> parts;
+  size_t start = 1;
+  while (start < path.size()) {
+    const size_t end = path.find('/', start);
+    parts.push_back(path.substr(start, end == std::string_view::npos ? path.size() - start : end - start));
+    if (end == std::string_view::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+  if (parts.size() >= 2) {
+    const std::string_view parent = parts[parts.size() - 2];
+    if (parent.find("canState") == 0 || std::all_of(parent.begin(), parent.end(), ::isdigit)) {
+      return std::string(parent) + "/" + std::string(parts.back());
+    }
+  }
+  return parts.empty() ? std::string(path) : std::string(parts.back());
+}
+
+bool add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path) {
+  Pane *pane = active_pane(&session->layout, state);
+  if (pane == nullptr) {
+    state->status_text = "No active pane";
+    return false;
+  }
+  if (find_route_series(*session, path) == nullptr) {
+    state->status_text = "Path not found in route";
+    return false;
+  }
+  for (Curve &curve : pane->curves) {
+    if (curve.name == path) {
+      curve.visible = true;
+      state->status_text = "Curve already present";
+      return true;
+    }
+  }
+
+  Curve curve;
+  curve.name = path;
+  curve.label = path_curve_label(path);
+  curve.color = next_curve_color(*pane);
+  pane->curves.push_back(std::move(curve));
+  state->status_text = "Added " + path;
+  return true;
+}
+
+bool curve_has_samples(const AppSession &session, const Curve &curve) {
+  if (curve_has_local_samples(curve)) {
+    return true;
+  }
+  if (curve.name.empty() || curve.name.front() != '/') {
+    return false;
+  }
+  const RouteSeries *series = find_route_series(session, curve.name);
+  return series != nullptr && series->times.size() > 1 && series->times.size() == series->values.size();
+}
+
+std::optional<UnsupportedCurve> unsupported_curve(const AppSession &session, const Curve &curve) {
   if (!curve.visible) {
     return std::nullopt;
   }
-  if (curve_has_samples(curve)) {
+  if (curve_has_samples(session, curve)) {
     return std::nullopt;
   }
   if (!curve.name.empty() && curve.name.front() != '/') {
     return UnsupportedCurve{curve_display_name(curve), "custom math not implemented"};
   }
   if (!curve.name.empty()) {
-    return UnsupportedCurve{curve_display_name(curve), "route has no data for this path"};
+    return UnsupportedCurve{curve_display_name(curve), "route has no plottable data for this path"};
   }
   return UnsupportedCurve{curve_display_name(curve), "curve is not implemented"};
 }
 
-std::vector<UnsupportedCurve> collect_unsupported_curves(const Pane &pane) {
+std::vector<UnsupportedCurve> collect_unsupported_curves(const AppSession &session, const Pane &pane) {
   std::vector<UnsupportedCurve> unsupported;
   unsupported.reserve(pane.curves.size());
   for (const Curve &curve : pane.curves) {
-    if (auto status = unsupported_curve(curve); status.has_value()) {
+    if (auto status = unsupported_curve(session, curve); status.has_value()) {
       unsupported.push_back(std::move(*status));
     }
   }
@@ -802,65 +1165,184 @@ void ensure_non_degenerate_range(double *min_value, double *max_value, double pa
   *max_value += pad;
 }
 
-PlotBounds compute_plot_bounds(const Pane &pane) {
-  PlotBounds bounds;
+struct PreparedCurve {
+  std::string label;
+  std::array<uint8_t, 3> color = {160, 170, 180};
+  float line_weight = 2.0f;
+  bool stairs = false;
+  std::vector<double> xs;
+  std::vector<double> ys;
+};
 
-  const bool explicit_x = pane.range.valid && pane.range.right > pane.range.left;
-  const bool explicit_y = pane.range.valid && pane.range.top != pane.range.bottom;
-  if (explicit_x) {
-    bounds.x_min = pane.range.left;
-    bounds.x_max = pane.range.right;
-  } else {
-    bool found = false;
-    double min_value = 0.0;
-    double max_value = 1.0;
-    for (const Curve &curve : pane.curves) {
-      if (!curve.visible || !curve_has_samples(curve)) {
-        continue;
+bool is_digital_series(const std::vector<double> &values) {
+  if (values.size() < 2) {
+    return false;
+  }
+  std::vector<int> unique_levels;
+  unique_levels.reserve(std::min<size_t>(values.size(), 8));
+  for (double value : values) {
+    const double rounded = std::round(value);
+    if (std::abs(value - rounded) > 1.0e-6) {
+      return false;
+    }
+    const int level = static_cast<int>(rounded);
+    if (std::find(unique_levels.begin(), unique_levels.end(), level) == unique_levels.end()) {
+      unique_levels.push_back(level);
+      if (unique_levels.size() > 8) {
+        return false;
       }
-      extend_range(curve.xs, &found, &min_value, &max_value);
     }
-    if (!found) {
-      min_value = 0.0;
-      max_value = 1.0;
-    }
-    if (max_value <= min_value) {
-      max_value = min_value + 1.0;
-    }
-    bounds.x_min = min_value;
-    bounds.x_max = max_value;
+  }
+  return true;
+}
+
+void decimate_samples(const std::vector<double> &xs_in,
+                      const std::vector<double> &ys_in,
+                      int max_points,
+                      std::vector<double> *xs_out,
+                      std::vector<double> *ys_out) {
+  xs_out->clear();
+  ys_out->clear();
+  if (xs_in.empty() || xs_in.size() != ys_in.size()) {
+    return;
+  }
+  if (max_points <= 0 || static_cast<int>(xs_in.size()) <= max_points) {
+    *xs_out = xs_in;
+    *ys_out = ys_in;
+    return;
   }
 
-  if (explicit_y) {
+  const size_t step = std::max<size_t>(1, static_cast<size_t>(std::ceil(static_cast<double>(xs_in.size()) / max_points)));
+  xs_out->reserve(xs_in.size() / step + 2);
+  ys_out->reserve(ys_in.size() / step + 2);
+  for (size_t i = 0; i < xs_in.size(); i += step) {
+    xs_out->push_back(xs_in[i]);
+    ys_out->push_back(ys_in[i]);
+  }
+  if (xs_out->empty() || xs_out->back() != xs_in.back()) {
+    xs_out->push_back(xs_in.back());
+    ys_out->push_back(ys_in.back());
+  }
+}
+
+bool build_curve_series(const AppSession &session,
+                        const Curve &curve,
+                        const UiState &state,
+                        int max_points,
+                        PreparedCurve *prepared) {
+  std::vector<double> xs;
+  std::vector<double> ys;
+  if (curve_has_local_samples(curve)) {
+    xs = curve.xs;
+    ys = curve.ys;
+  } else {
+    const RouteSeries *series = find_route_series(session, curve.name);
+    if (series == nullptr || series->times.size() < 2 || series->times.size() != series->values.size()) {
+      return false;
+    }
+
+    size_t begin_index = 0;
+    size_t end_index = series->times.size();
+    if (state.has_shared_range && state.x_view_max > state.x_view_min) {
+      auto begin_it = std::lower_bound(series->times.begin(), series->times.end(), state.x_view_min);
+      auto end_it = std::upper_bound(series->times.begin(), series->times.end(), state.x_view_max);
+      begin_index = begin_it == series->times.begin() ? 0 : static_cast<size_t>(std::distance(series->times.begin(), begin_it - 1));
+      end_index = end_it == series->times.end() ? series->times.size() : static_cast<size_t>(std::distance(series->times.begin(), end_it + 1));
+      end_index = std::min(end_index, series->times.size());
+    }
+    if (end_index <= begin_index + 1) {
+      return false;
+    }
+    xs.assign(series->times.begin() + begin_index, series->times.begin() + end_index);
+    ys.assign(series->values.begin() + begin_index, series->values.begin() + end_index);
+  }
+
+  std::vector<double> transformed_xs;
+  std::vector<double> transformed_ys;
+  if (curve.derivative) {
+    if (xs.size() < 2) {
+      return false;
+    }
+    transformed_xs.reserve(xs.size() - 1);
+    transformed_ys.reserve(ys.size() - 1);
+    for (size_t i = 1; i < xs.size(); ++i) {
+      const double dt = xs[i] - xs[i - 1];
+      if (dt <= 0.0) {
+        continue;
+      }
+      transformed_xs.push_back(xs[i]);
+      transformed_ys.push_back((ys[i] - ys[i - 1]) / dt);
+    }
+  } else {
+    transformed_xs = std::move(xs);
+    transformed_ys = std::move(ys);
+  }
+
+  if (transformed_xs.size() < 2 || transformed_xs.size() != transformed_ys.size()) {
+    return false;
+  }
+
+  for (double &value : transformed_ys) {
+    value = value * curve.value_scale + curve.value_offset;
+  }
+
+  prepared->label = curve_display_name(curve);
+  prepared->color = curve.color;
+  prepared->line_weight = curve.derivative ? 1.8f : 2.25f;
+  decimate_samples(transformed_xs, transformed_ys, max_points, &prepared->xs, &prepared->ys);
+  prepared->stairs = !curve.derivative && is_digital_series(prepared->ys);
+  return prepared->xs.size() > 1 && prepared->xs.size() == prepared->ys.size();
+}
+
+PlotBounds compute_plot_bounds(const Pane &pane,
+                               const std::vector<PreparedCurve> &prepared_curves,
+                               const UiState &state) {
+  PlotBounds bounds;
+  bounds.x_min = state.has_shared_range ? state.x_view_min : 0.0;
+  bounds.x_max = state.has_shared_range ? state.x_view_max : 1.0;
+  if (bounds.x_max <= bounds.x_min) {
+    bounds.x_max = bounds.x_min + 1.0;
+  }
+
+  if (pane.range.valid && pane.range.top != pane.range.bottom) {
     bounds.y_min = std::min(pane.range.bottom, pane.range.top);
     bounds.y_max = std::max(pane.range.bottom, pane.range.top);
-  } else {
-    bool found = false;
-    double min_value = 0.0;
-    double max_value = 1.0;
-    for (const Curve &curve : pane.curves) {
-      if (!curve.visible || !curve_has_samples(curve)) {
-        continue;
-      }
-      extend_range(curve.ys, &found, &min_value, &max_value);
-    }
-    if (!found) {
-      min_value = 0.0;
-      max_value = 1.0;
-    }
-    ensure_non_degenerate_range(&min_value, &max_value, 0.06, 0.1);
-    bounds.y_min = min_value;
-    bounds.y_max = max_value;
+    return bounds;
   }
 
+  bool found = false;
+  double min_value = 0.0;
+  double max_value = 1.0;
+  for (const PreparedCurve &curve : prepared_curves) {
+    extend_range(curve.ys, &found, &min_value, &max_value);
+  }
+  if (!found) {
+    min_value = 0.0;
+    max_value = 1.0;
+  }
+  ensure_non_degenerate_range(&min_value, &max_value, 0.06, 0.1);
+  bounds.y_min = min_value;
+  bounds.y_max = max_value;
   return bounds;
 }
 
-void draw_plot(const Pane &pane, bool reset_plot_view) {
-  const PlotBounds bounds = compute_plot_bounds(pane);
-  const std::vector<UnsupportedCurve> unsupported = collect_unsupported_curves(pane);
-  const int supported_count = static_cast<int>(std::count_if(
-    pane.curves.begin(), pane.curves.end(), [](const Curve &curve) { return curve.visible && curve_has_samples(curve); }));
+void draw_plot(const AppSession &session, const Pane &pane, UiState *state) {
+  std::vector<UnsupportedCurve> unsupported = collect_unsupported_curves(session, pane);
+  std::vector<PreparedCurve> prepared_curves;
+  prepared_curves.reserve(pane.curves.size());
+  const int max_points = std::max(256, static_cast<int>(ImGui::GetContentRegionAvail().x) * 2);
+  for (const Curve &curve : pane.curves) {
+    if (!curve.visible || !curve_has_samples(session, curve)) {
+      continue;
+    }
+    PreparedCurve prepared;
+    if (build_curve_series(session, curve, *state, max_points, &prepared)) {
+      prepared_curves.push_back(std::move(prepared));
+    }
+  }
+
+  const PlotBounds bounds = compute_plot_bounds(pane, prepared_curves, *state);
+  const int supported_count = static_cast<int>(prepared_curves.size());
   const float status_height = unsupported.empty()
     ? 0.0f
     : std::min(86.0f, 28.0f + 18.0f * static_cast<float>(std::min<size_t>(unsupported.size(), 3)));
@@ -876,37 +1358,71 @@ void draw_plot(const Pane &pane, bool reset_plot_view) {
   ImPlot::PushStyleColor(ImPlotCol_AxisGrid, color_rgb(226, 231, 236));
   ImPlot::PushStyleColor(ImPlotCol_AxisText, color_rgb(95, 103, 112));
 
-  ImPlotFlags plot_flags = ImPlotFlags_NoTitle | ImPlotFlags_NoMenus | ImPlotFlags_NoMouseText;
+  ImPlotFlags plot_flags = ImPlotFlags_NoTitle | ImPlotFlags_NoMenus | ImPlotFlags_Crosshairs;
   if (supported_count == 0) {
     plot_flags |= ImPlotFlags_NoLegend;
   }
 
-  const ImPlotAxisFlags axis_flags = ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight;
+  const ImPlotAxisFlags x_axis_flags = ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight;
+  ImPlotAxisFlags y_axis_flags = ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight;
+  const bool explicit_y = pane.range.valid && pane.range.top != pane.range.bottom;
+  if (!explicit_y && supported_count > 0) {
+    y_axis_flags |= ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_RangeFit;
+  }
+
+  const double previous_x_min = state->x_view_min;
+  const double previous_x_max = state->x_view_max;
   if (ImPlot::BeginPlot("##plot", plot_size, plot_flags)) {
-    ImPlot::SetupAxes(nullptr, nullptr, axis_flags, axis_flags);
-    const ImPlotCond axis_cond = reset_plot_view ? ImPlotCond_Always : ImPlotCond_Once;
-    ImPlot::SetupAxisLimits(ImAxis_X1, bounds.x_min, bounds.x_max, axis_cond);
-    ImPlot::SetupAxisLimits(ImAxis_Y1, bounds.y_min, bounds.y_max, axis_cond);
+    ImPlot::SetupAxes(nullptr, nullptr, x_axis_flags, y_axis_flags);
+    ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f s");
+    ImPlot::SetupAxisFormat(ImAxis_Y1, "%.3g");
+    ImPlot::SetupAxisLinks(ImAxis_X1, &state->x_view_min, &state->x_view_max);
+    if (state->route_x_max > state->route_x_min) {
+      ImPlot::SetupAxisLimitsConstraints(ImAxis_X1, state->route_x_min, state->route_x_max);
+    }
+    ImPlot::SetupMouseText(ImPlotLocation_SouthEast, ImPlotMouseTextFlags_NoAuxAxes);
+    if (explicit_y || supported_count == 0) {
+      ImPlot::SetupAxisLimits(ImAxis_Y1, bounds.y_min, bounds.y_max, ImPlotCond_Always);
+    }
     if (supported_count > 0) {
       ImPlot::SetupLegend(ImPlotLocation_NorthEast);
     }
 
-    for (size_t i = 0; i < pane.curves.size(); ++i) {
-      const Curve &curve = pane.curves[i];
-      if (!curve.visible || !curve_has_samples(curve)) {
-        continue;
-      }
-      const std::string label = !curve.label.empty() ? curve.label : (!curve.name.empty() ? curve.name : "curve");
-      std::string series_id = label + "##curve" + std::to_string(i);
+    for (size_t i = 0; i < prepared_curves.size(); ++i) {
+      const PreparedCurve &curve = prepared_curves[i];
+      std::string series_id = curve.label + "##curve" + std::to_string(i);
       ImPlotSpec spec;
       spec.LineColor = color_rgb(curve.color);
-      spec.LineWeight = curve.derivative ? 1.8f : 2.3f;
+      spec.LineWeight = curve.line_weight;
       spec.Flags = ImPlotLineFlags_SkipNaN;
       if (!curve.xs.empty() && curve.xs.size() == curve.ys.size()) {
-        ImPlot::PlotLine(series_id.c_str(), curve.xs.data(), curve.ys.data(), static_cast<int>(curve.xs.size()), spec);
+        if (curve.stairs) {
+          spec.Flags = ImPlotStairsFlags_PreStep;
+          ImPlot::PlotStairs(series_id.c_str(), curve.xs.data(), curve.ys.data(), static_cast<int>(curve.xs.size()), spec);
+        } else {
+          ImPlot::PlotLine(series_id.c_str(), curve.xs.data(), curve.ys.data(), static_cast<int>(curve.xs.size()), spec);
+        }
       }
     }
+    if (state->has_hover_time) {
+      ImPlotSpec cursor_spec;
+      cursor_spec.LineColor = color_rgb(108, 118, 128, 0.7f);
+      cursor_spec.LineWeight = 1.0f;
+      cursor_spec.Flags = ImPlotItemFlags_NoLegend;
+      ImPlot::PlotInfLines("##hover_cursor", &state->hovered_time, 1, cursor_spec);
+    }
+    if (ImPlot::IsPlotHovered()) {
+      state->hovered_time = ImPlot::GetPlotMousePos().x;
+      state->has_hover_time = true;
+    }
     ImPlot::EndPlot();
+  }
+  clamp_shared_range(state);
+  if (std::abs(state->x_view_min - previous_x_min) > 1.0e-6
+      || std::abs(state->x_view_max - previous_x_max) > 1.0e-6) {
+    if (!state->reset_plot_view) {
+      state->follow_latest = false;
+    }
   }
   ImPlot::PopStyleColor(6);
 
@@ -1002,7 +1518,7 @@ void draw_pane_windows(AppSession *session, UiState *state) {
           || (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && ImGui::IsMouseClicked(0))) {
         tab_state->active_pane_index = static_cast<int>(i);
       }
-      draw_plot(pane, state->reset_plot_view);
+      draw_plot(*session, pane, state);
     }
     ImGui::End();
     ImGui::PopStyleColor(5);
@@ -1042,14 +1558,23 @@ void draw_workspace(const AppSession &session, const UiMetrics &ui, UiState *sta
   ImGui::PopStyleColor(2);
 }
 
+void rebuild_session_route_data(AppSession *session, UiState *state) {
+  session->route_data = load_route_data(session->route_name, session->data_dir);
+  rebuild_route_index(session);
+  session->browser_nodes = build_browser_tree(session->route_data.paths);
+  if (!state->selected_browser_path.empty() && find_route_series(*session, state->selected_browser_path) == nullptr) {
+    state->selected_browser_path.clear();
+  }
+  state->has_shared_range = false;
+  state->has_hover_time = false;
+  reset_shared_range(state, *session);
+}
+
 bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir) {
   try {
-    SketchLayout new_layout = load_sketch_layout(session->layout_path, route_name, data_dir);
     session->route_name = route_name;
     session->data_dir = data_dir;
-    session->layout = std::move(new_layout);
-    sync_ui_state(state, session->layout);
-    mark_docks_dirty(state);
+    rebuild_session_route_data(session, state);
     sync_route_buffers(state, *session);
     state->status_text = "Loaded route " + route_name;
     return true;
@@ -1123,6 +1648,14 @@ void draw_popups(AppSession *session, UiState *state) {
 }
 
 void render_layout(AppSession *session, UiState *state) {
+  ensure_shared_range(state, *session);
+  if (state->reset_plot_view) {
+    reset_shared_range(state, *session);
+  } else if (state->follow_latest) {
+    update_follow_range(state);
+  } else {
+    clamp_shared_range(state);
+  }
   const float menu_height = draw_main_menu_bar(state);
   const float toolbar_height = draw_toolbar(*session, state, menu_height);
   const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height + toolbar_height);
@@ -1130,7 +1663,7 @@ void render_layout(AppSession *session, UiState *state) {
   draw_sidebar(session, ui, state);
   draw_workspace(*session, ui, state);
   draw_pane_windows(session, state);
-  draw_status_bar(ui, *state);
+  draw_status_bar(ui, state);
   draw_popups(session, state);
 }
 
@@ -1202,14 +1735,16 @@ int run_app(const Options &options) {
     .layout_path = layout_path,
     .route_name = options.route_name,
     .data_dir = options.data_dir,
-    .layout = load_sketch_layout(layout_path, options.route_name, options.data_dir),
+    .layout = load_sketch_layout(layout_path),
   };
+  UiState ui_state;
+  sync_ui_state(&ui_state, session.layout);
+  rebuild_session_route_data(&session, &ui_state);
+  sync_route_buffers(&ui_state, session);
+
   GlfwRuntime glfw_runtime(options);
   ImGuiRuntime imgui_runtime(glfw_runtime.window());
   configure_style();
-  UiState ui_state;
-  sync_ui_state(&ui_state, session.layout);
-  sync_route_buffers(&ui_state, session);
 
   const bool should_capture = !options.output_path.empty();
   const fs::path output_path = should_capture ? fs::path(options.output_path) : fs::path();

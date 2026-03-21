@@ -580,7 +580,7 @@ void append_dynamic_series(const std::string &path,
       return;
     }
     case capnp::DynamicValue::Type::LIST: {
-      const capnp::DynamicList list = value.as<capnp::DynamicList>();
+      const capnp::DynamicList::Reader list = value.as<capnp::DynamicList>();
       if (list.size() == 0) {
         return;
       }

@@ -4,10 +4,11 @@
 
 Current scope:
 - native C++ parsing of PlotJuggler layout XML
-- native C++ sampling of direct `/service/path` curves from routes
+- native C++ route-wide extraction of direct numeric `/service/path` series
 - GLFW + Dear ImGui + ImPlot rendering
 - real PlotJuggler tab support with a docked workspace
-- route open/reload controls and pane/curve selection in the UI
+- route open/reload controls, shared timeline navigation, and pane/curve selection in the UI
+- hierarchical timeseries browser for adding route-backed curves to the active pane
 - fixed-size screenshot export for deterministic rendering and debugging
 
 Current non-goals:
@@ -45,7 +46,8 @@ Export a screenshot without opening a visible window:
 
 `--demo` opens the default `longitudinal` layout on the bundled demo route.
 The app also accepts a positional `route` like the other log tools, plus `--data-dir`.
-Multi-tab PlotJuggler layouts now render as real app tabs, and the sidebar can target panes and toggle curve visibility.
+Multi-tab PlotJuggler layouts now render as real app tabs, and the sidebar can target panes, browse route series, add curves, and toggle visibility.
+Plots share a real x-range with follow/reset controls and route-backed direct curve rendering.
 Curves without direct sampled data are shown as unsupported instead of being faked.
 
 ## Validation
