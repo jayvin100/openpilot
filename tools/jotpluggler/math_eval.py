@@ -21,6 +21,17 @@ def _write_vector(path: str, values: np.ndarray) -> None:
   np.asarray(values, dtype=np.float64).tofile(path)
 
 
+def _resample_to_reference(ref_t: np.ndarray, src_t: np.ndarray, src_v: np.ndarray) -> np.ndarray:
+  ref_t = np.asarray(ref_t, dtype=np.float64).reshape(-1)
+  src_t = np.asarray(src_t, dtype=np.float64).reshape(-1)
+  src_v = np.asarray(src_v, dtype=np.float64).reshape(-1)
+  if ref_t.size == 0 or src_t.size == 0 or src_v.size == 0:
+    return np.empty_like(ref_t)
+  indices = np.searchsorted(src_t, ref_t, side="right") - 1
+  indices = np.clip(indices, 0, src_v.size - 1)
+  return src_v[indices]
+
+
 def _evaluate_user_code(code: str, env: dict):
   stripped = code.strip()
   if not stripped:
@@ -83,13 +94,19 @@ def main() -> int:
     "additional_sources": additional_sources,
   }
 
+  reference_time = None
   if linked_source:
-    env["time"] = series_t[linked_source]
+    reference_time = series_t[linked_source]
+    env["time"] = reference_time
     env["value"] = series_v[linked_source]
 
   for i, path in enumerate(additional_sources, start=1):
-    env[f"t{i}"] = series_t[path]
-    env[f"v{i}"] = series_v[path]
+    if reference_time is None:
+      env[f"t{i}"] = series_t[path]
+      env[f"v{i}"] = series_v[path]
+    else:
+      env[f"t{i}"] = reference_time
+      env[f"v{i}"] = _resample_to_reference(reference_time, series_t[path], series_v[path])
 
   with open(globals_path, encoding="utf-8") as f:
     globals_code = f.read()

@@ -814,6 +814,19 @@ Curve parse_curve(const json11::Json &curve_node) {
     curve.value_scale = curve_node["scale"].is_number() ? curve_node["scale"].number_value() : 1.0;
     curve.value_offset = curve_node["offset"].is_number() ? curve_node["offset"].number_value() : 0.0;
   }
+  const json11::Json &custom_node = curve_node["custom_python"];
+  if (custom_node.is_object()) {
+    CustomPythonSeries spec;
+    spec.linked_source = custom_node["linked_source"].string_value();
+    spec.globals_code = custom_node["globals_code"].string_value();
+    spec.function_code = custom_node["function_code"].string_value();
+    for (const json11::Json &source : custom_node["additional_sources"].array_items()) {
+      if (source.is_string()) {
+        spec.additional_sources.push_back(source.string_value());
+      }
+    }
+    curve.custom_python = std::move(spec);
+  }
   return curve;
 }
 

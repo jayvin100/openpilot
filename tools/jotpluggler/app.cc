@@ -50,16 +50,17 @@ namespace {
 
 constexpr const char *kUntitledPaneTitle = "...";
 
-constexpr float kSidebarWidth = 282.0f;
+constexpr float kSidebarWidth = 320.0f;
 constexpr float kSidebarMinWidth = 220.0f;
 constexpr float kSidebarMaxWidth = 520.0f;
 constexpr float kContentGap = 0.0f;
 constexpr float kContentRightPadding = 0.0f;
-constexpr float kStatusBarHeight = 40.0f;
+constexpr float kStatusBarHeight = 38.0f;
 constexpr float kBrowserValueWidth = 88.0f;
 constexpr double kMinHorizontalZoomSeconds = 2.0;
-constexpr double kPlotYPadFraction = 0.28;
-constexpr size_t kCursorOverlayValueCount = 3;
+constexpr double kPlotYPadFraction = 0.4;
+ImFont *g_ui_font = nullptr;
+ImFont *g_mono_font = nullptr;
 
 struct UiMetrics {
   float width = 0.0f;
@@ -114,6 +115,19 @@ std::optional<fs::path> jetbrains_mono_font_path() {
     candidates.insert(candidates.begin(), fs::path(home) / ".local/share/fonts/fonts/ttf/JetBrainsMono-Regular.ttf");
     candidates.insert(candidates.begin() + 1, fs::path(home) / ".local/share/fonts/fonts/variable/JetBrainsMono[wght].ttf");
   }
+  for (const fs::path &candidate : candidates) {
+    if (fs::exists(candidate)) {
+      return candidate;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<fs::path> inter_font_path() {
+  std::vector<fs::path> candidates = {
+    repo_root() / "selfdrive" / "assets" / "fonts" / "Inter-Regular.ttf",
+    repo_root() / "selfdrive" / "ui" / "installer" / "inter-ascii.ttf",
+  };
   for (const fs::path &candidate : candidates) {
     if (fs::exists(candidate)) {
       return candidate;
@@ -204,13 +218,6 @@ std::vector<std::string> available_layout_names() {
   return names;
 }
 
-std::string curve_color_hex(const std::array<uint8_t, 3> &color) {
-  char buf[8] = {};
-  std::snprintf(buf, sizeof(buf), "#%02x%02x%02x", color[0], color[1], color[2]);
-  return buf;
-}
-
-
 void ensure_parent_dir(const fs::path &path) {
   const fs::path parent = path.parent_path();
   if (!parent.empty()) {
@@ -235,16 +242,38 @@ void configure_style() {
   ImPlot::StyleColorsLight();
 
   ImGuiIO &io = ImGui::GetIO();
-  if (std::optional<fs::path> font_path = jetbrains_mono_font_path(); font_path.has_value()) {
+  g_ui_font = nullptr;
+  g_mono_font = nullptr;
+  const std::optional<fs::path> ui_font_path = inter_font_path();
+  const std::optional<fs::path> mono_font_path = jetbrains_mono_font_path();
+  if (ui_font_path.has_value()) {
     ImFontConfig font_cfg;
     font_cfg.OversampleH = 2;
     font_cfg.OversampleV = 2;
     font_cfg.RasterizerDensity = 1.0f;
-    if (ImFont *font = io.Fonts->AddFontFromFileTTF(font_path->c_str(), 16.75f, &font_cfg); font != nullptr) {
+    if (ImFont *font = io.Fonts->AddFontFromFileTTF(ui_font_path->c_str(), 16.0f, &font_cfg); font != nullptr) {
+      g_ui_font = font;
       io.FontDefault = font;
     }
   }
-  bootstrap_icons::load_font(16.75f);
+  if (g_ui_font == nullptr && mono_font_path.has_value()) {
+    ImFontConfig font_cfg;
+    font_cfg.OversampleH = 2;
+    font_cfg.OversampleV = 2;
+    font_cfg.RasterizerDensity = 1.0f;
+    if (ImFont *font = io.Fonts->AddFontFromFileTTF(mono_font_path->c_str(), 15.75f, &font_cfg); font != nullptr) {
+      g_mono_font = font;
+      io.FontDefault = font;
+    }
+  }
+  bootstrap_icons::load_font(16.0f);
+  if (g_mono_font == nullptr && mono_font_path.has_value()) {
+    ImFontConfig font_cfg;
+    font_cfg.OversampleH = 2;
+    font_cfg.OversampleV = 2;
+    font_cfg.RasterizerDensity = 1.0f;
+    g_mono_font = io.Fonts->AddFontFromFileTTF(mono_font_path->c_str(), 15.75f, &font_cfg);
+  }
 
   ImGuiStyle &style = ImGui::GetStyle();
   style.WindowRounding = 0.0f;
@@ -257,10 +286,10 @@ void configure_style() {
   style.WindowBorderSize = 1.0f;
   style.ChildBorderSize = 1.0f;
   style.FrameBorderSize = 1.0f;
-  style.WindowPadding = ImVec2(8.0f, 8.0f);
-  style.FramePadding = ImVec2(6.0f, 4.0f);
-  style.ItemSpacing = ImVec2(8.0f, 6.0f);
-  style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
+  style.WindowPadding = ImVec2(8.0f, 7.0f);
+  style.FramePadding = ImVec2(6.0f, 3.0f);
+  style.ItemSpacing = ImVec2(8.0f, 5.0f);
+  style.ItemInnerSpacing = ImVec2(6.0f, 3.0f);
   style.Colors[ImGuiCol_WindowBg] = color_rgb(250, 250, 251);
   style.Colors[ImGuiCol_ChildBg] = color_rgb(255, 255, 255);
   style.Colors[ImGuiCol_Border] = color_rgb(194, 198, 204);
@@ -298,10 +327,11 @@ void configure_style() {
   ImPlotStyle &plot_style = ImPlot::GetStyle();
   plot_style.PlotBorderSize = 1.0f;
   plot_style.MinorAlpha = 0.65f;
-  plot_style.LegendPadding = ImVec2(6.0f, 6.0f);
-  plot_style.LegendInnerPadding = ImVec2(6.0f, 4.0f);
-  plot_style.LegendSpacing = ImVec2(8.0f, 3.0f);
-  plot_style.PlotPadding = ImVec2(4.0f, 6.0f);
+  plot_style.LegendPadding = ImVec2(6.0f, 5.0f);
+  plot_style.LegendInnerPadding = ImVec2(6.0f, 3.0f);
+  plot_style.LegendSpacing = ImVec2(7.0f, 2.0f);
+  plot_style.PlotPadding = ImVec2(4.0f, 5.0f);
+  plot_style.FitPadding = ImVec2(0.02f, 0.4f);
 
   ImPlot::MapInputDefault();
   ImPlotInputMap &input_map = ImPlot::GetInputMap();
@@ -310,6 +340,18 @@ void configure_style() {
   input_map.Select = ImGuiMouseButton_Left;
   input_map.SelectCancel = ImGuiMouseButton_Right;
   input_map.SelectMod = ImGuiMod_None;
+}
+
+void push_mono_font_internal() {
+  if (g_mono_font != nullptr) {
+    ImGui::PushFont(g_mono_font);
+  }
+}
+
+void pop_mono_font_internal() {
+  if (g_mono_font != nullptr) {
+    ImGui::PopFont();
+  }
 }
 
 UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset, float sidebar_width) {
@@ -654,94 +696,6 @@ std::string next_tab_name(const SketchLayout &layout, const std::string &base_na
   return base + " copy";
 }
 
-json11::Json curve_to_json(const Curve &curve) {
-  json11::Json::object obj = {
-    {"name", curve.name},
-    {"color", curve_color_hex(curve.color)},
-  };
-  if (curve.derivative) {
-    obj["transform"] = "derivative";
-    if (curve.derivative_dt > 0.0) {
-      obj["derivative_dt"] = curve.derivative_dt;
-    }
-  } else if (std::abs(curve.value_scale - 1.0) > 1.0e-9 || std::abs(curve.value_offset) > 1.0e-9) {
-    obj["transform"] = "scale";
-    obj["scale"] = curve.value_scale;
-    obj["offset"] = curve.value_offset;
-  }
-  return obj;
-}
-
-json11::Json workspace_node_to_json(const WorkspaceNode &node, const WorkspaceTab &tab) {
-  if (node.is_pane) {
-    if (node.pane_index < 0 || node.pane_index >= static_cast<int>(tab.panes.size())) {
-      return nullptr;
-    }
-    const Pane &pane = tab.panes[static_cast<size_t>(node.pane_index)];
-    json11::Json::object obj = {
-      {"title", pane.title.empty() ? std::string(kUntitledPaneTitle) : pane.title},
-    };
-    if (pane.range.valid) {
-      obj["range"] = json11::Json::object{
-        {"left", pane.range.left}, {"right", pane.range.right},
-        {"top", pane.range.top}, {"bottom", pane.range.bottom},
-      };
-    }
-    if (pane.range.has_y_limit_min || pane.range.has_y_limit_max) {
-      json11::Json::object limits;
-      if (pane.range.has_y_limit_min) limits["min"] = pane.range.y_limit_min;
-      if (pane.range.has_y_limit_max) limits["max"] = pane.range.y_limit_max;
-      obj["y_limits"] = limits;
-    }
-    json11::Json::array curves;
-    for (const Curve &curve : pane.curves) {
-      if (!curve.runtime_only) {
-        curves.push_back(curve_to_json(curve));
-      }
-    }
-    obj["curves"] = curves;
-    return obj;
-  }
-
-  if (node.children.empty()) {
-    return nullptr;
-  }
-  json11::Json::array sizes;
-  for (size_t i = 0; i < node.children.size(); ++i) {
-    sizes.push_back(i < node.sizes.size() ? static_cast<double>(node.sizes[i])
-                                          : 1.0 / static_cast<double>(node.children.size()));
-  }
-  json11::Json::array children;
-  for (const WorkspaceNode &child : node.children) {
-    children.push_back(workspace_node_to_json(child, tab));
-  }
-  return json11::Json::object{
-    {"split", node.orientation == SplitOrientation::Horizontal ? "horizontal" : "vertical"},
-    {"sizes", sizes},
-    {"children", children},
-  };
-}
-
-void save_layout_json(const SketchLayout &layout, const fs::path &path) {
-  ensure_parent_dir(path);
-  json11::Json::array tabs;
-  for (const WorkspaceTab &tab : layout.tabs) {
-    tabs.push_back(json11::Json::object{
-      {"name", tab.tab_name},
-      {"root", workspace_node_to_json(tab.root, tab)},
-    });
-  }
-  json11::Json root = json11::Json::object{
-    {"current_tab_index", std::clamp(layout.current_tab_index, 0, std::max(0, static_cast<int>(layout.tabs.size()) - 1))},
-    {"tabs", tabs},
-  };
-  std::ofstream out(path);
-  if (!out) {
-    throw std::runtime_error("Failed to open layout for writing: " + path.string());
-  }
-  out << root.dump() << "\n";
-}
-
 void clear_layout_autosave(const AppSession &session) {
   if (!session.autosave_path.empty() && fs::exists(session.autosave_path)) {
     fs::remove(session.autosave_path);
@@ -976,20 +930,15 @@ void rebuild_browser_nodes(AppSession *session, UiState *state) {
 }
 
 BrowserSeriesDisplayInfo compute_browser_display_info(const AppSession &session, const RouteSeries &series) {
+  const bool enum_like = session.route_data.enum_info.find(series.path) != session.route_data.enum_info.end();
   BrowserSeriesDisplayInfo info;
   if (series.values.empty()) {
     return info;
   }
-  if (session.route_data.enum_info.find(series.path) != session.route_data.enum_info.end()) {
-    info.integer_like = true;
-    info.decimals = 0;
-    return info;
-  }
-
   const size_t sample_limit = 128;
   const size_t step = std::max<size_t>(1, series.values.size() / sample_limit);
   double peak_abs = 0.0;
-  bool integer_like = true;
+  bool integer_like = enum_like;
   std::vector<int> unique_levels;
   unique_levels.reserve(8);
   for (size_t i = 0; i < series.values.size(); i += step) {
@@ -1013,7 +962,7 @@ BrowserSeriesDisplayInfo compute_browser_display_info(const AppSession &session,
   }
 
   info.integer_like = integer_like;
-  if (integer_like) {
+  if (integer_like || enum_like) {
     info.decimals = 0;
     return info;
   }
@@ -1029,6 +978,32 @@ BrowserSeriesDisplayInfo compute_browser_display_info(const AppSession &session,
     info.decimals = 4;
   }
   return info;
+}
+
+std::string format_display_value(double display_value,
+                                 const BrowserSeriesDisplayInfo &display_info,
+                                 const EnumInfo *enum_info) {
+  if (!std::isfinite(display_value)) {
+    return {};
+  }
+  if (enum_info != nullptr) {
+    const int idx = static_cast<int>(std::llround(display_value));
+    if (idx >= 0 && std::abs(display_value - static_cast<double>(idx)) < 0.01
+        && static_cast<size_t>(idx) < enum_info->names.size()
+        && !enum_info->names[static_cast<size_t>(idx)].empty()) {
+      return enum_info->names[static_cast<size_t>(idx)];
+    }
+  }
+
+  char buf[64] = {};
+  if (display_info.integer_like) {
+    std::snprintf(buf, sizeof(buf), "%.0f", std::round(display_value));
+  } else if (std::abs(display_value) < 1.0e-6) {
+    std::snprintf(buf, sizeof(buf), "0");
+  } else {
+    std::snprintf(buf, sizeof(buf), "%.*f", display_info.decimals, display_value);
+  }
+  return buf;
 }
 
 void rebuild_route_index(AppSession *session) {
@@ -1123,29 +1098,7 @@ std::string browser_series_value_text(const AppSession &session, const UiState &
     ? BrowserSeriesDisplayInfo{}
     : display_it->second;
 
-  if (enum_info != nullptr) {
-    const int idx = static_cast<int>(std::llround(*value));
-    if (idx >= 0 && std::abs(*value - static_cast<double>(idx)) < 0.01
-        && static_cast<size_t>(idx) < enum_info->names.size()
-        && !enum_info->names[static_cast<size_t>(idx)].empty()) {
-      return enum_info->names[static_cast<size_t>(idx)];
-    }
-  }
-
-  const double display_value = *value;
-  if (!std::isfinite(display_value)) {
-    return {};
-  }
-
-  char buf[64] = {};
-  if (display_info.integer_like) {
-    std::snprintf(buf, sizeof(buf), "%.0f", std::round(display_value));
-  } else if (std::abs(display_value) < 1.0e-6) {
-    std::snprintf(buf, sizeof(buf), "0");
-  } else {
-    std::snprintf(buf, sizeof(buf), "%.*f", display_info.decimals, display_value);
-  }
-  return buf;
+  return format_display_value(*value, display_info, enum_info);
 }
 
 std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab &tab) {
@@ -1417,7 +1370,9 @@ void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *st
     ImGui::SameLine();
     char tracker_text[64] = {};
     std::snprintf(tracker_text, sizeof(tracker_text), "%.3f", state->has_tracker_time ? state->tracker_time : 0.0);
+    app_push_mono_font();
     ImGui::TextUnformatted(tracker_text);
+    app_pop_mono_font();
     ImGui::EndDisabled();
   }
   ImGui::End();
@@ -1481,6 +1436,7 @@ void draw_browser_node(AppSession *session,
                               nullptr,
                               nullptr);
     if (!value_text.empty()) {
+      app_push_mono_font();
       ImGui::PushStyleColor(ImGuiCol_Text, selected ? color_rgb(70, 77, 86) : color_rgb(116, 124, 133));
       ImGui::RenderTextClipped(ImVec2(value_left, rect.Min.y + style.FramePadding.y),
                                ImVec2(value_right, rect.Max.y),
@@ -1489,6 +1445,7 @@ void draw_browser_node(AppSession *session,
                                nullptr,
                                ImVec2(1.0f, 0.0f));
       ImGui::PopStyleColor();
+      app_pop_mono_font();
     }
 
     if (clicked) {
@@ -2000,6 +1957,7 @@ struct PreparedCurve {
   float line_weight = 2.0f;
   bool stairs = false;
   const EnumInfo *enum_info = nullptr;
+  BrowserSeriesDisplayInfo display_info;
   std::vector<double> xs;
   std::vector<double> ys;
 };
@@ -2116,21 +2074,6 @@ std::optional<double> sample_curve_value_at_time(const PreparedCurve &curve, dou
   return y0 + (y1 - y0) * alpha;
 }
 
-bool try_format_enum_value(const EnumInfo *info, double value, std::string *formatted) {
-  if (info == nullptr) {
-    return false;
-  }
-  const int idx = static_cast<int>(std::llround(value));
-  if (idx < 0 || std::abs(value - static_cast<double>(idx)) > 0.01) {
-    return false;
-  }
-  if (static_cast<size_t>(idx) >= info->names.size() || info->names[static_cast<size_t>(idx)].empty()) {
-    return false;
-  }
-  *formatted = info->names[static_cast<size_t>(idx)];
-  return true;
-}
-
 int format_enum_axis_tick(double value, char *buf, int size, void *user_data) {
   const auto *ctx = static_cast<const PaneEnumContext *>(user_data);
   const int idx = static_cast<int>(std::llround(value));
@@ -2163,58 +2106,19 @@ int format_enum_axis_tick(double value, char *buf, int size, void *user_data) {
   return std::snprintf(buf, size, "%.6g", value);
 }
 
-void draw_cursor_overlay(const std::vector<PreparedCurve> &prepared_curves, double cursor_time) {
-  std::vector<std::string> lines;
-  lines.reserve(1 + std::min(prepared_curves.size(), kCursorOverlayValueCount));
-
-  char time_line[64] = {};
-  std::snprintf(time_line, sizeof(time_line), "t=%.3f", cursor_time);
-  lines.emplace_back(time_line);
-
-  for (const PreparedCurve &curve : prepared_curves) {
-    if (lines.size() > kCursorOverlayValueCount) {
-      break;
-    }
-    std::optional<double> value = sample_curve_value_at_time(curve, cursor_time);
-    if (!value.has_value()) {
-      continue;
-    }
-    char value_line[256] = {};
-    std::string enum_name;
-    if (try_format_enum_value(curve.enum_info, *value, &enum_name)) {
-      std::snprintf(value_line, sizeof(value_line), "%s %s", curve.label.c_str(), enum_name.c_str());
-    } else {
-      std::snprintf(value_line, sizeof(value_line), "%s %.6g", curve.label.c_str(), *value);
-    }
-    lines.emplace_back(value_line);
+std::string curve_legend_label(const PreparedCurve &curve, bool has_cursor_time, double cursor_time) {
+  if (!has_cursor_time) {
+    return curve.label;
   }
-
-  if (lines.size() <= 1) {
-    return;
+  const std::optional<double> value = sample_curve_value_at_time(curve, cursor_time);
+  if (!value.has_value()) {
+    return curve.label;
   }
-
-  const ImVec2 plot_pos = ImPlot::GetPlotPos();
-  const float line_height = ImGui::GetTextLineHeight();
-  float text_width = 0.0f;
-  for (const std::string &line : lines) {
-    text_width = std::max(text_width, ImGui::CalcTextSize(line.c_str()).x);
+  const std::string value_text = format_display_value(*value, curve.display_info, curve.enum_info);
+  if (value_text.empty()) {
+    return curve.label;
   }
-
-  const ImVec2 box_min(plot_pos.x + 10.0f, plot_pos.y + 10.0f);
-  const ImVec2 box_max(box_min.x + text_width + 16.0f,
-                       box_min.y + static_cast<float>(lines.size()) * line_height + 12.0f);
-  ImDrawList *draw_list = ImPlot::GetPlotDrawList();
-  draw_list->AddRectFilled(box_min, box_max, ImGui::GetColorU32(color_rgb(250, 251, 252, 0.92f)), 4.0f);
-  draw_list->AddRect(box_min, box_max, ImGui::GetColorU32(color_rgb(186, 190, 196)), 4.0f);
-
-  ImVec2 text_pos(box_min.x + 8.0f, box_min.y + 6.0f);
-  for (size_t i = 0; i < lines.size(); ++i) {
-    const ImU32 color = i == 0
-      ? ImGui::GetColorU32(color_rgb(70, 77, 86))
-      : ImGui::GetColorU32(color_rgb(88, 96, 104));
-    draw_list->AddText(text_pos, color, lines[i].c_str());
-    text_pos.y += line_height;
-  }
+  return curve.label + "  " + value_text;
 }
 
 bool build_curve_series(const AppSession &session,
@@ -2291,6 +2195,24 @@ bool build_curve_series(const AppSession &session,
     if (it != session.route_data.enum_info.end()) {
       prepared->enum_info = &it->second;
     }
+  }
+  if (prepared->enum_info != nullptr) {
+    prepared->display_info.integer_like = true;
+    prepared->display_info.decimals = 0;
+  } else if (!curve_has_local_samples(curve)
+             && !curve.derivative
+             && curve.value_scale == 1.0
+             && curve.value_offset == 0.0
+             && !curve.name.empty()
+             && curve.name.front() == '/') {
+    auto display_it = session.browser_display_by_path.find(curve.name);
+    if (display_it != session.browser_display_by_path.end()) {
+      prepared->display_info = display_it->second;
+    }
+  } else {
+    RouteSeries display_series;
+    display_series.values = transformed_ys;
+    prepared->display_info = compute_browser_display_info(session, display_series);
   }
   decimate_samples(transformed_xs, transformed_ys, max_points, &prepared->xs, &prepared->ys);
   prepared->stairs = !curve.derivative && is_digital_series(prepared->ys);
@@ -2545,6 +2467,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
 
   const double previous_x_min = state->x_view_min;
   const double previous_x_max = state->x_view_max;
+  app_push_mono_font();
   if (ImPlot::BeginPlot("##plot", plot_size, plot_flags)) {
     ImPlot::SetupAxes(nullptr, nullptr, x_axis_flags, y_axis_flags);
     ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f");
@@ -2567,7 +2490,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
 
     for (size_t i = 0; i < prepared_curves.size(); ++i) {
       const PreparedCurve &curve = prepared_curves[i];
-      std::string series_id = curve.label + "##curve" + std::to_string(i);
+      std::string series_id = curve_legend_label(curve, has_cursor_time, cursor_time) + "##curve" + std::to_string(i);
       ImPlotSpec spec;
       spec.LineColor = color_rgb(curve.color);
       spec.LineWeight = curve.line_weight;
@@ -2588,7 +2511,6 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
       cursor_spec.LineWeight = 1.0f;
       cursor_spec.Flags = ImPlotItemFlags_NoLegend;
       ImPlot::PlotInfLines("##tracker_cursor", &clamped_cursor_time, 1, cursor_spec);
-      draw_cursor_overlay(prepared_curves, clamped_cursor_time);
     }
     if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
       state->tracker_time = std::clamp(ImPlot::GetPlotMousePos().x, state->route_x_min, state->route_x_max);
@@ -2596,6 +2518,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
     }
     ImPlot::EndPlot();
   }
+  app_pop_mono_font();
   clamp_shared_range(state);
   if (std::abs(state->x_view_min - previous_x_min) > 1.0e-6
       || std::abs(state->x_view_max - previous_x_max) > 1.0e-6) {
@@ -3280,6 +3203,14 @@ std::array<uint8_t, 3> app_next_curve_color(const Pane &pane) {
 
 const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path) {
   return find_route_series(session, path);
+}
+
+void app_push_mono_font() {
+  push_mono_font_internal();
+}
+
+void app_pop_mono_font() {
+  pop_mono_font_internal();
 }
 
 void app_decimate_samples(const std::vector<double> &xs_in,

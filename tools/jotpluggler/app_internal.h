@@ -135,7 +135,7 @@ struct UiState {
   std::string error_text;
   bool open_error_popup = false;
   std::string status_text = "Ready";
-  float sidebar_width = 282.0f;
+  float sidebar_width = 320.0f;
   double route_x_min = 0.0;
   double route_x_max = 1.0;
   double x_view_min = 0.0;
@@ -163,6 +163,9 @@ const WorkspaceTab *app_active_tab(const SketchLayout &layout, const UiState &st
 WorkspaceTab *app_active_tab(SketchLayout *layout, const UiState &state);
 TabUiState *app_active_tab_state(UiState *state);
 
+void app_push_mono_font();
+void app_pop_mono_font();
+
 std::string app_curve_display_name(const Curve &curve);
 std::array<uint8_t, 3> app_next_curve_color(const Pane &pane);
 const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path);
@@ -171,5 +174,6 @@ void app_decimate_samples(const std::vector<double> &xs_in,
                           int max_points,
                           std::vector<double> *xs_out,
                           std::vector<double> *ys_out);
+void save_layout_json(const SketchLayout &layout, const std::filesystem::path &path);
 
 }  // namespace jotpluggler

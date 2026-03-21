@@ -331,7 +331,9 @@ void draw_log_row(const LogEntry &entry,
 
   bool clicked = false;
   ImGui::TableSetColumnIndex(0);
+  app_push_mono_font();
   clicked = clickable_text("time", time_text);
+  app_pop_mono_font();
 
   ImGui::TableSetColumnIndex(1);
   clicked = clickable_text("level", level_label(entry), level_text_color(entry, active)) || clicked;
@@ -368,7 +370,7 @@ void draw_logs_tab(AppSession *session, UiState *state) {
       logs_state.selected_sources.end());
   }
 
-  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
   ImGui::SetNextItemWidth(110.0f);
   const std::string levels_label = level_filter_label(logs_state.enabled_levels_mask);
   if (ImGui::BeginCombo("##logs_level", levels_label.c_str())) {
