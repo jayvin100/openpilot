@@ -3,24 +3,22 @@ import os
 import imgui
 
 Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal')
+try:
+  Import('replay_lib')
+except Exception:
+  SConscript(['#tools/replay/SConscript'])
+  Import('replay_lib')
 
 jot_env = env.Clone()
 jot_env["CPPPATH"] += [imgui.INCLUDE_DIR, imgui.SRC_DIR]
 jot_env["CXXFLAGS"] += ["-DGLFW_INCLUDE_NONE"]
 
-core_sources = {
-  "jot_main": "main.cc",
-  "jot_app": "app.cc",
-  "jot_bootstrap_icons": "bootstrap_icons.cc",
-  "jot_sketch_layout": "sketch_layout.cc",
-  "jot_framereader": "../replay/framereader.cc",
-  "jot_logreader": "../replay/logreader.cc",
-  "jot_replay_util": "../replay/util.cc",
-  "jot_filereader": "../replay/filereader.cc",
-  "jot_py_downloader": "../replay/py_downloader.cc",
-}
-if arch != "Darwin":
-  core_sources["jot_qcom_decoder"] = "../replay/qcom_decoder.cc"
+jot_sources = [
+  "main.cc",
+  "app.cc",
+  "bootstrap_icons.cc",
+  "sketch_layout.cc",
+]
 imgui_sources = [
   f"{imgui.SRC_DIR}/imgui.cpp",
   f"{imgui.SRC_DIR}/imgui_draw.cpp",
@@ -32,15 +30,18 @@ imgui_sources = [
   f"{imgui.SRC_DIR}/imgui_impl_glfw.cpp",
 ]
 
-objects = [jot_env.Object(target=name, source=src) for name, src in core_sources.items()]
-for source in imgui_sources:
+objects = []
+for source in jot_sources + imgui_sources:
   basename = os.path.splitext(os.path.basename(source))[0]
   objects.append(jot_env.Object(target=f"jot_{basename}", source=source))
 
 glfw_static = File(f"{imgui.LIB_DIR}/libglfw3.a")
-libs = [common, messaging, visionipc, cereal, glfw_static, "GL", "capnp", "kj", "avformat", "avcodec", "swresample",
-        "avutil", "x264", "yuv", "z", "bz2", "zstd", "m", "pthread"]
-if arch != "Darwin":
-  libs += ["dl"]
+frameworks = []
+libs = [replay_lib, common, messaging, visionipc, cereal, glfw_static,
+        "avformat", "avcodec", "swresample", "avutil", "x264", "yuv", "z", "bz2", "zstd", "m", "pthread"]
+if arch == "Darwin":
+  frameworks = ["OpenGL", "Cocoa", "IOKit", "CoreFoundation", "CoreVideo"]
+else:
+  libs += ["GL", "dl"]
 
-jot_env.Program("jotpluggler", objects, LIBS=libs)
+jot_env.Program("jotpluggler", objects, LIBS=libs, FRAMEWORKS=frameworks)
