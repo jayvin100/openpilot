@@ -2,8 +2,7 @@ import os
 
 import imgui
 
-Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal')
-Import('replay_lib')
+Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal', 'replay_lib')
 
 jot_env = env.Clone()
 jot_env["LIBPATH"] += [imgui.MESA_DIR]

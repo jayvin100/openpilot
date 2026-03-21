@@ -254,14 +254,13 @@ SConscript([
   'selfdrive/ui/SConscript',
 ])
 
-if arch != "larch64" and (Dir('#tools/cabana/').exists() or Dir('#tools/jotpluggler/').exists()):
-  SConscript(['tools/replay/SConscript'])
-
-if Dir('#tools/cabana/').exists() and arch != "larch64":
-  SConscript(['tools/cabana/SConscript'])
-
-if Dir('#tools/jotpluggler/').exists() and arch != "larch64":
-  SConscript(['tools/jotpluggler/SConscript'])
+# Build tools
+if arch != "larch64":
+  SConscript([
+    'tools/replay/SConscript',
+    'tools/jotpluggler/SConscript',
+    'tools/cabana/SConscript',
+  ])
 
 
 env.CompilationDatabase('compile_commands.json')

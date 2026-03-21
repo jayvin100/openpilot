@@ -2,13 +2,9 @@ import subprocess
 import os
 import shutil
 
-try:
-  import libusb
-except ImportError:
-  Return()
+import libusb
 
-Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal')
-Import('replay_lib')
+Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal', 'replay_lib')
 
 # Detect Qt - skip build if not available
 if arch == "Darwin":
