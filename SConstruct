@@ -258,8 +258,8 @@ SConscript([
 if arch != "larch64":
   SConscript([
     'tools/replay/SConscript',
-    'tools/jotpluggler/SConscript',
     'tools/cabana/SConscript',
+    'tools/jotpluggler/SConscript',
   ])
 
 
