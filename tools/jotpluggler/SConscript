@@ -3,11 +3,7 @@ import os
 import imgui
 
 Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal')
-try:
-  Import('replay_lib')
-except Exception:
-  SConscript(['#tools/replay/SConscript'])
-  Import('replay_lib')
+Import('replay_lib')
 
 jot_env = env.Clone()
 jot_env["CPPPATH"] += [imgui.INCLUDE_DIR, imgui.SRC_DIR]
