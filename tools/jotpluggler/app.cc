@@ -1954,6 +1954,7 @@ struct PreparedCurve {
   bool stairs = false;
   const EnumInfo *enum_info = nullptr;
   BrowserSeriesDisplayInfo display_info;
+  std::optional<double> legend_value;
   std::vector<double> xs;
   std::vector<double> ys;
 };
@@ -2038,32 +2039,38 @@ void decimate_samples(const std::vector<double> &xs_in,
   }
 }
 
-std::optional<double> sample_curve_value_at_time(const PreparedCurve &curve, double tm) {
-  if (curve.xs.size() < 2 || curve.xs.size() != curve.ys.size()) {
+std::optional<double> sample_xy_value_at_time(const std::vector<double> &xs,
+                                              const std::vector<double> &ys,
+                                              bool stairs,
+                                              double tm) {
+  if (xs.size() < 2 || xs.size() != ys.size()) {
     return std::nullopt;
   }
-  if (tm < curve.xs.front() || tm > curve.xs.back()) {
-    return std::nullopt;
+  if (tm <= xs.front()) {
+    return ys.front();
+  }
+  if (tm >= xs.back()) {
+    return ys.back();
   }
 
-  const auto upper = std::lower_bound(curve.xs.begin(), curve.xs.end(), tm);
-  if (upper == curve.xs.begin()) {
-    return curve.ys.front();
+  const auto upper = std::lower_bound(xs.begin(), xs.end(), tm);
+  if (upper == xs.begin()) {
+    return ys.front();
   }
-  if (upper == curve.xs.end()) {
-    return curve.ys.back();
+  if (upper == xs.end()) {
+    return ys.back();
   }
 
-  const size_t upper_index = static_cast<size_t>(std::distance(curve.xs.begin(), upper));
+  const size_t upper_index = static_cast<size_t>(std::distance(xs.begin(), upper));
   const size_t lower_index = upper_index - 1;
-  const double x0 = curve.xs[lower_index];
-  const double x1 = curve.xs[upper_index];
-  const double y0 = curve.ys[lower_index];
-  const double y1 = curve.ys[upper_index];
+  const double x0 = xs[lower_index];
+  const double x1 = xs[upper_index];
+  const double y0 = ys[lower_index];
+  const double y1 = ys[upper_index];
   if (std::abs(tm - x1) < 1.0e-9) {
     return y1;
   }
-  if (curve.stairs || x1 <= x0) {
+  if (stairs || x1 <= x0) {
     return y0;
   }
   const double alpha = (tm - x0) / (x1 - x0);
@@ -2106,11 +2113,11 @@ std::string curve_legend_label(const PreparedCurve &curve, bool has_cursor_time,
   if (!has_cursor_time) {
     return curve.label;
   }
-  const std::optional<double> value = sample_curve_value_at_time(curve, cursor_time);
-  if (!value.has_value()) {
+  (void)cursor_time;
+  if (!curve.legend_value.has_value()) {
     return curve.label;
   }
-  const std::string value_text = format_display_value(*value, curve.display_info, curve.enum_info);
+  const std::string value_text = format_display_value(*curve.legend_value, curve.display_info, curve.enum_info);
   if (value_text.empty()) {
     return curve.label;
   }
@@ -2178,6 +2185,8 @@ bool build_curve_series(const AppSession &session,
     value = value * curve.value_scale + curve.value_offset;
   }
 
+  const bool stairs = !curve.derivative && is_digital_series(transformed_ys);
+
   prepared->label = curve_display_name(curve);
   prepared->color = curve.color;
   prepared->line_weight = curve.derivative ? 1.8f : 2.25f;
@@ -2210,8 +2219,11 @@ bool build_curve_series(const AppSession &session,
     display_series.values = transformed_ys;
     prepared->display_info = compute_browser_display_info(session, display_series);
   }
+  if (state.has_tracker_time) {
+    prepared->legend_value = sample_xy_value_at_time(transformed_xs, transformed_ys, stairs, state.tracker_time);
+  }
   decimate_samples(transformed_xs, transformed_ys, max_points, &prepared->xs, &prepared->ys);
-  prepared->stairs = !curve.derivative && is_digital_series(prepared->ys);
+  prepared->stairs = stairs;
   return prepared->xs.size() > 1 && prepared->xs.size() == prepared->ys.size();
 }
 

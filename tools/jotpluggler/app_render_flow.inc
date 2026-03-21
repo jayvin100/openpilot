@@ -12,7 +12,7 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
     step_tracker(state, 1.0);
   }
-  if (!ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+  if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
     state->playback_playing = !state->playback_playing;
   }
   advance_playback(state, *session);
