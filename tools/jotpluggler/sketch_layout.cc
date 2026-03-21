@@ -85,6 +85,9 @@ struct ResolvedService {
   uint16_t event_which = 0;
   capnp::StructSchema::Field union_field;
   std::string service_name;
+  int valid_slot = -1;
+  int log_mono_time_slot = -1;
+  int seconds_slot = -1;
   ResolvedNode payload;
 };
 
@@ -1017,6 +1020,14 @@ ResolvedNode build_resolved_type(const capnp::Type &type,
   return node;
 }
 
+int register_fixed_series_path(const std::string &path,
+                               size_t *next_fixed_slot,
+                               std::vector<std::string> *fixed_paths) {
+  const int slot = static_cast<int>((*next_fixed_slot)++);
+  fixed_paths->push_back(path);
+  return slot;
+}
+
 const SchemaIndex &SchemaIndex::instance() {
   static const SchemaIndex index = [] {
     SchemaIndex out;
@@ -1032,6 +1043,12 @@ const SchemaIndex &SchemaIndex::instance() {
       service.event_which = union_field.getProto().getDiscriminantValue();
       service.union_field = union_field;
       service.service_name = union_field.getProto().getName().cStr();
+      service.valid_slot = register_fixed_series_path(
+        "/" + service.service_name + "/valid", &next_fixed_slot, &out.fixed_paths);
+      service.log_mono_time_slot = register_fixed_series_path(
+        "/" + service.service_name + "/logMonoTime", &next_fixed_slot, &out.fixed_paths);
+      service.seconds_slot = register_fixed_series_path(
+        "/" + service.service_name + "/t", &next_fixed_slot, &out.fixed_paths);
       service.payload = build_resolved_type(
         union_field.getType(),
         false,
@@ -1247,6 +1264,15 @@ void append_event_fast(cereal::Event::Which which,
   capnp::FlatArrayMessageReader event_reader(data);
   const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
   const double tm = static_cast<double>(event.getLogMonoTime()) / 1.0e9 - time_offset;
+  append_fixed_scalar_point(&series->fixed_series[static_cast<size_t>(service.valid_slot)],
+                            tm,
+                            event.getValid() ? 1.0 : 0.0);
+  append_fixed_scalar_point(&series->fixed_series[static_cast<size_t>(service.log_mono_time_slot)],
+                            tm,
+                            static_cast<double>(event.getLogMonoTime()));
+  append_fixed_scalar_point(&series->fixed_series[static_cast<size_t>(service.seconds_slot)],
+                            tm,
+                            tm);
   if (skip_raw_can && (service.service_name == "can" || service.service_name == "sendcan")) {
     auto decode_message = [&](uint8_t bus, uint32_t address, const auto &dat_reader) {
       if (can_dbc == nullptr) {

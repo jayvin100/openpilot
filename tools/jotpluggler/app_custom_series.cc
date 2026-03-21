@@ -37,6 +37,8 @@ struct CustomSeriesTemplate {
   const char *globals_code;
   const char *function_code;
   const char *preview_text;
+  int required_additional_sources;
+  const char *requirement_text;
 };
 
 int input_text_resize_callback(ImGuiInputTextCallbackData *data) {
@@ -447,24 +449,32 @@ const std::array<CustomSeriesTemplate, 4> &custom_series_templates() {
       .globals_code = "",
       .function_code = "return np.gradient(value, time)",
       .preview_text = "return np.gradient(value, time)",
+      .required_additional_sources = 0,
+      .requirement_text = "",
     },
     {
       .name = "Difference",
       .globals_code = "",
       .function_code = "return value - v1",
       .preview_text = "Requires one additional source timeseries.\n\nreturn value - v1",
+      .required_additional_sources = 1,
+      .requirement_text = "Difference requires one additional source timeseries for v1.",
     },
     {
       .name = "Smoothing",
       .globals_code = "window = 20\nweights = np.ones(window) / window",
       .function_code = "return np.convolve(value, weights, mode='same')",
       .preview_text = "window = 20\nweights = np.ones(window) / window\n\nreturn np.convolve(value, weights, mode='same')",
+      .required_additional_sources = 0,
+      .requirement_text = "",
     },
     {
       .name = "Integral",
       .globals_code = "",
       .function_code = "dt = np.mean(np.diff(time))\nreturn np.cumsum(value) * dt",
       .preview_text = "dt = np.mean(np.diff(time))\nreturn np.cumsum(value) * dt",
+      .required_additional_sources = 0,
+      .requirement_text = "",
     },
   }};
   return kTemplates;
@@ -510,7 +520,7 @@ void draw_custom_series_preview(const AppSession &session, CustomSeriesEditorSta
         && series->times.size() > 1 && series->times.size() == series->values.size()) {
       preview_xs = series->times;
       preview_ys = series->values;
-      preview_label = "Input preview";
+      preview_label = "Input preview (not result)";
     }
   }
 
@@ -539,7 +549,7 @@ void draw_custom_series_preview(const AppSession &session, CustomSeriesEditorSta
   } else {
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 72.0f);
     ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(116, 124, 133));
-    ImGui::TextWrapped("Choose an input timeseries or click Apply to preview the custom result.");
+    ImGui::TextWrapped("Choose an input timeseries or click Preview to evaluate the custom result.");
     ImGui::PopStyleColor();
   }
 }
@@ -560,6 +570,87 @@ std::string custom_series_name_status(const Pane &pane, std::string_view name) {
   return "new curve";
 }
 
+const CustomSeriesTemplate &selected_custom_series_template(const CustomSeriesEditorState &editor) {
+  const auto &templates = custom_series_templates();
+  return templates[static_cast<size_t>(std::clamp(editor.selected_template, 0, static_cast<int>(templates.size()) - 1))];
+}
+
+bool custom_series_template_ready(const CustomSeriesEditorState &editor) {
+  const CustomSeriesTemplate &templ = selected_custom_series_template(editor);
+  return !editor.linked_source.empty()
+      && static_cast<int>(editor.additional_sources.size()) >= templ.required_additional_sources;
+}
+
+bool prepare_custom_series_spec(CustomSeriesEditorState *editor,
+                                UiState *state,
+                                bool require_name,
+                                CustomPythonSeries *out_spec) {
+  editor->name = trim_copy(editor->name);
+  editor->linked_source = trim_copy(editor->linked_source);
+  for (std::string &path : editor->additional_sources) {
+    path = trim_copy(path);
+  }
+  editor->additional_sources.erase(
+    std::remove_if(editor->additional_sources.begin(), editor->additional_sources.end(),
+                   [&](const std::string &path) { return path.empty() || path == editor->linked_source; }),
+    editor->additional_sources.end());
+
+  if (require_name && editor->name.empty()) {
+    state->error_text = "Custom series name is required.";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (require_name && !editor->name.empty() && editor->name.front() == '/') {
+    state->error_text = "Custom series names may not start with '/'.";
+    state->open_error_popup = true;
+    return false;
+  }
+
+  *out_spec = CustomPythonSeries{
+    .linked_source = editor->linked_source,
+    .additional_sources = editor->additional_sources,
+    .globals_code = editor->globals_code,
+    .function_code = editor->function_code,
+  };
+  return true;
+}
+
+bool preview_custom_series_editor(AppSession *session, UiState *state) {
+  CustomSeriesEditorState &editor = state->custom_series;
+  const CustomSeriesTemplate &templ = selected_custom_series_template(editor);
+  if (editor.linked_source.empty()) {
+    state->error_text = "Choose an input timeseries before previewing.";
+    state->open_error_popup = true;
+    state->status_text = "Custom series preview failed";
+    return false;
+  }
+  if (static_cast<int>(editor.additional_sources.size()) < templ.required_additional_sources) {
+    state->error_text = templ.requirement_text;
+    state->open_error_popup = true;
+    state->status_text = "Custom series preview failed";
+    return false;
+  }
+  CustomPythonSeries spec;
+  if (!prepare_custom_series_spec(&editor, state, false, &spec)) {
+    return false;
+  }
+
+  try {
+    PythonEvalResult result = evaluate_custom_python_series(*session, spec);
+    editor.preview_label = editor.name.empty() ? "Result preview" : editor.name;
+    editor.preview_xs = std::move(result.xs);
+    editor.preview_ys = std::move(result.ys);
+    editor.preview_is_result = true;
+    state->status_text = "Previewed custom series";
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    state->status_text = "Custom series preview failed";
+    return false;
+  }
+}
+
 bool apply_custom_series_editor(AppSession *session, UiState *state) {
   WorkspaceTab *tab = app_active_tab(&session->layout, *state);
   TabUiState *tab_state = app_active_tab_state(state);
@@ -573,33 +664,10 @@ bool apply_custom_series_editor(AppSession *session, UiState *state) {
   }
 
   CustomSeriesEditorState &editor = state->custom_series;
-  editor.name = trim_copy(editor.name);
-  editor.linked_source = trim_copy(editor.linked_source);
-  for (std::string &path : editor.additional_sources) {
-    path = trim_copy(path);
-  }
-  editor.additional_sources.erase(
-    std::remove_if(editor.additional_sources.begin(), editor.additional_sources.end(),
-                   [&](const std::string &path) { return path.empty() || path == editor.linked_source; }),
-    editor.additional_sources.end());
-
-  if (editor.name.empty()) {
-    state->error_text = "Custom series name is required.";
-    state->open_error_popup = true;
+  CustomPythonSeries spec;
+  if (!prepare_custom_series_spec(&editor, state, true, &spec)) {
     return false;
   }
-  if (!editor.name.empty() && editor.name.front() == '/') {
-    state->error_text = "Custom series names may not start with '/'.";
-    state->open_error_popup = true;
-    return false;
-  }
-
-  CustomPythonSeries spec = {
-    .linked_source = editor.linked_source,
-    .additional_sources = editor.additional_sources,
-    .globals_code = editor.globals_code,
-    .function_code = editor.function_code,
-  };
 
   try {
     PythonEvalResult result = evaluate_custom_python_series(*session, spec);
@@ -679,184 +747,197 @@ void draw_custom_series_editor(AppSession *session, UiState *state) {
 
   if (ImGui::BeginTabBar("##custom_series_tabs")) {
     if (ImGui::BeginTabItem("Single Function")) {
-      const float footer_height = ImGui::GetFrameHeightWithSpacing() + 18.0f;
-      const float preview_height = std::max(200.0f, ImGui::GetContentRegionAvail().y * 0.28f);
-      if (ImGui::BeginChild("##custom_series_preview_child", ImVec2(0.0f, preview_height), true)) {
-        draw_custom_series_preview(*session, &editor);
-      }
-      ImGui::EndChild();
-      ImGui::Spacing();
+      const float footer_height = ImGui::GetFrameHeightWithSpacing() * 2.0f + 10.0f;
+      if (ImGui::BeginChild("##custom_series_body",
+                            ImVec2(0.0f, std::max(1.0f, ImGui::GetContentRegionAvail().y - footer_height)),
+                            false)) {
+        const float preview_height = std::max(200.0f, ImGui::GetContentRegionAvail().y * 0.28f);
+        if (ImGui::BeginChild("##custom_series_preview_child", ImVec2(0.0f, preview_height), true)) {
+          draw_custom_series_preview(*session, &editor);
+        }
+        ImGui::EndChild();
+        ImGui::Spacing();
 
-      const float editor_height = std::max(1.0f, ImGui::GetContentRegionAvail().y - footer_height);
-      if (ImGui::BeginTable("##custom_series_editor_table",
-                            2,
-                            ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp,
-                            ImVec2(0.0f, editor_height))) {
-        ImGui::TableSetupColumn("left", ImGuiTableColumnFlags_WidthFixed, 320.0f);
-        ImGui::TableSetupColumn("right", ImGuiTableColumnFlags_WidthStretch);
+        const float editor_height = std::max(1.0f, ImGui::GetContentRegionAvail().y);
+        if (ImGui::BeginTable("##custom_series_editor_table",
+                              2,
+                              ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp,
+                              ImVec2(0.0f, editor_height))) {
+          ImGui::TableSetupColumn("left", ImGuiTableColumnFlags_WidthFixed, 320.0f);
+          ImGui::TableSetupColumn("right", ImGuiTableColumnFlags_WidthStretch);
 
-        ImGui::TableNextColumn();
-        if (ImGui::BeginChild("##custom_series_left", ImVec2(0.0f, 0.0f), false)) {
-          ImGui::TextWrapped("Input timeseries. Provides arguments time and value:");
-          ImGui::SetNextItemWidth(-FLT_MIN);
-          input_text_string("##custom_linked_source", &editor.linked_source, ImGuiInputTextFlags_ReadOnly);
-          if (ImGui::BeginDragDropTarget()) {
-            if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATH")) {
-              editor.linked_source = static_cast<const char *>(payload->Data);
+          ImGui::TableNextColumn();
+          if (ImGui::BeginChild("##custom_series_left", ImVec2(0.0f, 0.0f), false)) {
+            ImGui::TextWrapped("Input timeseries. Provides arguments time and value:");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            input_text_string("##custom_linked_source", &editor.linked_source, ImGuiInputTextFlags_ReadOnly);
+            if (ImGui::BeginDragDropTarget()) {
+              if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATH")) {
+                editor.linked_source = static_cast<const char *>(payload->Data);
+                editor.additional_sources.erase(
+                  std::remove(editor.additional_sources.begin(), editor.additional_sources.end(), editor.linked_source),
+                  editor.additional_sources.end());
+                editor.preview_is_result = false;
+              }
+              ImGui::EndDragDropTarget();
+            }
+            if (ImGui::Button("Use Selected", ImVec2(120.0f, 0.0f)) && !state->selected_browser_path.empty()) {
+              editor.linked_source = state->selected_browser_path;
               editor.additional_sources.erase(
                 std::remove(editor.additional_sources.begin(), editor.additional_sources.end(), editor.linked_source),
                 editor.additional_sources.end());
               editor.preview_is_result = false;
             }
-            ImGui::EndDragDropTarget();
-          }
-          if (ImGui::Button("Use Selected", ImVec2(120.0f, 0.0f)) && !state->selected_browser_path.empty()) {
-            editor.linked_source = state->selected_browser_path;
-            editor.additional_sources.erase(
-              std::remove(editor.additional_sources.begin(), editor.additional_sources.end(), editor.linked_source),
-              editor.additional_sources.end());
-            editor.preview_is_result = false;
-          }
-          ImGui::SameLine();
-          if (ImGui::Button("Clear", ImVec2(120.0f, 0.0f))) {
-            editor.linked_source.clear();
-            editor.preview_is_result = false;
-          }
+            ImGui::SameLine();
+            if (ImGui::Button("Clear", ImVec2(120.0f, 0.0f))) {
+              editor.linked_source.clear();
+              editor.preview_is_result = false;
+            }
 
           ImGui::Spacing();
           ImGui::TextUnformatted("Additional source timeseries:");
           ImGui::SameLine();
+          const CustomSeriesTemplate &selected_template = selected_custom_series_template(editor);
+          if (selected_template.required_additional_sources > 0) {
+            const bool ready = static_cast<int>(editor.additional_sources.size()) >= selected_template.required_additional_sources;
+            ImGui::TextColored(ready ? color_rgb(58, 126, 73) : color_rgb(180, 122, 44),
+                               "%s",
+                               selected_template.requirement_text);
+          }
+          ImGui::SameLine();
           ImGui::BeginDisabled(editor.selected_additional_source < 0
                                || editor.selected_additional_source >= static_cast<int>(editor.additional_sources.size()));
-          if (ImGui::Button("Remove Selected", ImVec2(140.0f, 0.0f))
-              && editor.selected_additional_source >= 0
-              && editor.selected_additional_source < static_cast<int>(editor.additional_sources.size())) {
-            editor.additional_sources.erase(editor.additional_sources.begin()
-              + static_cast<std::ptrdiff_t>(editor.selected_additional_source));
-            editor.selected_additional_source = editor.additional_sources.empty()
-              ? -1
-              : std::clamp(editor.selected_additional_source, 0,
-                           static_cast<int>(editor.additional_sources.size()) - 1);
-            editor.preview_is_result = false;
-          }
-          ImGui::EndDisabled();
+            if (ImGui::Button("Remove Selected", ImVec2(140.0f, 0.0f))
+                && editor.selected_additional_source >= 0
+                && editor.selected_additional_source < static_cast<int>(editor.additional_sources.size())) {
+              editor.additional_sources.erase(editor.additional_sources.begin()
+                + static_cast<std::ptrdiff_t>(editor.selected_additional_source));
+              editor.selected_additional_source = editor.additional_sources.empty()
+                ? -1
+                : std::clamp(editor.selected_additional_source, 0,
+                             static_cast<int>(editor.additional_sources.size()) - 1);
+              editor.preview_is_result = false;
+            }
+            ImGui::EndDisabled();
 
-          const float additional_height = 156.0f;
-          if (ImGui::BeginChild("##custom_additional_sources", ImVec2(0.0f, additional_height), true)) {
-            if (ImGui::BeginTable("##custom_additional_table",
-                                  2,
-                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-              ImGui::TableSetupColumn("id", ImGuiTableColumnFlags_WidthFixed, 42.0f);
-              ImGui::TableSetupColumn("path", ImGuiTableColumnFlags_WidthStretch);
-              for (size_t i = 0; i < editor.additional_sources.size(); ++i) {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Text("v%zu", i + 1);
-                ImGui::TableNextColumn();
-                const bool selected = editor.selected_additional_source == static_cast<int>(i);
-                if (ImGui::Selectable(editor.additional_sources[i].c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
-                  editor.selected_additional_source = static_cast<int>(i);
+            const float additional_height = 156.0f;
+            if (ImGui::BeginChild("##custom_additional_sources", ImVec2(0.0f, additional_height), true)) {
+              if (ImGui::BeginTable("##custom_additional_table",
+                                    2,
+                                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn("id", ImGuiTableColumnFlags_WidthFixed, 42.0f);
+                ImGui::TableSetupColumn("path", ImGuiTableColumnFlags_WidthStretch);
+                for (size_t i = 0; i < editor.additional_sources.size(); ++i) {
+                  ImGui::TableNextRow();
+                  ImGui::TableNextColumn();
+                  ImGui::Text("v%zu", i + 1);
+                  ImGui::TableNextColumn();
+                  const bool selected = editor.selected_additional_source == static_cast<int>(i);
+                  if (ImGui::Selectable(editor.additional_sources[i].c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                    editor.selected_additional_source = static_cast<int>(i);
+                  }
                 }
+                ImGui::EndTable();
               }
-              ImGui::EndTable();
-            }
-            if (ImGui::BeginDragDropTarget()) {
-              if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATH")) {
-                if (add_additional_source(&editor, static_cast<const char *>(payload->Data))) {
-                  editor.preview_is_result = false;
+              if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATH")) {
+                  if (add_additional_source(&editor, static_cast<const char *>(payload->Data))) {
+                    editor.preview_is_result = false;
+                  }
                 }
-              }
-              ImGui::EndDragDropTarget();
-            }
-          }
-          ImGui::EndChild();
-          if (ImGui::Button("Add Selected", ImVec2(120.0f, 0.0f))) {
-            for (const std::string &path : state->selected_browser_paths) {
-              if (add_additional_source(&editor, path)) {
-                editor.preview_is_result = false;
+                ImGui::EndDragDropTarget();
               }
             }
-          }
-
-          ImGui::Spacing();
-          ImGui::SeparatorText("Function library");
-          const auto &templates = custom_series_templates();
-          if (ImGui::BeginChild("##custom_series_template_list", ImVec2(0.0f, 132.0f), true)) {
-            for (size_t i = 0; i < templates.size(); ++i) {
-              const bool selected = editor.selected_template == static_cast<int>(i);
-              if (ImGui::Selectable(templates[i].name, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
-                editor.selected_template = static_cast<int>(i);
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                  editor.globals_code = templates[i].globals_code;
-                  editor.function_code = templates[i].function_code;
+            ImGui::EndChild();
+            if (ImGui::Button("Add Selected", ImVec2(120.0f, 0.0f))) {
+              for (const std::string &path : state->selected_browser_paths) {
+                if (add_additional_source(&editor, path)) {
                   editor.preview_is_result = false;
                 }
               }
             }
-          }
-          ImGui::EndChild();
-          if (ImGui::Button("Use Selected Example", ImVec2(0.0f, 0.0f))) {
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Function library");
+            const auto &templates = custom_series_templates();
+            if (ImGui::BeginChild("##custom_series_template_list", ImVec2(0.0f, 132.0f), true)) {
+              for (size_t i = 0; i < templates.size(); ++i) {
+                const bool selected = editor.selected_template == static_cast<int>(i);
+                if (ImGui::Selectable(templates[i].name, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                  editor.selected_template = static_cast<int>(i);
+                  if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    editor.globals_code = templates[i].globals_code;
+                    editor.function_code = templates[i].function_code;
+                    editor.preview_is_result = false;
+                  }
+                }
+              }
+              ImGui::EndChild();
+            }
+            if (ImGui::Button("Use Selected Example", ImVec2(0.0f, 0.0f))) {
+              const CustomSeriesTemplate &selected = templates[static_cast<size_t>(std::clamp(editor.selected_template, 0,
+                static_cast<int>(templates.size()) - 1))];
+              editor.globals_code = selected.globals_code;
+              editor.function_code = selected.function_code;
+              editor.preview_is_result = false;
+            }
+            ImGui::Spacing();
+            ImGui::TextDisabled("Preview");
+            ImGui::BeginChild("##custom_series_template_preview", ImVec2(0.0f, 0.0f), true);
             const CustomSeriesTemplate &selected = templates[static_cast<size_t>(std::clamp(editor.selected_template, 0,
               static_cast<int>(templates.size()) - 1))];
-            editor.globals_code = selected.globals_code;
-            editor.function_code = selected.function_code;
-            editor.preview_is_result = false;
+            ImGui::TextUnformatted(selected.preview_text);
+            ImGui::EndChild();
           }
-          ImGui::Spacing();
-          ImGui::TextDisabled("Preview");
-          ImGui::BeginChild("##custom_series_template_preview", ImVec2(0.0f, 0.0f), true);
-          const CustomSeriesTemplate &selected = templates[static_cast<size_t>(std::clamp(editor.selected_template, 0,
-            static_cast<int>(templates.size()) - 1))];
-          ImGui::TextUnformatted(selected.preview_text);
           ImGui::EndChild();
+
+          ImGui::TableNextColumn();
+          if (ImGui::BeginChild("##custom_series_right", ImVec2(0.0f, 0.0f), false)) {
+            const std::string name_status = active_pane != nullptr ? custom_series_name_status(*active_pane, editor.name)
+                                                                   : std::string("no active pane");
+            ImGui::TextUnformatted("New name:");
+            ImGui::SameLine();
+            if (name_status == "name required" || name_status == "cannot start with /") {
+              ImGui::TextColored(color_rgb(200, 72, 64), "%s", name_status.c_str());
+            } else {
+              ImGui::TextColored(color_rgb(58, 126, 73), "%s", name_status.c_str());
+            }
+            if (editor.focus_name) {
+              ImGui::SetKeyboardFocusHere();
+              editor.focus_name = false;
+            }
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            input_text_string("##custom_series_name", &editor.name, ImGuiInputTextFlags_AutoSelectAll);
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Global variables");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Help")) {
+              editor.open_help = true;
+            }
+            const float globals_height = std::max(96.0f, ImGui::GetContentRegionAvail().y * 0.28f);
+            if (input_text_multiline_string("##custom_series_globals",
+                                            &editor.globals_code,
+                                            ImVec2(-FLT_MIN, globals_height),
+                                            ImGuiInputTextFlags_AllowTabInput)) {
+              editor.preview_is_result = false;
+            }
+
+            ImGui::Spacing();
+            ImGui::TextUnformatted("def calc(time, value):");
+            const float function_height = std::max(180.0f, ImGui::GetContentRegionAvail().y - 16.0f);
+            if (input_text_multiline_string("##custom_series_function",
+                                            &editor.function_code,
+                                            ImVec2(-FLT_MIN, function_height),
+                                            ImGuiInputTextFlags_AllowTabInput)) {
+              editor.preview_is_result = false;
+            }
+          }
+          ImGui::EndChild();
+          ImGui::EndTable();
         }
-        ImGui::EndChild();
-
-        ImGui::TableNextColumn();
-        if (ImGui::BeginChild("##custom_series_right", ImVec2(0.0f, 0.0f), false)) {
-          const std::string name_status = active_pane != nullptr ? custom_series_name_status(*active_pane, editor.name)
-                                                                 : std::string("no active pane");
-          ImGui::TextUnformatted("New name:");
-          ImGui::SameLine();
-          if (name_status == "name required" || name_status == "cannot start with /") {
-            ImGui::TextColored(color_rgb(200, 72, 64), "%s", name_status.c_str());
-          } else {
-            ImGui::TextColored(color_rgb(58, 126, 73), "%s", name_status.c_str());
-          }
-          if (editor.focus_name) {
-            ImGui::SetKeyboardFocusHere();
-            editor.focus_name = false;
-          }
-          ImGui::SetNextItemWidth(-FLT_MIN);
-          input_text_string("##custom_series_name", &editor.name, ImGuiInputTextFlags_AutoSelectAll);
-
-          ImGui::Spacing();
-          ImGui::SeparatorText("Global variables");
-          ImGui::SameLine();
-          if (ImGui::SmallButton("Help")) {
-            editor.open_help = true;
-          }
-          const float globals_height = std::max(96.0f, ImGui::GetContentRegionAvail().y * 0.28f);
-          if (input_text_multiline_string("##custom_series_globals",
-                                          &editor.globals_code,
-                                          ImVec2(-FLT_MIN, globals_height),
-                                          ImGuiInputTextFlags_AllowTabInput)) {
-            editor.preview_is_result = false;
-          }
-
-          ImGui::Spacing();
-          ImGui::TextUnformatted("def calc(time, value):");
-          const float function_height = std::max(180.0f, ImGui::GetContentRegionAvail().y - 16.0f);
-          if (input_text_multiline_string("##custom_series_function",
-                                          &editor.function_code,
-                                          ImVec2(-FLT_MIN, function_height),
-                                          ImGuiInputTextFlags_AllowTabInput)) {
-            editor.preview_is_result = false;
-          }
-        }
-        ImGui::EndChild();
-        ImGui::EndTable();
       }
+      ImGui::EndChild();
 
       ImGui::Spacing();
       if (ImGui::Button("New", ImVec2(120.0f, 0.0f))) {
@@ -866,6 +947,20 @@ void draw_custom_series_editor(AppSession *session, UiState *state) {
         }
         editor.open = true;
         editor.focus_name = true;
+      }
+      ImGui::SameLine();
+      ImGui::BeginDisabled(!custom_series_template_ready(editor));
+      if (ImGui::Button("Preview Result", ImVec2(120.0f, 0.0f))) {
+        preview_custom_series_editor(session, state);
+      }
+      ImGui::EndDisabled();
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !custom_series_template_ready(editor)) {
+        const CustomSeriesTemplate &templ = selected_custom_series_template(editor);
+        if (editor.linked_source.empty()) {
+          ImGui::SetTooltip("Choose an input timeseries first.");
+        } else if (static_cast<int>(editor.additional_sources.size()) < templ.required_additional_sources) {
+          ImGui::SetTooltip("%s", templ.requirement_text);
+        }
       }
       ImGui::SameLine();
       if (ImGui::Button("Apply", ImVec2(120.0f, 0.0f))) {
@@ -879,13 +974,6 @@ void draw_custom_series_editor(AppSession *session, UiState *state) {
       ImGui::EndTabItem();
     }
 
-    if (ImGui::BeginTabItem("Batch Functions")) {
-      ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(110, 118, 128));
-      ImGui::TextWrapped("Batch functions are not implemented yet. The single-function editor uses Python and "
-                         "matches the current scope from NOTES.md.");
-      ImGui::PopStyleColor();
-      ImGui::EndTabItem();
-    }
     ImGui::EndTabBar();
   }
 }

@@ -530,7 +530,7 @@ struct PaneDropAction {
   PaneDropZone zone = PaneDropZone::Center;
   int target_pane_index = -1;
   bool from_browser = false;
-  std::string browser_path;
+  std::vector<std::string> browser_paths;
   PaneCurveDragPayload curve_ref;
 };
 
@@ -848,6 +848,41 @@ std::vector<std::string> visible_browser_paths(const RouteData &route_data, bool
 bool browser_selection_contains(const UiState &state, std::string_view path) {
   return std::find(state.selected_browser_paths.begin(), state.selected_browser_paths.end(), path)
     != state.selected_browser_paths.end();
+}
+
+std::vector<std::string> browser_drag_paths(const UiState &state, const std::string &dragged_path) {
+  if (browser_selection_contains(state, dragged_path) && !state.selected_browser_paths.empty()) {
+    return state.selected_browser_paths;
+  }
+  return {dragged_path};
+}
+
+std::string encode_browser_drag_payload(const std::vector<std::string> &paths) {
+  std::string payload;
+  for (size_t i = 0; i < paths.size(); ++i) {
+    if (i != 0) {
+      payload.push_back('\n');
+    }
+    payload += paths[i];
+  }
+  return payload;
+}
+
+std::vector<std::string> decode_browser_drag_payload(std::string_view payload) {
+  std::vector<std::string> out;
+  size_t begin = 0;
+  while (begin <= payload.size()) {
+    const size_t end = payload.find('\n', begin);
+    const size_t length = (end == std::string_view::npos ? payload.size() : end) - begin;
+    if (length > 0) {
+      out.emplace_back(payload.substr(begin, length));
+    }
+    if (end == std::string_view::npos) {
+      break;
+    }
+    begin = end + 1;
+  }
+  return out;
 }
 
 void set_browser_selection_single(UiState *state, const std::string &path) {
@@ -1457,8 +1492,15 @@ void draw_browser_node(AppSession *session,
       add_curve_to_active_pane(session, state, node.full_path);
     }
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-      ImGui::SetDragDropPayload("JOTP_BROWSER_PATH", node.full_path.c_str(), node.full_path.size() + 1);
-      ImGui::TextUnformatted(node.full_path.c_str());
+      const std::vector<std::string> drag_paths = browser_drag_paths(*state, node.full_path);
+      const std::string payload = encode_browser_drag_payload(drag_paths);
+      ImGui::SetDragDropPayload("JOTP_BROWSER_PATHS", payload.c_str(), payload.size() + 1);
+      if (drag_paths.size() == 1) {
+        ImGui::TextUnformatted(drag_paths.front().c_str());
+      } else {
+        ImGui::Text("%zu timeseries", drag_paths.size());
+        ImGui::TextUnformatted(drag_paths.front().c_str());
+      }
       ImGui::EndDragDropSource();
     }
     ImGui::PopID();
@@ -1723,6 +1765,43 @@ bool add_path_curve_to_pane(AppSession *session, UiState *state, int pane_index,
     state->status_text = inserted ? "Added " + path : "Curve already present";
   }
   return true;
+}
+
+int add_path_curves_to_pane(AppSession *session, UiState *state, int pane_index, const std::vector<std::string> &paths) {
+  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  if (tab == nullptr || pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
+    state->status_text = "No active pane";
+    return 0;
+  }
+
+  int inserted_count = 0;
+  int duplicate_count = 0;
+  for (const std::string &path : paths) {
+    if (find_route_series(*session, path) == nullptr) {
+      continue;
+    }
+    if (add_curve_to_pane(tab, pane_index, make_curve_for_path(tab->panes[static_cast<size_t>(pane_index)], path))) {
+      ++inserted_count;
+    } else {
+      ++duplicate_count;
+    }
+  }
+
+  if (inserted_count > 0) {
+    if (mark_layout_dirty(session, state)) {
+      state->status_text = inserted_count == 1
+        ? "Added " + paths.front()
+        : "Added " + std::to_string(inserted_count) + " curves";
+    }
+    return inserted_count;
+  }
+
+  if (duplicate_count > 0) {
+    state->status_text = duplicate_count == 1 ? "Curve already present" : "Curves already present";
+  } else {
+    state->status_text = "No matching series found";
+  }
+  return 0;
 }
 
 bool copy_curve_to_pane(WorkspaceTab *tab, int pane_index, const Curve &curve) {
@@ -2638,7 +2717,7 @@ std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_inde
     ImGui::InvisibleButton("##drop_zone", zone.rect.GetSize());
     if (ImGui::BeginDragDropTarget()) {
       if (const ImGuiPayload *payload =
-            ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATH", ImGuiDragDropFlags_AcceptBeforeDelivery)) {
+            ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATHS", ImGuiDragDropFlags_AcceptBeforeDelivery)) {
         if (payload->Preview) {
           draw_list->AddRectFilled(zone.rect.Min, zone.rect.Max, IM_COL32(70, 130, 220, 55));
           draw_list->AddRect(zone.rect.Min, zone.rect.Max, IM_COL32(45, 95, 175, 220), 0.0f, 0, 2.0f);
@@ -2648,7 +2727,7 @@ std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_inde
           action.zone = zone.zone;
           action.target_pane_index = pane_index;
           action.from_browser = true;
-          action.browser_path = static_cast<const char *>(payload->Data);
+          action.browser_paths = decode_browser_drag_payload(static_cast<const char *>(payload->Data));
           ImGui::EndDragDropTarget();
           ImGui::PopID();
           return action;
@@ -2786,22 +2865,27 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
   }
 
   if (action.from_browser) {
+    if (action.browser_paths.empty()) {
+      return false;
+    }
     if (action.zone == PaneDropZone::Center) {
-      const bool ok = add_path_curve_to_pane(session, state, action.target_pane_index, action.browser_path);
-      if (ok) {
+      const int inserted_count = add_path_curves_to_pane(session, state, action.target_pane_index, action.browser_paths);
+      if (inserted_count > 0) {
         tab_state->active_pane_index = action.target_pane_index;
       }
-      return ok;
+      return inserted_count > 0;
     }
-    Pane &target = tab->panes[static_cast<size_t>(action.target_pane_index)];
-    Curve curve = make_curve_for_path(target, action.browser_path);
-    if (split_pane(tab, action.target_pane_index, action.zone, curve)) {
+    if (split_pane(tab, action.target_pane_index, action.zone)) {
       tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+      const int inserted_count = add_path_curves_to_pane(session, state, tab_state->active_pane_index, action.browser_paths);
       mark_tab_dock_dirty(state, state->active_tab_index);
-      if (mark_layout_dirty(session, state)) {
-        state->status_text = "Split pane and added " + action.browser_path;
+      if (inserted_count > 0) {
+        state->status_text = inserted_count == 1
+          ? "Split pane and added " + action.browser_paths.front()
+          : "Split pane and added " + std::to_string(inserted_count) + " curves";
+        return true;
       }
-      return true;
+      return false;
     }
     return false;
   }
@@ -2971,6 +3055,11 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
   if (ImGui::Begin("##workspace_host", nullptr, flags)) {
     const int selection_request = state->requested_tab_index;
     std::optional<ImRect> rename_tab_rect;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(8.0f, 4.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     if (ImGui::BeginTabBar("##layout_tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
       enum class TabActionKind {
         None,
@@ -3118,6 +3207,8 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
         state->requested_tab_index = -1;
       }
     }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(2);
   }
   ImGui::End();
   ImGui::PopStyleVar();
