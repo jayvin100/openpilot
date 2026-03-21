@@ -55,6 +55,7 @@ constexpr float kSidebarMaxWidth = 520.0f;
 constexpr float kContentGap = 0.0f;
 constexpr float kContentRightPadding = 0.0f;
 constexpr float kStatusBarHeight = 40.0f;
+constexpr float kBrowserValueWidth = 88.0f;
 constexpr double kMinHorizontalZoomSeconds = 2.0;
 constexpr double kPlotYPadFraction = 0.28;
 constexpr size_t kCursorOverlayValueCount = 3;
@@ -991,6 +992,102 @@ const RouteSeries *find_route_series(const AppSession &session, const std::strin
   return it == session.series_by_path.end() ? nullptr : it->second;
 }
 
+std::optional<double> sample_route_series_value(const RouteSeries &series, double tm, bool stairs) {
+  if (series.times.empty() || series.times.size() != series.values.size()) {
+    return std::nullopt;
+  }
+  if (tm <= series.times.front()) {
+    return series.values.front();
+  }
+  if (tm >= series.times.back()) {
+    return series.values.back();
+  }
+
+  const auto upper = std::lower_bound(series.times.begin(), series.times.end(), tm);
+  if (upper == series.times.begin()) {
+    return series.values.front();
+  }
+  if (upper == series.times.end()) {
+    return series.values.back();
+  }
+
+  const size_t upper_index = static_cast<size_t>(std::distance(series.times.begin(), upper));
+  const size_t lower_index = upper_index - 1;
+  const double x0 = series.times[lower_index];
+  const double x1 = series.times[upper_index];
+  const double y0 = series.values[lower_index];
+  const double y1 = series.values[upper_index];
+  if (stairs || std::abs(tm - x1) >= 1.0e-9) {
+    return y0;
+  }
+  if (x1 <= x0) {
+    return y0;
+  }
+  const double alpha = (tm - x0) / (x1 - x0);
+  return y0 + (y1 - y0) * alpha;
+}
+
+std::string browser_series_value_text(const AppSession &session, const UiState &state, std::string_view path) {
+  auto it = session.series_by_path.find(std::string(path));
+  if (it == session.series_by_path.end() || it->second == nullptr) {
+    return {};
+  }
+
+  const RouteSeries &series = *it->second;
+  if (series.values.empty()) {
+    return {};
+  }
+
+  const auto enum_it = session.route_data.enum_info.find(series.path);
+  const EnumInfo *enum_info = enum_it == session.route_data.enum_info.end() ? nullptr : &enum_it->second;
+  const bool stairs = enum_info != nullptr;
+
+  std::optional<double> value;
+  if (state.has_tracker_time) {
+    value = sample_route_series_value(series, state.tracker_time, stairs);
+  } else {
+    value = series.values.back();
+  }
+  if (!value.has_value()) {
+    return {};
+  }
+
+  if (enum_info != nullptr) {
+    const int idx = static_cast<int>(std::llround(*value));
+    if (idx >= 0 && std::abs(*value - static_cast<double>(idx)) < 0.01
+        && static_cast<size_t>(idx) < enum_info->names.size()
+        && !enum_info->names[static_cast<size_t>(idx)].empty()) {
+      return enum_info->names[static_cast<size_t>(idx)];
+    }
+  }
+
+  const double display_value = *value;
+  if (!std::isfinite(display_value)) {
+    return {};
+  }
+
+  char buf[64] = {};
+  const double abs_value = std::abs(display_value);
+  if (abs_value < 1.0e-6) {
+    std::snprintf(buf, sizeof(buf), "0");
+  } else if (abs_value >= 1000.0) {
+    std::snprintf(buf, sizeof(buf), "%.0f", display_value);
+  } else if (abs_value >= 100.0) {
+    std::snprintf(buf, sizeof(buf), "%.1f", display_value);
+  } else if (abs_value >= 10.0) {
+    std::snprintf(buf, sizeof(buf), "%.2f", display_value);
+  } else if (abs_value >= 1.0) {
+    std::snprintf(buf, sizeof(buf), "%.3f", display_value);
+  } else if (abs_value >= 0.1) {
+    std::snprintf(buf, sizeof(buf), "%.3f", display_value);
+  } else if (abs_value >= 0.01) {
+    std::snprintf(buf, sizeof(buf), "%.4f", display_value);
+  } else {
+    std::snprintf(buf, sizeof(buf), "%.5f", display_value);
+  }
+  return buf;
+}
+
 std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab &tab) {
   bool found = false;
   double min_value = 0.0;
@@ -1284,7 +1381,47 @@ void draw_browser_node(AppSession *session,
 
   if (node.children.empty()) {
     const bool selected = browser_selection_contains(*state, node.full_path);
-    if (ImGui::Selectable(node.label.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+    const std::string value_text = browser_series_value_text(*session, *state, node.full_path);
+    const ImGuiStyle &style = ImGui::GetStyle();
+    const ImVec2 row_size(std::max(1.0f, ImGui::GetContentRegionAvail().x), ImGui::GetFrameHeight());
+    ImGui::PushID(node.full_path.c_str());
+    const bool clicked = ImGui::InvisibleButton("##browser_leaf", row_size);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    ImDrawList *draw_list = ImGui::GetWindowDrawList();
+    if (selected || hovered) {
+      const ImU32 bg = ImGui::GetColorU32(selected
+        ? (held ? ImGuiCol_HeaderActive : ImGuiCol_Header)
+        : ImGuiCol_HeaderHovered);
+      draw_list->AddRectFilled(rect.Min, rect.Max, bg, 0.0f);
+    }
+
+    const float value_right = rect.Max.x - style.FramePadding.x;
+    const float value_left = value_right - (value_text.empty() ? 0.0f : kBrowserValueWidth);
+    const float label_left = rect.Min.x + style.FramePadding.x;
+    const float label_right = value_text.empty()
+      ? rect.Max.x - style.FramePadding.x
+      : std::max(label_left + 40.0f, value_left - 10.0f);
+    ImGui::RenderTextEllipsis(draw_list,
+                              ImVec2(label_left, rect.Min.y + style.FramePadding.y),
+                              ImVec2(label_right, rect.Max.y),
+                              label_right,
+                              node.label.c_str(),
+                              nullptr,
+                              nullptr);
+    if (!value_text.empty()) {
+      ImGui::PushStyleColor(ImGuiCol_Text, selected ? color_rgb(70, 77, 86) : color_rgb(116, 124, 133));
+      ImGui::RenderTextClipped(ImVec2(value_left, rect.Min.y + style.FramePadding.y),
+                               ImVec2(value_right, rect.Max.y),
+                               value_text.c_str(),
+                               nullptr,
+                               nullptr,
+                               ImVec2(1.0f, 0.0f));
+      ImGui::PopStyleColor();
+    }
+
+    if (clicked) {
       const bool shift_down = ImGui::GetIO().KeyShift;
       const bool ctrl_down = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
       if (shift_down) {
@@ -1295,7 +1432,7 @@ void draw_browser_node(AppSession *session,
         set_browser_selection_single(state, node.full_path);
       }
     }
-    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+    if (hovered && ImGui::IsMouseDoubleClicked(0)) {
       set_browser_selection_single(state, node.full_path);
       add_curve_to_active_pane(session, state, node.full_path);
     }
@@ -1304,6 +1441,7 @@ void draw_browser_node(AppSession *session,
       ImGui::TextUnformatted(node.full_path.c_str());
       ImGui::EndDragDropSource();
     }
+    ImGui::PopID();
     return;
   }
 
