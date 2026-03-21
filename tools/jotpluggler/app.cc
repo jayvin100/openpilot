@@ -1569,22 +1569,9 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
                                  ImGuiWindowFlags_NoSavedSettings;
   if (ImGui::Begin("##sidebar", nullptr, flags)) {
     const RouteLoadSnapshot load = session->route_loader ? session->route_loader->snapshot() : RouteLoadSnapshot{};
+    const bool show_load_progress = session->route_loader && (load.active || load.total_segments > 0);
     if (show_camera_feed && session->camera_feed) {
       session->camera_feed->draw(ImGui::GetContentRegionAvail().x, load.active);
-    }
-
-    if (session->route_loader) {
-      if (load.active || load.total_segments > 0) {
-        const float total = static_cast<float>(std::max<size_t>(1, load.total_segments));
-        const float progress = load.total_segments == 0
-          ? 0.0f
-          : std::clamp(static_cast<float>(load.segments_downloaded + load.segments_parsed) / (2.0f * total), 0.0f, 1.0f);
-        if (!session->route_name.empty()) {
-          ImGui::TextWrapped("%s", session->route_name.c_str());
-        }
-        ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0.0f), nullptr);
-        ImGui::Spacing();
-      }
     }
 
     ImGui::SeparatorText("Route");
@@ -1691,7 +1678,10 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     ImGui::SeparatorText("Timeseries List");
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##browser_filter", "Search...", state->browser_filter.data(), state->browser_filter.size());
-    const float footer_height = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetTextLineHeightWithSpacing() + 16.0f;
+    const float footer_height = ImGui::GetFrameHeightWithSpacing()
+                              + ImGui::GetTextLineHeightWithSpacing()
+                              + 16.0f
+                              + (show_load_progress ? (ImGui::GetFrameHeightWithSpacing() + 12.0f) : 0.0f);
     const float browser_height = std::max(1.0f, ImGui::GetContentRegionAvail().y - footer_height);
     if (ImGui::BeginChild("##timeseries_browser", ImVec2(0.0f, browser_height), true)) {
       const std::string filter = string_from_buffer(state->browser_filter);
@@ -1708,6 +1698,14 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     ImGui::SeparatorText("Custom Series");
     if (ImGui::Button("Create...", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
       open_custom_series_editor(state, state->selected_browser_path);
+    }
+    if (show_load_progress) {
+      const float total = static_cast<float>(std::max<size_t>(1, load.total_segments));
+      const float progress = load.total_segments == 0
+        ? 0.0f
+        : std::clamp(static_cast<float>(load.segments_downloaded + load.segments_parsed) / (2.0f * total), 0.0f, 1.0f);
+      ImGui::Dummy(ImVec2(0.0f, 8.0f));
+      ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0.0f), nullptr);
     }
   }
   ImGui::End();
