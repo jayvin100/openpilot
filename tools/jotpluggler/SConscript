@@ -37,7 +37,7 @@ imgui_sources = [
   f"{imgui.SRC_DIR}/imgui_impl_opengl3.cpp",
   f"{imgui.SRC_DIR}/implot.cpp",
   f"{imgui.SRC_DIR}/implot_items.cpp",
-  "imgui_impl_glfw.cpp",
+  f"{imgui.SRC_DIR}/imgui_impl_glfw.cpp",
 ]
 
 objects = [jot_env.Object(target=name, source=src) for name, src in core_sources.items()]

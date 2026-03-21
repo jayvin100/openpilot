@@ -1,6 +1,6 @@
 #include "tools/jotpluggler/app.h"
 #include "tools/jotpluggler/bootstrap_icons.h"
-#include "tools/jotpluggler/imgui_impl_glfw.h"
+#include "imgui_impl_glfw.h"
 #include "tools/jotpluggler/sketch_layout.h"
 
 #include "imgui.h"
