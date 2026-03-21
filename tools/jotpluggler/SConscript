@@ -9,7 +9,6 @@ if arch == "Darwin":
   Return()
 
 try:
-  subprocess.check_call(["pkg-config", "--exists", "glfw3"])
   libxml_cflags = subprocess.check_output(["pkg-config", "--cflags-only-I", "libxml-2.0"], encoding="utf8").split()
 except (FileNotFoundError, subprocess.CalledProcessError):
   Return()
@@ -23,7 +22,6 @@ core_sources = {
   "jot_main": "main.cc",
   "jot_app": "app.cc",
   "jot_bootstrap_icons": "bootstrap_icons.cc",
-  "jot_glfw_platform_compat": "glfw_platform_compat.cc",
   "jot_sketch_layout": "sketch_layout.cc",
   "jot_framereader": "../replay/framereader.cc",
   "jot_logreader": "../replay/logreader.cc",
@@ -49,7 +47,8 @@ for source in imgui_sources:
   basename = os.path.splitext(os.path.basename(source))[0]
   objects.append(jot_env.Object(target=f"jot_{basename}", source=source))
 
-libs = [common, messaging, visionipc, cereal, "glfw", "GL", "capnp", "kj", "avformat", "avcodec", "swresample",
+glfw_static = File(f"{imgui.LIB_DIR}/libglfw3.a")
+libs = [common, messaging, visionipc, cereal, glfw_static, "GL", "capnp", "kj", "avformat", "avcodec", "swresample",
         "avutil", "x264", "yuv", "z", "bz2", "zstd", "xml2", "m", "pthread"]
 if arch != "Darwin":
   libs += ["dl"]

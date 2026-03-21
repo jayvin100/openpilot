@@ -10,6 +10,7 @@ Current scope:
 - real PlotJuggler tab support with a docked workspace
 - route open/reload controls, layout load/save controls, and pane/curve selection in the UI
 - hierarchical timeseries browser for adding route-backed curves to the active pane
+- Python-backed custom math series with a PlotJuggler-style editor window
 - fixed-size screenshot export for deterministic rendering and debugging
 
 Current non-goals:
@@ -17,7 +18,7 @@ Current non-goals:
 - screenshot diffing
 - `Xvfb` orchestration
 - fake baseline-copy modes
-- custom math / Lua snippets
+- PlotJuggler Lua snippet compatibility
 
 ## Build
 
@@ -60,6 +61,7 @@ Use `--sync-load` when you want deterministic blocking startup, for example scre
 Multi-tab PlotJuggler layouts now render as real app tabs, and the sidebar exposes PJ-style layout and timeseries sections.
 Plots use route-backed direct curve rendering with a shared `t=0` time base and a playback/timeline bar aligned to the plot region.
 Curves without direct sampled data are shown as unsupported instead of being faked.
+`Custom Series` uses Python and numpy through a subprocess helper.
 
 Useful loader knobs:
 - `JOTP_LOAD_WORKERS=<n>` overrides the automatic worker count for route loading.

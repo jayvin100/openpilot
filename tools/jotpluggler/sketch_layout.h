@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,13 @@ struct PlotRange {
   double y_limit_max = 1.0;
 };
 
+struct CustomPythonSeries {
+  std::string linked_source;
+  std::vector<std::string> additional_sources;
+  std::string globals_code;
+  std::string function_code;
+};
+
 struct Curve {
   std::string name;
   std::string label;
@@ -30,6 +38,8 @@ struct Curve {
   bool derivative = false;
   double value_scale = 1.0;
   double value_offset = 0.0;
+  bool runtime_only = false;
+  std::optional<CustomPythonSeries> custom_python;
   std::vector<double> xs;
   std::vector<double> ys;
 };

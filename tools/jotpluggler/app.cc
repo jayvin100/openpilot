@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cfloat>
 #include <condition_variable>
@@ -30,10 +31,13 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <regex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/wait.h>
 #include <thread>
 #include <unordered_map>
 #include <unistd.h>
@@ -106,8 +110,26 @@ struct TabUiState {
   int runtime_id = 0;
 };
 
+struct CustomSeriesEditorState {
+  bool open = false;
+  bool open_help = false;
+  bool request_select = false;
+  bool selected = false;
+  bool focus_name = false;
+  int selected_template = 0;
+  int selected_additional_source = -1;
+  std::string name;
+  std::string linked_source;
+  std::vector<std::string> additional_sources;
+  std::string globals_code;
+  std::string function_code = "return value";
+  std::string preview_label;
+  std::vector<double> preview_xs;
+  std::vector<double> preview_ys;
+  bool preview_is_result = false;
+};
+
 struct UiState {
-  bool open_custom_series = false;
   bool open_open_route = false;
   bool open_load_layout = false;
   bool open_save_layout = false;
@@ -151,6 +173,19 @@ struct UiState {
   double tracker_time = 0.0;
   double playback_rate = 1.0;
   double playback_step = 0.1;
+  CustomSeriesEditorState custom_series;
+};
+
+struct PythonEvalResult {
+  std::vector<double> xs;
+  std::vector<double> ys;
+};
+
+struct CustomSeriesTemplate {
+  const char *name;
+  const char *globals_code;
+  const char *function_code;
+  const char *preview_text;
 };
 
 struct RouteLoadSnapshot {
@@ -915,6 +950,75 @@ void ensure_parent_dir(const fs::path &path) {
   }
 }
 
+struct ProcessResult {
+  int exit_code = 0;
+  std::string stderr_text;
+};
+
+std::string read_fd_to_string(int fd) {
+  std::string text;
+  std::array<char, 4096> buffer = {};
+  while (true) {
+    const ssize_t count = ::read(fd, buffer.data(), buffer.size());
+    if (count <= 0) {
+      break;
+    }
+    text.append(buffer.data(), static_cast<size_t>(count));
+  }
+  return text;
+}
+
+ProcessResult run_process_capture_stderr(const std::vector<std::string> &args) {
+  if (args.empty()) {
+    throw std::runtime_error("Process arguments are empty");
+  }
+
+  int stderr_pipe[2] = {-1, -1};
+  if (::pipe(stderr_pipe) != 0) {
+    throw std::runtime_error("pipe() failed");
+  }
+
+  const pid_t pid = ::fork();
+  if (pid < 0) {
+    ::close(stderr_pipe[0]);
+    ::close(stderr_pipe[1]);
+    throw std::runtime_error("fork() failed");
+  }
+
+  if (pid == 0) {
+    ::dup2(stderr_pipe[1], STDERR_FILENO);
+    ::close(stderr_pipe[0]);
+    ::close(stderr_pipe[1]);
+
+    std::vector<char *> argv;
+    argv.reserve(args.size() + 1);
+    for (const std::string &arg : args) {
+      argv.push_back(const_cast<char *>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+    ::execvp(argv[0], argv.data());
+    _exit(127);
+  }
+
+  ::close(stderr_pipe[1]);
+  ProcessResult result;
+  result.stderr_text = read_fd_to_string(stderr_pipe[0]);
+  ::close(stderr_pipe[0]);
+
+  int status = 0;
+  if (::waitpid(pid, &status, 0) < 0) {
+    throw std::runtime_error("waitpid() failed");
+  }
+  if (WIFEXITED(status)) {
+    result.exit_code = WEXITSTATUS(status);
+  } else if (WIFSIGNALED(status)) {
+    result.exit_code = 128 + WTERMSIG(status);
+  } else {
+    result.exit_code = 1;
+  }
+  return result;
+}
+
 void run_or_throw(const std::string &command, const std::string &action) {
   const int ret = std::system(command.c_str());
   if (ret != 0) {
@@ -924,6 +1028,7 @@ void run_or_throw(const std::string &command, const std::string &action) {
 
 bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg);
 void reset_shared_range(UiState *state, const AppSession &session);
+std::string curve_display_name(const Curve &curve);
 
 ImVec4 color_rgb(int r, int g, int b, float alpha = 1.0f) {
   return ImVec4(static_cast<float>(r) / 255.0f,
@@ -1046,6 +1151,88 @@ std::string string_from_buffer(const std::array<char, N> &buffer) {
   return std::string(buffer.data());
 }
 
+int input_text_resize_callback(ImGuiInputTextCallbackData *data) {
+  if (data->EventFlag != ImGuiInputTextFlags_CallbackResize || data->UserData == nullptr) {
+    return 0;
+  }
+  auto *text = static_cast<std::string *>(data->UserData);
+  text->resize(static_cast<size_t>(data->BufTextLen));
+  data->Buf = text->data();
+  return 0;
+}
+
+bool input_text_string(const char *label,
+                       std::string *text,
+                       ImGuiInputTextFlags flags = 0) {
+  flags |= ImGuiInputTextFlags_CallbackResize;
+  if (text->capacity() == 0) {
+    text->reserve(256);
+  }
+  return ImGui::InputText(label,
+                          text->data(),
+                          text->capacity() + 1,
+                          flags,
+                          input_text_resize_callback,
+                          text);
+}
+
+bool input_text_multiline_string(const char *label,
+                                 std::string *text,
+                                 const ImVec2 &size = ImVec2(0.0f, 0.0f),
+                                 ImGuiInputTextFlags flags = 0) {
+  flags |= ImGuiInputTextFlags_CallbackResize;
+  if (text->capacity() == 0) {
+    text->reserve(1024);
+  }
+  return ImGui::InputTextMultiline(label,
+                                   text->data(),
+                                   text->capacity() + 1,
+                                   size,
+                                   flags,
+                                   input_text_resize_callback,
+                                   text);
+}
+
+std::string json_escape(std::string_view text) {
+  std::string escaped;
+  escaped.reserve(text.size() + 8);
+  for (const char c : text) {
+    switch (c) {
+      case '\\': escaped += "\\\\"; break;
+      case '"': escaped += "\\\""; break;
+      case '\b': escaped += "\\b"; break;
+      case '\f': escaped += "\\f"; break;
+      case '\n': escaped += "\\n"; break;
+      case '\r': escaped += "\\r"; break;
+      case '\t': escaped += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          char buf[7] = {};
+          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+          escaped += buf;
+        } else {
+          escaped.push_back(c);
+        }
+        break;
+    }
+  }
+  return escaped;
+}
+
+fs::path executable_dir() {
+  std::array<char, 4096> buf = {};
+  const ssize_t length = ::readlink("/proc/self/exe", buf.data(), buf.size() - 1);
+  if (length <= 0) {
+    throw std::runtime_error("Failed to resolve executable path");
+  }
+  buf[static_cast<size_t>(length)] = '\0';
+  return fs::path(buf.data()).parent_path();
+}
+
+fs::path math_eval_script_path() {
+  return executable_dir() / "math_eval.py";
+}
+
 void sync_ui_state(UiState *state, const SketchLayout &layout) {
   const bool initializing = state->tabs.empty();
   state->tabs.resize(layout.tabs.size());
@@ -1151,6 +1338,7 @@ enum class PaneDropZone {
 
 enum class PaneMenuActionKind {
   None,
+  OpenCustomSeries,
   SplitLeft,
   SplitRight,
   SplitTop,
@@ -1182,6 +1370,7 @@ struct PaneDropAction {
 std::string curve_display_name(const Curve &curve);
 bool add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path);
 bool curve_has_samples(const AppSession &session, const Curve &curve);
+void refresh_all_custom_curves(AppSession *session, UiState *state);
 
 bool curve_has_local_samples(const Curve &curve) {
   return curve.xs.size() > 1 && curve.xs.size() == curve.ys.size();
@@ -1360,6 +1549,9 @@ void write_indent(std::ostream &out, int spaces) {
 }
 
 void write_curve_xml(std::ostream &out, const Curve &curve, int indent) {
+  if (curve.runtime_only) {
+    return;
+  }
   write_indent(out, indent);
   out << "<curve name=\"" << xml_escape(curve.name) << "\" color=\"" << curve_color_hex(curve.color) << "\"";
   const bool has_transform = curve.derivative
@@ -1716,6 +1908,7 @@ void apply_route_data(AppSession *session, UiState *state, RouteData route_data)
   session->route_data = std::move(route_data);
   rebuild_route_index(session);
   rebuild_browser_nodes(session, state);
+  refresh_all_custom_curves(session, state);
   if (session->camera_feed) {
     session->camera_feed->set_route_data(session->route_data);
   }
@@ -1727,6 +1920,304 @@ void apply_route_data(AppSession *session, UiState *state, RouteData route_data)
 const RouteSeries *find_route_series(const AppSession &session, const std::string &path) {
   auto it = session.series_by_path.find(path);
   return it == session.series_by_path.end() ? nullptr : it->second;
+}
+
+const std::array<CustomSeriesTemplate, 4> &custom_series_templates() {
+  static constexpr std::array<CustomSeriesTemplate, 4> kTemplates = {{
+    {
+      .name = "Derivative",
+      .globals_code = "",
+      .function_code = "return np.gradient(value, time)",
+      .preview_text = "return np.gradient(value, time)",
+    },
+    {
+      .name = "Difference",
+      .globals_code = "",
+      .function_code = "return value - v1",
+      .preview_text = "Requires one additional source timeseries.\n\nreturn value - v1",
+    },
+    {
+      .name = "Smoothing",
+      .globals_code = "window = 20\nweights = np.ones(window) / window",
+      .function_code = "return np.convolve(value, weights, mode='same')",
+      .preview_text = "window = 20\nweights = np.ones(window) / window\n\nreturn np.convolve(value, weights, mode='same')",
+    },
+    {
+      .name = "Integral",
+      .globals_code = "",
+      .function_code = "dt = np.mean(np.diff(time))\nreturn np.cumsum(value) * dt",
+      .preview_text = "dt = np.mean(np.diff(time))\nreturn np.cumsum(value) * dt",
+    },
+  }};
+  return kTemplates;
+}
+
+void reset_custom_series_editor(CustomSeriesEditorState *editor) {
+  *editor = CustomSeriesEditorState{};
+}
+
+void open_custom_series_editor(UiState *state, const std::string &preferred_source = {}) {
+  CustomSeriesEditorState &editor = state->custom_series;
+  if (!editor.open && editor.name.empty() && editor.linked_source.empty() && editor.function_code == "return value") {
+    editor.focus_name = true;
+  }
+  if (editor.linked_source.empty() && !preferred_source.empty()) {
+    editor.linked_source = preferred_source;
+  }
+  editor.open = true;
+  editor.request_select = true;
+}
+
+bool add_additional_source(CustomSeriesEditorState *editor, const std::string &path) {
+  if (path.empty() || path == editor->linked_source) {
+    return false;
+  }
+  if (std::find(editor->additional_sources.begin(), editor->additional_sources.end(), path) != editor->additional_sources.end()) {
+    return false;
+  }
+  editor->additional_sources.push_back(path);
+  return true;
+}
+
+std::string trim_copy(std::string_view text) {
+  size_t begin = 0;
+  size_t end = text.size();
+  while (begin < end && std::isspace(static_cast<unsigned char>(text[begin]))) {
+    ++begin;
+  }
+  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
+    --end;
+  }
+  return std::string(text.substr(begin, end - begin));
+}
+
+std::string next_custom_curve_name(const Pane &pane) {
+  std::set<std::string> used;
+  for (const Curve &curve : pane.curves) {
+    if (!curve.label.empty()) {
+      used.insert(curve.label);
+    }
+    if (!curve.name.empty()) {
+      used.insert(curve.name);
+    }
+  }
+  for (int i = 1; i < 1000; ++i) {
+    const std::string candidate = "series" + std::to_string(i);
+    if (used.find(candidate) == used.end()) {
+      return candidate;
+    }
+  }
+  return "series";
+}
+
+std::string preferred_custom_series_source(const Pane &pane) {
+  for (const Curve &curve : pane.curves) {
+    if (!curve.name.empty() && curve.name.front() == '/') {
+      return curve.name;
+    }
+    if (curve.custom_python.has_value() && !curve.custom_python->linked_source.empty()) {
+      return curve.custom_python->linked_source;
+    }
+  }
+  return {};
+}
+
+void write_binary_vector(const fs::path &path, const std::vector<double> &values) {
+  std::ofstream out(path, std::ios::binary);
+  if (!out) {
+    throw std::runtime_error("Failed to open " + path.string() + " for writing");
+  }
+  if (!values.empty()) {
+    out.write(reinterpret_cast<const char *>(values.data()),
+              static_cast<std::streamsize>(values.size() * sizeof(double)));
+  }
+  if (!out) {
+    throw std::runtime_error("Failed to write " + path.string());
+  }
+}
+
+std::vector<double> read_binary_vector(const fs::path &path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    throw std::runtime_error("Failed to open " + path.string());
+  }
+  in.seekg(0, std::ios::end);
+  const std::streamoff size = in.tellg();
+  in.seekg(0, std::ios::beg);
+  if (size < 0 || size % static_cast<std::streamoff>(sizeof(double)) != 0) {
+    throw std::runtime_error("Invalid binary series file: " + path.string());
+  }
+  std::vector<double> values(static_cast<size_t>(size) / sizeof(double));
+  if (!values.empty()) {
+    in.read(reinterpret_cast<char *>(values.data()), size);
+  }
+  if (!in) {
+    throw std::runtime_error("Failed to read " + path.string());
+  }
+  return values;
+}
+
+void write_text_file(const fs::path &path, std::string_view text) {
+  std::ofstream out(path);
+  if (!out) {
+    throw std::runtime_error("Failed to open " + path.string() + " for writing");
+  }
+  out << text;
+}
+
+fs::path create_custom_series_temp_dir() {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const fs::path dir = fs::temp_directory_path() / ("jotpluggler_math_" + std::to_string(::getpid()) + "_" + std::to_string(stamp));
+  fs::create_directories(dir);
+  return dir;
+}
+
+std::set<std::string> collect_custom_series_paths(const CustomPythonSeries &spec,
+                                                  std::string_view globals_code,
+                                                  std::string_view function_code) {
+  std::set<std::string> paths;
+  if (!spec.linked_source.empty()) {
+    paths.insert(spec.linked_source);
+  }
+  paths.insert(spec.additional_sources.begin(), spec.additional_sources.end());
+
+  static const std::regex kPathRegex(R"([tv]\(\s*["']([^"']+)["']\s*\))");
+  const auto collect_from = [&](std::string_view code) {
+    std::string owned(code);
+    for (std::sregex_iterator it(owned.begin(), owned.end(), kPathRegex), end; it != end; ++it) {
+      paths.insert((*it)[1].str());
+    }
+  };
+  collect_from(globals_code);
+  collect_from(function_code);
+  return paths;
+}
+
+PythonEvalResult evaluate_custom_python_series(const AppSession &session,
+                                               const CustomPythonSeries &spec) {
+  const std::set<std::string> referenced_paths =
+    collect_custom_series_paths(spec, spec.globals_code, spec.function_code);
+  if (referenced_paths.empty()) {
+    throw std::runtime_error("No input series referenced. Set an input timeseries or reference route paths in code.");
+  }
+
+  const fs::path temp_dir = create_custom_series_temp_dir();
+  try {
+    const fs::path globals_path = temp_dir / "globals.py";
+    const fs::path code_path = temp_dir / "code.py";
+    const fs::path manifest_path = temp_dir / "manifest.json";
+    const fs::path out_t_path = temp_dir / "result.t.bin";
+    const fs::path out_v_path = temp_dir / "result.v.bin";
+
+    write_text_file(globals_path, spec.globals_code);
+    write_text_file(code_path, spec.function_code);
+
+    std::ofstream manifest(manifest_path);
+    if (!manifest) {
+      throw std::runtime_error("Failed to open manifest for writing");
+    }
+    manifest << "{\n";
+    manifest << "  \"paths\": [";
+    for (size_t i = 0; i < session.route_data.paths.size(); ++i) {
+      if (i != 0) {
+        manifest << ", ";
+      }
+      manifest << "\"" << json_escape(session.route_data.paths[i]) << "\"";
+    }
+    manifest << "],\n";
+    manifest << "  \"linked_source\": \"" << json_escape(spec.linked_source) << "\",\n";
+    manifest << "  \"additional_sources\": [";
+    for (size_t i = 0; i < spec.additional_sources.size(); ++i) {
+      if (i != 0) {
+        manifest << ", ";
+      }
+      manifest << "\"" << json_escape(spec.additional_sources[i]) << "\"";
+    }
+    manifest << "],\n";
+    manifest << "  \"series\": [\n";
+
+    size_t series_index = 0;
+    for (const std::string &path : referenced_paths) {
+      const RouteSeries *series = find_route_series(session, path);
+      if (series == nullptr || series->times.size() < 2 || series->times.size() != series->values.size()) {
+        throw std::runtime_error("Missing route series " + path);
+      }
+      const std::string prefix = "series_" + std::to_string(series_index++);
+      const fs::path time_path = temp_dir / (prefix + ".t.bin");
+      const fs::path value_path = temp_dir / (prefix + ".v.bin");
+      write_binary_vector(time_path, series->times);
+      write_binary_vector(value_path, series->values);
+      manifest << "    {\"path\": \"" << json_escape(path)
+               << "\", \"t\": \"" << json_escape(time_path.string())
+               << "\", \"v\": \"" << json_escape(value_path.string()) << "\"}";
+      if (series_index < referenced_paths.size()) {
+        manifest << ",";
+      }
+      manifest << "\n";
+    }
+    manifest << "  ]\n";
+    manifest << "}\n";
+    manifest.close();
+
+    const ProcessResult process = run_process_capture_stderr({
+      "python3",
+      math_eval_script_path().string(),
+      manifest_path.string(),
+      globals_path.string(),
+      code_path.string(),
+      out_t_path.string(),
+      out_v_path.string(),
+    });
+    if (process.exit_code != 0) {
+      throw std::runtime_error(trim_copy(process.stderr_text).empty() ? "Python evaluation failed"
+                                                                      : trim_copy(process.stderr_text));
+    }
+
+    PythonEvalResult result;
+    result.xs = read_binary_vector(out_t_path);
+    result.ys = read_binary_vector(out_v_path);
+    if (result.xs.size() < 2 || result.xs.size() != result.ys.size()) {
+      throw std::runtime_error("Custom series returned invalid output");
+    }
+    fs::remove_all(temp_dir);
+    return result;
+  } catch (...) {
+    std::error_code ignore_error;
+    fs::remove_all(temp_dir, ignore_error);
+    throw;
+  }
+}
+
+void refresh_custom_curve_samples(AppSession *session, UiState *state, Curve *curve) {
+  if (!curve->custom_python.has_value()) {
+    return;
+  }
+  if (!session->route_data.has_time_range || session->route_data.series.empty()) {
+    curve->xs.clear();
+    curve->ys.clear();
+    return;
+  }
+  try {
+    PythonEvalResult result = evaluate_custom_python_series(*session, *curve->custom_python);
+    curve->xs = std::move(result.xs);
+    curve->ys = std::move(result.ys);
+  } catch (const std::exception &err) {
+    curve->xs.clear();
+    curve->ys.clear();
+    state->error_text = std::string("Failed to evaluate custom series \"")
+      + curve_display_name(*curve) + "\":\n\n" + err.what();
+    state->open_error_popup = true;
+  }
+}
+
+void refresh_all_custom_curves(AppSession *session, UiState *state) {
+  for (WorkspaceTab &tab : session->layout.tabs) {
+    for (Pane &pane : tab.panes) {
+      for (Curve &curve : pane.curves) {
+        refresh_custom_curve_samples(session, state, &curve);
+      }
+    }
+  }
 }
 
 std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab &tab) {
@@ -1876,19 +2367,6 @@ void step_tracker(UiState *state, double direction) {
   }
   state->tracker_time += direction * std::max(0.001, state->playback_step);
   state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
-}
-
-void show_not_implemented_modal(const char *popup_name, const char *title, const char *body) {
-  if (ImGui::BeginPopupModal(popup_name, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted(title);
-    ImGui::Separator();
-    ImGui::TextWrapped("%s", body);
-    ImGui::Spacing();
-    if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
 }
 
 void show_hover_tooltip(const char *text) {
@@ -2200,7 +2678,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
 
     ImGui::SeparatorText("Custom Series");
     if (ImGui::Button("Create...", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
-      state->open_custom_series = true;
+      open_custom_series_editor(state, state->selected_browser_path);
     }
   }
   ImGui::End();
@@ -2227,6 +2705,40 @@ Curve make_curve_for_path(const Pane &pane, const std::string &path) {
   curve.label = path_curve_label(path);
   curve.color = next_curve_color(pane);
   return curve;
+}
+
+Curve make_custom_curve(const Pane &pane,
+                        const std::string &name,
+                        const CustomPythonSeries &spec,
+                        PythonEvalResult result) {
+  Curve curve;
+  curve.name = name;
+  curve.label = name;
+  curve.color = next_curve_color(pane);
+  curve.runtime_only = true;
+  curve.custom_python = spec;
+  curve.xs = std::move(result.xs);
+  curve.ys = std::move(result.ys);
+  return curve;
+}
+
+bool upsert_custom_curve_in_pane(WorkspaceTab *tab, int pane_index, Curve curve) {
+  if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
+    return false;
+  }
+  Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
+  for (Curve &existing : pane.curves) {
+    if (existing.runtime_only && existing.name == curve.name) {
+      existing.visible = true;
+      existing.label = curve.label;
+      existing.custom_python = curve.custom_python;
+      existing.xs = std::move(curve.xs);
+      existing.ys = std::move(curve.ys);
+      return false;
+    }
+  }
+  pane.curves.push_back(std::move(curve));
+  return true;
 }
 
 bool add_curve_to_pane(WorkspaceTab *tab, int pane_index, Curve curve) {
@@ -2868,6 +3380,390 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   ImPlot::PopStyleColor(6);
 }
 
+void draw_custom_series_help_popup(CustomSeriesEditorState *editor) {
+  if (editor->open_help) {
+    ImGui::OpenPopup("Custom Series Help");
+    editor->open_help = false;
+  }
+  if (!ImGui::BeginPopupModal("Custom Series Help", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  ImGui::TextUnformatted("Available variables");
+  ImGui::Separator();
+  ImGui::BulletText("np: numpy");
+  ImGui::BulletText("t(path), v(path): timestamps and values for a route series");
+  ImGui::BulletText("paths: all available route series paths");
+  ImGui::BulletText("time, value: linked input timeseries");
+  ImGui::BulletText("t1, v1, t2, v2, ...: additional source timeseries");
+  ImGui::Spacing();
+  ImGui::TextWrapped("Write either a single expression like \"return np.gradient(value, time)\" "
+                     "or a multi-line Python body that returns an array or a (times, values) tuple.");
+  ImGui::Spacing();
+  if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+}
+
+void draw_custom_series_preview(const AppSession &session, CustomSeriesEditorState *editor) {
+  std::vector<double> preview_xs;
+  std::vector<double> preview_ys;
+  std::string preview_label = editor->preview_label;
+  if (editor->preview_is_result && editor->preview_xs.size() > 1 && editor->preview_xs.size() == editor->preview_ys.size()) {
+    preview_xs = editor->preview_xs;
+    preview_ys = editor->preview_ys;
+    if (preview_label.empty()) {
+      preview_label = "Result preview";
+    }
+  } else if (!editor->linked_source.empty()) {
+    if (const RouteSeries *series = find_route_series(session, editor->linked_source); series != nullptr
+        && series->times.size() > 1 && series->times.size() == series->values.size()) {
+      preview_xs = series->times;
+      preview_ys = series->values;
+      preview_label = "Input preview";
+    }
+  }
+
+  if (!preview_xs.empty() && preview_xs.size() == preview_ys.size()) {
+    std::vector<double> plot_xs;
+    std::vector<double> plot_ys;
+    decimate_samples(preview_xs, preview_ys, 1200, &plot_xs, &plot_ys);
+    ImGui::TextUnformatted(preview_label.c_str());
+    if (!editor->linked_source.empty() && !editor->preview_is_result) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s", editor->linked_source.c_str());
+    }
+    if (ImPlot::BeginPlot("##custom_series_preview",
+                          ImVec2(-1.0f, std::max(180.0f, ImGui::GetContentRegionAvail().y - 6.0f)),
+                          ImPlotFlags_NoTitle | ImPlotFlags_NoMenus | ImPlotFlags_NoLegend)) {
+      ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight,
+                        ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_RangeFit);
+      ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f");
+      ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
+      ImPlotSpec spec;
+      spec.LineColor = color_rgb(35, 107, 180);
+      spec.LineWeight = 2.0f;
+      ImPlot::PlotLine("##custom_preview_line", plot_xs.data(), plot_ys.data(), static_cast<int>(plot_xs.size()), spec);
+      ImPlot::EndPlot();
+    }
+  } else {
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 72.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(116, 124, 133));
+    ImGui::TextWrapped("Choose an input timeseries or click Apply to preview the custom result.");
+    ImGui::PopStyleColor();
+  }
+}
+
+std::string custom_series_name_status(const Pane &pane, std::string_view name) {
+  const std::string trimmed = trim_copy(name);
+  if (trimmed.empty()) {
+    return "name required";
+  }
+  if (!trimmed.empty() && trimmed.front() == '/') {
+    return "cannot start with /";
+  }
+  for (const Curve &curve : pane.curves) {
+    if (curve.runtime_only && curve.name == trimmed) {
+      return "updates existing curve";
+    }
+  }
+  return "new curve";
+}
+
+bool apply_custom_series_editor(AppSession *session, UiState *state) {
+  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  TabUiState *tab_state = active_tab_state(state);
+  if (tab == nullptr || tab_state == nullptr) {
+    state->status_text = "No active pane";
+    return false;
+  }
+  if (tab_state->active_pane_index < 0 || tab_state->active_pane_index >= static_cast<int>(tab->panes.size())) {
+    state->status_text = "No active pane";
+    return false;
+  }
+
+  CustomSeriesEditorState &editor = state->custom_series;
+  editor.name = trim_copy(editor.name);
+  editor.linked_source = trim_copy(editor.linked_source);
+  for (std::string &path : editor.additional_sources) {
+    path = trim_copy(path);
+  }
+  editor.additional_sources.erase(
+    std::remove_if(editor.additional_sources.begin(), editor.additional_sources.end(),
+                   [&](const std::string &path) { return path.empty() || path == editor.linked_source; }),
+    editor.additional_sources.end());
+
+  if (editor.name.empty()) {
+    state->error_text = "Custom series name is required.";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (!editor.name.empty() && editor.name.front() == '/') {
+    state->error_text = "Custom series names may not start with '/'.";
+    state->open_error_popup = true;
+    return false;
+  }
+
+  CustomPythonSeries spec = {
+    .linked_source = editor.linked_source,
+    .additional_sources = editor.additional_sources,
+    .globals_code = editor.globals_code,
+    .function_code = editor.function_code,
+  };
+
+  try {
+    PythonEvalResult result = evaluate_custom_python_series(*session, spec);
+    Pane &pane = tab->panes[static_cast<size_t>(tab_state->active_pane_index)];
+    editor.preview_label = editor.name;
+    editor.preview_xs = result.xs;
+    editor.preview_ys = result.ys;
+    editor.preview_is_result = true;
+    const bool inserted = upsert_custom_curve_in_pane(tab,
+                                                      tab_state->active_pane_index,
+                                                      make_custom_curve(pane, editor.name, spec, std::move(result)));
+    state->status_text = inserted ? "Created custom series " + editor.name
+                                  : "Updated custom series " + editor.name;
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    state->status_text = "Custom series failed";
+    return false;
+  }
+}
+
+void draw_custom_series_editor(AppSession *session, UiState *state) {
+  CustomSeriesEditorState &editor = state->custom_series;
+  if (!editor.open) {
+    return;
+  }
+
+  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  TabUiState *tab_state = active_tab_state(state);
+  Pane *active_pane = (tab != nullptr && tab_state != nullptr
+                       && tab_state->active_pane_index >= 0
+                       && tab_state->active_pane_index < static_cast<int>(tab->panes.size()))
+    ? &tab->panes[static_cast<size_t>(tab_state->active_pane_index)]
+    : nullptr;
+  if (editor.focus_name && active_pane != nullptr && editor.name.empty()) {
+    editor.name = next_custom_curve_name(*active_pane);
+  }
+
+  draw_custom_series_help_popup(&editor);
+
+  if (ImGui::BeginTabBar("##custom_series_tabs")) {
+    if (ImGui::BeginTabItem("Single Function")) {
+      const float footer_height = ImGui::GetFrameHeightWithSpacing() + 18.0f;
+      const float preview_height = std::max(200.0f, ImGui::GetContentRegionAvail().y * 0.28f);
+      if (ImGui::BeginChild("##custom_series_preview_child", ImVec2(0.0f, preview_height), true)) {
+        draw_custom_series_preview(*session, &editor);
+      }
+      ImGui::EndChild();
+      ImGui::Spacing();
+
+      const float editor_height = std::max(1.0f, ImGui::GetContentRegionAvail().y - footer_height);
+      if (ImGui::BeginTable("##custom_series_editor_table",
+                            2,
+                            ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp,
+                            ImVec2(0.0f, editor_height))) {
+        ImGui::TableSetupColumn("left", ImGuiTableColumnFlags_WidthFixed, 320.0f);
+        ImGui::TableSetupColumn("right", ImGuiTableColumnFlags_WidthStretch);
+
+        ImGui::TableNextColumn();
+        if (ImGui::BeginChild("##custom_series_left", ImVec2(0.0f, 0.0f), false)) {
+          ImGui::TextWrapped("Input timeseries. Provides arguments time and value:");
+          ImGui::SetNextItemWidth(-FLT_MIN);
+          input_text_string("##custom_linked_source", &editor.linked_source, ImGuiInputTextFlags_ReadOnly);
+          if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATH")) {
+              editor.linked_source = static_cast<const char *>(payload->Data);
+              editor.additional_sources.erase(
+                std::remove(editor.additional_sources.begin(), editor.additional_sources.end(), editor.linked_source),
+                editor.additional_sources.end());
+              editor.preview_is_result = false;
+            }
+            ImGui::EndDragDropTarget();
+          }
+          if (ImGui::Button("Use Selected", ImVec2(120.0f, 0.0f)) && !state->selected_browser_path.empty()) {
+            editor.linked_source = state->selected_browser_path;
+            editor.additional_sources.erase(
+              std::remove(editor.additional_sources.begin(), editor.additional_sources.end(), editor.linked_source),
+              editor.additional_sources.end());
+            editor.preview_is_result = false;
+          }
+          ImGui::SameLine();
+          if (ImGui::Button("Clear", ImVec2(120.0f, 0.0f))) {
+            editor.linked_source.clear();
+            editor.preview_is_result = false;
+          }
+
+          ImGui::Spacing();
+          ImGui::TextUnformatted("Additional source timeseries:");
+          ImGui::SameLine();
+          ImGui::BeginDisabled(editor.selected_additional_source < 0
+                               || editor.selected_additional_source >= static_cast<int>(editor.additional_sources.size()));
+          if (ImGui::Button("Remove Selected", ImVec2(140.0f, 0.0f))
+              && editor.selected_additional_source >= 0
+              && editor.selected_additional_source < static_cast<int>(editor.additional_sources.size())) {
+            editor.additional_sources.erase(editor.additional_sources.begin()
+              + static_cast<std::ptrdiff_t>(editor.selected_additional_source));
+            editor.selected_additional_source = editor.additional_sources.empty()
+              ? -1
+              : std::clamp(editor.selected_additional_source, 0,
+                           static_cast<int>(editor.additional_sources.size()) - 1);
+            editor.preview_is_result = false;
+          }
+          ImGui::EndDisabled();
+
+          const float additional_height = 156.0f;
+          if (ImGui::BeginChild("##custom_additional_sources", ImVec2(0.0f, additional_height), true)) {
+            if (ImGui::BeginTable("##custom_additional_table",
+                                  2,
+                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+              ImGui::TableSetupColumn("id", ImGuiTableColumnFlags_WidthFixed, 42.0f);
+              ImGui::TableSetupColumn("path", ImGuiTableColumnFlags_WidthStretch);
+              for (size_t i = 0; i < editor.additional_sources.size(); ++i) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("v%zu", i + 1);
+                ImGui::TableNextColumn();
+                const bool selected = editor.selected_additional_source == static_cast<int>(i);
+                if (ImGui::Selectable(editor.additional_sources[i].c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                  editor.selected_additional_source = static_cast<int>(i);
+                }
+              }
+              ImGui::EndTable();
+            }
+            if (ImGui::BeginDragDropTarget()) {
+              if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATH")) {
+                if (add_additional_source(&editor, static_cast<const char *>(payload->Data))) {
+                  editor.preview_is_result = false;
+                }
+              }
+              ImGui::EndDragDropTarget();
+            }
+          }
+          ImGui::EndChild();
+          if (ImGui::Button("Add Selected", ImVec2(120.0f, 0.0f))) {
+            for (const std::string &path : state->selected_browser_paths) {
+              if (add_additional_source(&editor, path)) {
+                editor.preview_is_result = false;
+              }
+            }
+          }
+
+          ImGui::Spacing();
+          ImGui::SeparatorText("Function library");
+          const auto &templates = custom_series_templates();
+          if (ImGui::BeginChild("##custom_series_template_list", ImVec2(0.0f, 132.0f), true)) {
+            for (size_t i = 0; i < templates.size(); ++i) {
+              const bool selected = editor.selected_template == static_cast<int>(i);
+              if (ImGui::Selectable(templates[i].name, selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                editor.selected_template = static_cast<int>(i);
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                  editor.globals_code = templates[i].globals_code;
+                  editor.function_code = templates[i].function_code;
+                  editor.preview_is_result = false;
+                }
+              }
+            }
+          }
+          ImGui::EndChild();
+          if (ImGui::Button("Use Selected Example", ImVec2(0.0f, 0.0f))) {
+            const CustomSeriesTemplate &selected = templates[static_cast<size_t>(std::clamp(editor.selected_template, 0,
+              static_cast<int>(templates.size()) - 1))];
+            editor.globals_code = selected.globals_code;
+            editor.function_code = selected.function_code;
+            editor.preview_is_result = false;
+          }
+          ImGui::Spacing();
+          ImGui::TextDisabled("Preview");
+          ImGui::BeginChild("##custom_series_template_preview", ImVec2(0.0f, 0.0f), true);
+          const CustomSeriesTemplate &selected = templates[static_cast<size_t>(std::clamp(editor.selected_template, 0,
+            static_cast<int>(templates.size()) - 1))];
+          ImGui::TextUnformatted(selected.preview_text);
+          ImGui::EndChild();
+        }
+        ImGui::EndChild();
+
+        ImGui::TableNextColumn();
+        if (ImGui::BeginChild("##custom_series_right", ImVec2(0.0f, 0.0f), false)) {
+          const std::string name_status = active_pane != nullptr ? custom_series_name_status(*active_pane, editor.name)
+                                                                 : std::string("no active pane");
+          ImGui::TextUnformatted("New name:");
+          ImGui::SameLine();
+          if (name_status == "name required" || name_status == "cannot start with /") {
+            ImGui::TextColored(color_rgb(200, 72, 64), "%s", name_status.c_str());
+          } else {
+            ImGui::TextColored(color_rgb(58, 126, 73), "%s", name_status.c_str());
+          }
+          if (editor.focus_name) {
+            ImGui::SetKeyboardFocusHere();
+            editor.focus_name = false;
+          }
+          ImGui::SetNextItemWidth(-FLT_MIN);
+          input_text_string("##custom_series_name", &editor.name, ImGuiInputTextFlags_AutoSelectAll);
+
+          ImGui::Spacing();
+          ImGui::SeparatorText("Global variables");
+          ImGui::SameLine();
+          if (ImGui::SmallButton("Help")) {
+            editor.open_help = true;
+          }
+          const float globals_height = std::max(96.0f, ImGui::GetContentRegionAvail().y * 0.28f);
+          if (input_text_multiline_string("##custom_series_globals",
+                                          &editor.globals_code,
+                                          ImVec2(-FLT_MIN, globals_height),
+                                          ImGuiInputTextFlags_AllowTabInput)) {
+            editor.preview_is_result = false;
+          }
+
+          ImGui::Spacing();
+          ImGui::TextUnformatted("def calc(time, value):");
+          const float function_height = std::max(180.0f, ImGui::GetContentRegionAvail().y - 16.0f);
+          if (input_text_multiline_string("##custom_series_function",
+                                          &editor.function_code,
+                                          ImVec2(-FLT_MIN, function_height),
+                                          ImGuiInputTextFlags_AllowTabInput)) {
+            editor.preview_is_result = false;
+          }
+        }
+        ImGui::EndChild();
+        ImGui::EndTable();
+      }
+
+      ImGui::Spacing();
+      if (ImGui::Button("New", ImVec2(120.0f, 0.0f))) {
+        reset_custom_series_editor(&editor);
+        if (!state->selected_browser_path.empty()) {
+          editor.linked_source = state->selected_browser_path;
+        }
+        editor.open = true;
+        editor.focus_name = true;
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Apply", ImVec2(120.0f, 0.0f))) {
+        apply_custom_series_editor(session, state);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+        editor.open = false;
+        editor.request_select = false;
+      }
+      ImGui::EndTabItem();
+    }
+
+    if (ImGui::BeginTabItem("Batch Functions")) {
+      ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(110, 118, 128));
+      ImGui::TextWrapped("Batch functions are not implemented yet. The single-function editor uses Python and "
+                         "matches the current scope from NOTES.md.");
+      ImGui::PopStyleColor();
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+}
+
 std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, int pane_index) {
   if (!ImGui::BeginPopupContextWindow("##pane_context")) {
     return std::nullopt;
@@ -2875,13 +3771,19 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
 
   PaneMenuAction action;
   action.pane_index = pane_index;
+  const bool has_curves = pane_index >= 0
+    && pane_index < static_cast<int>(tab.panes.size())
+    && !tab.panes[static_cast<size_t>(pane_index)].curves.empty();
   bootstrap_icons::menu_item("sliders", "Edit Axis Limits...", nullptr, false, false);
   bootstrap_icons::menu_item("palette", "Edit Curve Style...", nullptr, false, false);
-  bootstrap_icons::menu_item("plus-slash-minus", "Add Custom Curve...", nullptr, false, false);
+  if (bootstrap_icons::menu_item("plus-slash-minus", "Apply filter to data...", nullptr, false, has_curves)) {
+    action.kind = PaneMenuActionKind::OpenCustomSeries;
+  }
   ImGui::Separator();
-  if (bootstrap_icons::menu_item("distribute-vertical", "Split Left / Right")) {
+  if (action.kind == PaneMenuActionKind::None && bootstrap_icons::menu_item("distribute-vertical", "Split Left / Right")) {
     action.kind = PaneMenuActionKind::SplitLeft;
-  } else if (bootstrap_icons::menu_item("distribute-horizontal", "Split Top / Bottom")) {
+  } else if (action.kind == PaneMenuActionKind::None
+             && bootstrap_icons::menu_item("distribute-horizontal", "Split Top / Bottom")) {
     action.kind = PaneMenuActionKind::SplitTop;
   }
   ImGui::Separator();
@@ -3007,6 +3909,11 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
   bool dock_changed = false;
   bool layout_changed = false;
   switch (action.kind) {
+    case PaneMenuActionKind::OpenCustomSeries:
+      tab_state->active_pane_index = pane_index;
+      open_custom_series_editor(state, preferred_custom_series_source(tab->panes[static_cast<size_t>(pane_index)]));
+      state->status_text = "Custom series editor opened";
+      return true;
     case PaneMenuActionKind::SplitLeft:
       if (split_pane(tab, pane_index, PaneDropZone::Left)) {
         tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
@@ -3247,6 +4154,7 @@ void draw_pane_windows(AppSession *session, UiState *state) {
 }
 
 void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
+  state->custom_series.selected = false;
   ImGui::SetNextWindowPos(ImVec2(ui.content_x, ui.content_y));
   ImGui::SetNextWindowSize(ImVec2(ui.content_w, ui.content_h));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -3271,6 +4179,7 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
       };
       TabActionKind pending_action = TabActionKind::None;
       int pending_tab_index = -1;
+      bool custom_series_tab_open = state->custom_series.open;
       for (size_t i = 0; i < session->layout.tabs.size(); ++i) {
         const WorkspaceTab &tab = session->layout.tabs[i];
         const TabUiState &tab_ui = state->tabs[i];
@@ -3323,6 +4232,18 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
           ImGui::EndTabItem();
         }
       }
+      if (custom_series_tab_open) {
+        ImGuiTabItemFlags custom_flags = ImGuiTabItemFlags_None;
+        if (state->custom_series.request_select) {
+          custom_flags |= ImGuiTabItemFlags_SetSelected;
+        }
+        if (ImGui::BeginTabItem("Custom Series##workspace_custom_series", &custom_series_tab_open, custom_flags)) {
+          state->custom_series.request_select = false;
+          state->custom_series.selected = true;
+          draw_custom_series_editor(session, state);
+          ImGui::EndTabItem();
+        }
+      }
       ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
       ImGui::PushStyleColor(ImGuiCol_Tab, color_rgb(210, 217, 225));
       ImGui::PushStyleColor(ImGuiCol_TabHovered, color_rgb(224, 230, 237));
@@ -3350,6 +4271,11 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
       ImGui::PopStyleColor(3);
       ImGui::PopStyleVar();
       ImGui::EndTabBar();
+
+      if (!custom_series_tab_open) {
+        state->custom_series.open = false;
+        state->custom_series.request_select = false;
+      }
 
       if (rename_tab_rect.has_value()) {
         draw_inline_tab_editor(session, state, *rename_tab_rect);
@@ -3525,10 +4451,6 @@ bool reload_session(AppSession *session, UiState *state, const std::string &rout
 }
 
 void draw_popups(AppSession *session, UiState *state) {
-  if (state->open_custom_series) {
-    ImGui::OpenPopup("Custom Series");
-    state->open_custom_series = false;
-  }
   if (state->open_open_route) {
     ImGui::OpenPopup("Open Route");
     state->open_open_route = false;
@@ -3544,10 +4466,6 @@ void draw_popups(AppSession *session, UiState *state) {
     state->open_save_layout = false;
   }
 
-  show_not_implemented_modal(
-    "Custom Series",
-    "Custom Series",
-    "Custom series editing is not implemented yet.");
   if (ImGui::BeginPopupModal("Open Route", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted("Load a route into the current layout.");
     ImGui::Separator();
@@ -3600,10 +4518,10 @@ void draw_popups(AppSession *session, UiState *state) {
     ImGui::EndPopup();
   }
   if (state->open_error_popup) {
-    ImGui::OpenPopup("Route Error");
+    ImGui::OpenPopup("Error");
     state->open_error_popup = false;
   }
-  if (ImGui::BeginPopupModal("Route Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+  if (ImGui::BeginPopupModal("Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextWrapped("%s", state->error_text.c_str());
     ImGui::Spacing();
     if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
@@ -3640,7 +4558,9 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   draw_sidebar(session, ui, state, show_camera_feed);
   draw_sidebar_resizer(ui, state);
   draw_workspace(session, ui, state);
-  draw_pane_windows(session, state);
+  if (!state->custom_series.selected) {
+    draw_pane_windows(session, state);
+  }
   draw_status_bar(*session, ui, state);
   draw_popups(session, state);
 }
