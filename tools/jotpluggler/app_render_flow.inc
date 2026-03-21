@@ -23,8 +23,8 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height, state->sidebar_width);
   state->sidebar_width = ui.sidebar_width;
   draw_sidebar(session, ui, state, show_camera_feed);
-  draw_sidebar_resizer(ui, state);
   draw_workspace(session, ui, state);
+  draw_sidebar_resizer(ui, state);
   if (!state->custom_series.selected && !state->logs.selected) {
     draw_pane_windows(session, state);
   }

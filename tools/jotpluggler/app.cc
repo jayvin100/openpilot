@@ -1529,7 +1529,7 @@ void draw_browser_node(AppSession *session,
 }
 
 void draw_sidebar_resizer(const UiMetrics &ui, UiState *state) {
-  constexpr float kHandleWidth = 6.0f;
+  constexpr float kHandleWidth = 14.0f;
   ImGui::SetNextWindowPos(ImVec2(ui.sidebar_width - kHandleWidth * 0.5f, ui.top_offset));
   ImGui::SetNextWindowSize(ImVec2(kHandleWidth, std::max(1.0f, ui.height - ui.top_offset)));
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
@@ -1537,8 +1537,9 @@ void draw_sidebar_resizer(const UiMetrics &ui, UiState *state) {
                                  ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoSavedSettings |
                                  ImGuiWindowFlags_NoBackground;
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
   if (ImGui::Begin("##sidebar_resizer", nullptr, flags)) {
-    ImGui::InvisibleButton("##sidebar_resizer_button", ImGui::GetContentRegionAvail());
+    ImGui::InvisibleButton("##sidebar_resizer_button", ImVec2(kHandleWidth, std::max(1.0f, ui.height - ui.top_offset)));
     if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
       ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     }
@@ -1554,6 +1555,7 @@ void draw_sidebar_resizer(const UiMetrics &ui, UiState *state) {
                        IM_COL32(194, 198, 204, 255));
   }
   ImGui::End();
+  ImGui::PopStyleVar();
 }
 
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed) {
@@ -1658,7 +1660,10 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       }
       ImGui::EndCombo();
     }
-    if (ImGui::Button("New", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
+    const float layout_button_gap = ImGui::GetStyle().ItemSpacing.x;
+    const float layout_row_width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    const float layout_button_width = std::max(1.0f, (layout_row_width - 2.0f * layout_button_gap) / 3.0f);
+    if (ImGui::Button("New", ImVec2(layout_button_width, 0.0f))) {
       session->layout = make_empty_layout();
       session->layout_path.clear();
       session->autosave_path.clear();
@@ -1671,11 +1676,13 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       mark_all_docks_dirty(state);
       reset_shared_range(state, *session);
     }
-    if (ImGui::Button("Save", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
+    ImGui::SameLine(0.0f, layout_button_gap);
+    if (ImGui::Button("Save", ImVec2(layout_button_width, 0.0f))) {
       state->request_save_layout = true;
     }
+    ImGui::SameLine(0.0f, layout_button_gap);
     ImGui::BeginDisabled(!state->layout_dirty);
-    if (ImGui::Button("Reset", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
+    if (ImGui::Button("Reset", ImVec2(layout_button_width, 0.0f))) {
       state->request_reset_layout = true;
     }
     ImGui::EndDisabled();
