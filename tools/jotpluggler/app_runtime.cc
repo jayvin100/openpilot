@@ -1,11 +1,13 @@
 #include "tools/jotpluggler/app_runtime.h"
 
+#include "cereal/services.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_opengl3_loader.h"
 #include "implot.h"
 #include "libyuv.h"
+#include "msgq_repo/msgq/ipc.h"
 #include "tools/replay/framereader.h"
 
 #include <GLFW/glfw3.h>
@@ -28,6 +30,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unistd.h>
 #include <vector>
 
@@ -36,6 +39,41 @@
 namespace jotpluggler {
 
 namespace {
+
+bool is_local_stream_address(std::string_view address) {
+  return address.empty() || address == "127.0.0.1" || address == "localhost";
+}
+
+std::string normalize_stream_address(std::string address) {
+  return is_local_stream_address(address) ? "127.0.0.1" : address;
+}
+
+bool should_subscribe_stream_service(const std::string &name) {
+  static const std::array<std::string_view, 13> kSkippedServices = {{
+    "roadEncodeIdx",
+    "driverEncodeIdx",
+    "wideRoadEncodeIdx",
+    "qRoadEncodeIdx",
+    "roadEncodeData",
+    "driverEncodeData",
+    "wideRoadEncodeData",
+    "qRoadEncodeData",
+    "livestreamWideRoadEncodeIdx",
+    "livestreamRoadEncodeIdx",
+    "livestreamDriverEncodeIdx",
+    "thumbnail",
+    "navThumbnail",
+  }};
+  if (name == "rawAudioData") {
+    return false;
+  }
+  for (std::string_view skipped : kSkippedServices) {
+    if (name == skipped) {
+      return false;
+    }
+  }
+  return true;
+}
 
 void glfw_error_callback(int error, const char *description) {
   const std::string_view desc = description != nullptr ? description : "unknown";
@@ -324,6 +362,240 @@ RouteLoadSnapshot AsyncRouteLoader::snapshot() const {
 
 bool AsyncRouteLoader::consume(RouteData *route_data, std::string *error_text) {
   return impl_->consume(route_data, error_text);
+}
+
+struct StreamPoller::Impl {
+  ~Impl() {
+    stop();
+  }
+
+  void start(const std::string &requested_address,
+             double requested_buffer_seconds,
+             const std::string &dbc_name,
+             std::optional<double> time_offset) {
+    stop();
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      pending = {};
+      pending_series_slots.clear();
+      error_text.clear();
+      address = normalize_stream_address(requested_address);
+      remote = !is_local_stream_address(requested_address);
+      buffer_seconds = std::max(1.0, requested_buffer_seconds);
+      latest_dbc_name = dbc_name;
+      latest_car_fingerprint.clear();
+    }
+    received_messages.store(0);
+    connected.store(false);
+    paused.store(false);
+    running.store(true);
+    worker = std::thread([this, dbc_name, time_offset]() {
+      try {
+        if (remote) {
+          setenv("ZMQ", "1", 1);
+        } else {
+          unsetenv("ZMQ");
+        }
+
+        std::unique_ptr<Context> context(Context::create());
+        std::unique_ptr<Poller> poller(Poller::create());
+        std::vector<std::unique_ptr<SubSocket>> sockets;
+        sockets.reserve(services.size());
+        for (const auto &[name, info] : services) {
+          if (!should_subscribe_stream_service(name)) {
+            continue;
+          }
+          std::unique_ptr<SubSocket> socket(
+            SubSocket::create(context.get(), name.c_str(), address.c_str(), false, true, info.queue_size));
+          if (socket == nullptr) {
+            continue;
+          }
+          socket->setTimeout(0);
+          poller->registerSocket(socket.get());
+          sockets.push_back(std::move(socket));
+        }
+        if (sockets.empty()) {
+          throw std::runtime_error("Failed to connect to any cereal service");
+        }
+        connected.store(true);
+
+        StreamAccumulator accumulator(dbc_name, time_offset);
+        while (running.load()) {
+          std::vector<SubSocket *> ready = poller->poll(1);
+          for (SubSocket *socket : ready) {
+            while (running.load()) {
+              std::unique_ptr<Message> msg(socket->receive(true));
+              if (!msg) {
+                break;
+              }
+              const size_t size = msg->getSize();
+              if (size < sizeof(capnp::word) || (size % sizeof(capnp::word)) != 0) {
+                continue;
+              }
+              if (paused.load()) {
+                received_messages.fetch_add(1);
+                continue;
+              }
+              kj::ArrayPtr<const capnp::word> data(reinterpret_cast<const capnp::word *>(msg->getData()),
+                                                   size / sizeof(capnp::word));
+              capnp::FlatArrayMessageReader event_reader(data);
+              const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
+              accumulator.append_event(event.which(), data);
+              received_messages.fetch_add(1);
+            }
+          }
+
+          StreamExtractBatch batch = accumulator.take_batch();
+          if (!batch.series.empty() || !batch.logs.empty() || !batch.enum_info.empty()
+              || !batch.car_fingerprint.empty() || !batch.dbc_name.empty()) {
+            std::lock_guard<std::mutex> lock(mutex);
+            merge_batch(&pending, &pending_series_slots, &batch);
+            latest_dbc_name = pending.dbc_name;
+            latest_car_fingerprint = pending.car_fingerprint;
+          }
+        }
+      } catch (const std::exception &err) {
+        std::lock_guard<std::mutex> lock(mutex);
+        error_text = err.what();
+      }
+      connected.store(false);
+      running.store(false);
+    });
+  }
+
+  void set_paused(bool paused_value) {
+    paused.store(paused_value);
+    if (paused_value) {
+      std::lock_guard<std::mutex> lock(mutex);
+      pending = {};
+      pending_series_slots.clear();
+      error_text.clear();
+    }
+  }
+
+  void stop() {
+    running.store(false);
+    paused.store(false);
+    if (worker.joinable()) {
+      worker.join();
+    }
+    connected.store(false);
+  }
+
+  StreamPollSnapshot snapshot() const {
+    StreamPollSnapshot out;
+    out.active = running.load();
+    out.connected = connected.load();
+    out.paused = paused.load();
+    out.remote = remote;
+    out.address = address;
+    out.buffer_seconds = buffer_seconds;
+    out.received_messages = received_messages.load();
+    std::lock_guard<std::mutex> lock(mutex);
+    out.dbc_name = latest_dbc_name;
+    out.car_fingerprint = latest_car_fingerprint;
+    return out;
+  }
+
+  bool consume(StreamExtractBatch *batch, std::string *out_error_text) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const bool has_error = !error_text.empty();
+    const bool has_batch = !pending.series.empty() || !pending.logs.empty() || !pending.enum_info.empty()
+      || !pending.car_fingerprint.empty() || !pending.dbc_name.empty();
+    if (!has_error && !has_batch) {
+      return false;
+    }
+    if (batch != nullptr) {
+      *batch = std::move(pending);
+      pending = {};
+      pending_series_slots.clear();
+    }
+    if (out_error_text != nullptr) {
+      *out_error_text = error_text;
+      error_text.clear();
+    }
+    return true;
+  }
+
+  static void merge_route_series(RouteSeries *dst, RouteSeries *src) {
+    if (src->times.empty()) {
+      return;
+    }
+    if (dst->path.empty()) {
+      dst->path = src->path;
+    }
+    dst->times.insert(dst->times.end(), src->times.begin(), src->times.end());
+    dst->values.insert(dst->values.end(), src->values.begin(), src->values.end());
+  }
+
+  static void merge_batch(StreamExtractBatch *dst,
+                          std::unordered_map<std::string, size_t> *slots,
+                          StreamExtractBatch *src) {
+    for (RouteSeries &series : src->series) {
+      auto [it, inserted] = slots->try_emplace(series.path, dst->series.size());
+      if (inserted) {
+        dst->series.push_back(RouteSeries{.path = series.path});
+      }
+      merge_route_series(&dst->series[it->second], &series);
+    }
+    if (!src->logs.empty()) {
+      dst->logs.insert(dst->logs.end(),
+                       std::make_move_iterator(src->logs.begin()),
+                       std::make_move_iterator(src->logs.end()));
+    }
+    for (auto &[path, info] : src->enum_info) {
+      dst->enum_info[path] = std::move(info);
+    }
+    if (!src->car_fingerprint.empty()) {
+      dst->car_fingerprint = src->car_fingerprint;
+    }
+    if (!src->dbc_name.empty()) {
+      dst->dbc_name = src->dbc_name;
+    }
+  }
+
+  mutable std::mutex mutex;
+  std::thread worker;
+  std::atomic<bool> running{false};
+  std::atomic<bool> connected{false};
+  std::atomic<bool> paused{false};
+  std::atomic<uint64_t> received_messages{0};
+  StreamExtractBatch pending;
+  std::unordered_map<std::string, size_t> pending_series_slots;
+  std::string error_text;
+  std::string address = "127.0.0.1";
+  std::string latest_dbc_name;
+  std::string latest_car_fingerprint;
+  double buffer_seconds = 30.0;
+  bool remote = false;
+};
+
+StreamPoller::StreamPoller()
+  : impl_(std::make_unique<Impl>()) {}
+
+StreamPoller::~StreamPoller() = default;
+
+void StreamPoller::start(const std::string &address,
+                         double buffer_seconds,
+                         const std::string &dbc_name,
+                         std::optional<double> time_offset) {
+  impl_->start(address, buffer_seconds, dbc_name, time_offset);
+}
+
+void StreamPoller::set_paused(bool paused) {
+  impl_->set_paused(paused);
+}
+
+void StreamPoller::stop() {
+  impl_->stop();
+}
+
+StreamPollSnapshot StreamPoller::snapshot() const {
+  return impl_->snapshot();
+}
+
+bool StreamPoller::consume(StreamExtractBatch *batch, std::string *error_text) {
+  return impl_->consume(batch, error_text);
 }
 
 struct SidebarCameraFeed::Impl {

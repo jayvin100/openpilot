@@ -88,6 +88,74 @@ void rebuild_session_route_data(AppSession *session, UiState *state,
   apply_route_data(session, state, load_route_data(session->route_name, session->data_dir, session->dbc_override, progress));
 }
 
+void stop_stream_session(AppSession *session, UiState *state, bool preserve_data) {
+  if (preserve_data && session->stream_poller && session->data_mode == SessionDataMode::Stream) {
+    session->stream_poller->set_paused(true);
+  } else if (session->stream_poller) {
+    session->stream_poller->stop();
+  }
+  session->stream_paused = preserve_data && session->data_mode == SessionDataMode::Stream;
+  if (!preserve_data) {
+    session->stream_time_offset.reset();
+    apply_route_data(session, state, RouteData{});
+  }
+  sync_stream_buffers(state, *session);
+}
+
+bool start_stream_session(AppSession *session,
+                          UiState *state,
+                          const std::string &address,
+                          double buffer_seconds,
+                          bool preserve_existing_data) {
+  try {
+    if (session->route_loader) {
+      session->route_loader.reset();
+    }
+    session->data_mode = SessionDataMode::Stream;
+    session->route_name.clear();
+    session->data_dir.clear();
+    session->stream_address = address.empty() ? "127.0.0.1" : address;
+    session->stream_buffer_seconds = std::max(1.0, buffer_seconds);
+    session->next_stream_custom_refresh_time = 0.0;
+    session->stream_paused = false;
+    if (preserve_existing_data && session->stream_poller) {
+      StreamPollSnapshot snapshot = session->stream_poller->snapshot();
+      if (snapshot.active) {
+        session->stream_poller->set_paused(false);
+        sync_route_buffers(state, *session);
+        sync_stream_buffers(state, *session);
+        state->follow_latest = true;
+        state->playback_playing = false;
+        state->status_text = "Resumed stream " + session->stream_address;
+        return true;
+      }
+    }
+    if (!preserve_existing_data) {
+      session->stream_time_offset.reset();
+      apply_route_data(session, state, RouteData{});
+    }
+    if (!session->stream_poller) {
+      session->stream_poller = std::make_unique<StreamPoller>();
+    }
+    session->stream_poller->start(session->stream_address,
+                                  session->stream_buffer_seconds,
+                                  session->dbc_override,
+                                  session->stream_time_offset);
+    sync_route_buffers(state, *session);
+    sync_stream_buffers(state, *session);
+    state->follow_latest = true;
+    state->playback_playing = false;
+    state->status_text = preserve_existing_data ? "Resumed stream " + session->stream_address
+                                                : "Streaming from " + session->stream_address;
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    state->status_text = "Failed to start stream";
+    return false;
+  }
+}
+
 void start_async_route_load(AppSession *session, UiState *state) {
   if (!session->route_loader) {
     return;
@@ -118,9 +186,17 @@ void poll_async_route_load(AppSession *session, UiState *state) {
 
 bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir) {
   try {
+    stop_stream_session(session, state, false);
+    session->data_mode = SessionDataMode::Route;
     session->route_name = route_name;
     session->data_dir = data_dir;
+    if (!session->camera_feed) {
+      session->camera_feed = std::make_unique<SidebarCameraFeed>();
+    }
     if (session->async_route_loading) {
+      if (!session->route_loader) {
+        session->route_loader = std::make_unique<AsyncRouteLoader>(::isatty(STDERR_FILENO) != 0);
+      }
       start_async_route_load(session, state);
     } else {
       rebuild_session_route_data(session, state);
@@ -140,6 +216,11 @@ void draw_popups(AppSession *session, UiState *state) {
   if (state->open_open_route) {
     ImGui::OpenPopup("Open Route");
     state->open_open_route = false;
+  }
+  if (state->open_stream) {
+    sync_stream_buffers(state, *session);
+    ImGui::OpenPopup("Live Stream");
+    state->open_stream = false;
   }
   if (state->open_load_layout) {
     sync_layout_buffers(state, *session);
@@ -169,6 +250,33 @@ void draw_popups(AppSession *session, UiState *state) {
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
       sync_route_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+  if (ImGui::BeginPopupModal("Live Stream", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Connect to live cereal services.");
+    ImGui::Separator();
+    if (ImGui::RadioButton("Local (MSGQ)", !state->stream_remote)) {
+      state->stream_remote = false;
+    }
+    if (ImGui::RadioButton("Remote (ZMQ)", state->stream_remote)) {
+      state->stream_remote = true;
+    }
+    ImGui::BeginDisabled(!state->stream_remote);
+    ImGui::InputText("Address", state->stream_address_buffer.data(), state->stream_address_buffer.size());
+    ImGui::EndDisabled();
+    ImGui::InputDouble("Buffer (seconds)", &state->stream_buffer_seconds, 0.0, 0.0, "%.0f");
+    ImGui::Spacing();
+    if (ImGui::Button("Connect", ImVec2(120.0f, 0.0f))) {
+      const std::string address = state->stream_remote ? std::string(state->stream_address_buffer.data()) : "127.0.0.1";
+      if (start_stream_session(session, state, address, state->stream_buffer_seconds, false)) {
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+      sync_stream_buffers(state, *session);
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();

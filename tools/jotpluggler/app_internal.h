@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -17,6 +18,12 @@ namespace jotpluggler {
 
 class AsyncRouteLoader;
 class SidebarCameraFeed;
+class StreamPoller;
+
+enum class SessionDataMode : uint8_t {
+  Route,
+  Stream,
+};
 
 struct BrowserNode {
   std::string label;
@@ -35,14 +42,21 @@ struct AppSession {
   std::string route_name;
   std::string data_dir;
   std::string dbc_override;
+  std::string stream_address = "127.0.0.1";
+  double stream_buffer_seconds = 30.0;
+  SessionDataMode data_mode = SessionDataMode::Route;
   SketchLayout layout;
   RouteData route_data;
   std::unordered_map<std::string, const RouteSeries *> series_by_path;
   std::unordered_map<std::string, BrowserSeriesDisplayInfo> browser_display_by_path;
   std::vector<BrowserNode> browser_nodes;
   std::unique_ptr<AsyncRouteLoader> route_loader;
+  std::unique_ptr<StreamPoller> stream_poller;
   std::unique_ptr<SidebarCameraFeed> camera_feed;
   bool async_route_loading = false;
+  double next_stream_custom_refresh_time = 0.0;
+  bool stream_paused = false;
+  std::optional<double> stream_time_offset;
 };
 
 struct TabUiState {
@@ -101,6 +115,7 @@ struct AxisLimitsEditorState {
 
 struct UiState {
   bool open_open_route = false;
+  bool open_stream = false;
   bool open_load_layout = false;
   bool open_save_layout = false;
   bool request_close = false;
@@ -124,6 +139,7 @@ struct UiState {
   bool focus_rename_tab_input = false;
   std::vector<TabUiState> tabs;
   std::array<char, 128> route_buffer = {};
+  std::array<char, 128> stream_address_buffer = {};
   std::array<char, 128> rename_tab_buffer = {};
   std::array<char, 128> browser_filter = {};
   std::array<char, 512> data_dir_buffer = {};
@@ -135,6 +151,7 @@ struct UiState {
   std::string error_text;
   bool open_error_popup = false;
   std::string status_text = "Ready";
+  bool stream_remote = false;
   float sidebar_width = 320.0f;
   double route_x_min = 0.0;
   double route_x_max = 1.0;
@@ -143,6 +160,7 @@ struct UiState {
   double tracker_time = 0.0;
   double playback_rate = 1.0;
   double playback_step = 0.1;
+  double stream_buffer_seconds = 30.0;
   AxisLimitsEditorState axis_limits;
   CustomSeriesEditorState custom_series;
   LogsUiState logs;

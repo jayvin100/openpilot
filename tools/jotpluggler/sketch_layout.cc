@@ -607,6 +607,113 @@ bool same_log_entry(const LogEntry &a, const LogEntry &b) {
       && a.origin == b.origin;
 }
 
+void append_log_event(cereal::Event::Which which,
+                      const cereal::Event::Reader &event,
+                      double time_offset,
+                      std::vector<LogEntry> *logs,
+                      std::string *last_alert_key) {
+  const double boot_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
+  const double mono_time = boot_time - time_offset;
+
+  switch (which) {
+    case cereal::Event::Which::LOG_MESSAGE:
+    case cereal::Event::Which::ERROR_LOG_MESSAGE: {
+      const std::string raw = which == cereal::Event::Which::LOG_MESSAGE
+        ? event.getLogMessage().cStr()
+        : event.getErrorLogMessage().cStr();
+      std::string parse_error;
+      const json11::Json parsed = json11::Json::parse(raw, parse_error);
+
+      LogEntry entry;
+      entry.mono_time = mono_time;
+      entry.boot_time = boot_time;
+      entry.origin = LogOrigin::Log;
+      entry.level = which == cereal::Event::Which::ERROR_LOG_MESSAGE ? 40 : 20;
+      entry.source = "log";
+      entry.message = raw;
+      if (parse_error.empty() && parsed.is_object()) {
+        entry.wall_time = parsed["created"].number_value();
+        if (parsed["levelnum"].is_number()) {
+          entry.level = static_cast<uint8_t>(parsed["levelnum"].int_value());
+        }
+        const std::string filename = parsed["filename"].string_value();
+        const int lineno = parsed["lineno"].is_number() ? parsed["lineno"].int_value() : 0;
+        entry.source = filename.empty() ? "log" : filename + (lineno > 0 ? ":" + std::to_string(lineno) : "");
+        entry.func = parsed["funcname"].string_value();
+        if (parsed["msg"].is_string()) {
+          entry.message = parsed["msg"].string_value();
+        }
+        if (!parsed["ctx"].is_null()) {
+          entry.context = parsed["ctx"].dump();
+        }
+      }
+      logs->push_back(std::move(entry));
+      break;
+    }
+    case cereal::Event::Which::ANDROID_LOG: {
+      const auto android = event.getAndroidLog();
+      LogEntry entry;
+      entry.mono_time = mono_time;
+      entry.boot_time = boot_time;
+      entry.wall_time = android_wall_time_seconds(android.getTs());
+      entry.level = android_priority_to_level(android.getPriority());
+      entry.source = android.hasTag() ? android.getTag().cStr() : "android";
+      entry.message = android.hasMessage() ? android.getMessage().cStr() : std::string();
+      entry.context = "pid=" + std::to_string(android.getPid()) + ", tid=" + std::to_string(android.getTid());
+      if (!entry.message.empty()) {
+        std::string parse_error;
+        const json11::Json parsed = json11::Json::parse(entry.message, parse_error);
+        if (parse_error.empty() && parsed.is_object()) {
+          if (parsed["MESSAGE"].is_string()) {
+            entry.message = parsed["MESSAGE"].string_value();
+          }
+          if (parsed["SYSLOG_IDENTIFIER"].is_string() && !parsed["SYSLOG_IDENTIFIER"].string_value().empty()) {
+            entry.source = parsed["SYSLOG_IDENTIFIER"].string_value();
+          }
+          if (const std::optional<int> priority = json_int_value(parsed["PRIORITY"]); priority.has_value()) {
+            entry.level = android_priority_to_level(priority.value());
+          }
+          if (const std::optional<uint64_t> wall_ts = json_u64_value(parsed["__REALTIME_TIMESTAMP"]); wall_ts.has_value()) {
+            entry.wall_time = android_wall_time_seconds(wall_ts.value());
+          }
+          entry.context = format_journal_context(parsed, android.getPid(), android.getTid());
+        }
+      }
+      entry.origin = LogOrigin::Android;
+      logs->push_back(std::move(entry));
+      break;
+    }
+    case cereal::Event::Which::SELFDRIVE_STATE: {
+      const auto state = event.getSelfdriveState();
+      const std::string alert_type = state.getAlertType().cStr();
+      const std::string alert_text1 = state.getAlertText1().cStr();
+      if (alert_text1.empty() && alert_type.empty()) {
+        break;
+      }
+      const std::string current_key = alert_type + "\n" + alert_text1 + "\n" + std::string(state.getAlertText2().cStr());
+      if (last_alert_key != nullptr && current_key == *last_alert_key) {
+        break;
+      }
+      if (last_alert_key != nullptr) {
+        *last_alert_key = current_key;
+      }
+
+      LogEntry entry;
+      entry.mono_time = mono_time;
+      entry.boot_time = boot_time;
+      entry.level = alert_status_to_level(state.getAlertStatus());
+      entry.source = "alert";
+      entry.func = alert_type;
+      entry.message = alert_message_text(state);
+      entry.origin = LogOrigin::Alert;
+      logs->push_back(std::move(entry));
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 std::vector<LogEntry> extract_segment_logs(const std::vector<Event> &events) {
   std::vector<LogEntry> logs;
   logs.reserve(events.size() / 8);
@@ -615,103 +722,7 @@ std::vector<LogEntry> extract_segment_logs(const std::vector<Event> &events) {
   for (const Event &event_record : events) {
     capnp::FlatArrayMessageReader event_reader(event_record.data);
     const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-    const double mono_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
-
-    switch (event_record.which) {
-      case cereal::Event::Which::LOG_MESSAGE:
-      case cereal::Event::Which::ERROR_LOG_MESSAGE: {
-        const std::string raw = event_record.which == cereal::Event::Which::LOG_MESSAGE
-          ? event.getLogMessage().cStr()
-          : event.getErrorLogMessage().cStr();
-        std::string parse_error;
-        const json11::Json parsed = json11::Json::parse(raw, parse_error);
-
-        LogEntry entry;
-        entry.mono_time = mono_time;
-        entry.boot_time = mono_time;
-        entry.origin = LogOrigin::Log;
-        entry.level = event_record.which == cereal::Event::Which::ERROR_LOG_MESSAGE ? 40 : 20;
-        entry.source = "log";
-        entry.message = raw;
-        if (parse_error.empty() && parsed.is_object()) {
-          entry.wall_time = parsed["created"].number_value();
-          if (parsed["levelnum"].is_number()) {
-            entry.level = static_cast<uint8_t>(parsed["levelnum"].int_value());
-          }
-          const std::string filename = parsed["filename"].string_value();
-          const int lineno = parsed["lineno"].is_number() ? parsed["lineno"].int_value() : 0;
-          entry.source = filename.empty() ? "log" : filename + (lineno > 0 ? ":" + std::to_string(lineno) : "");
-          entry.func = parsed["funcname"].string_value();
-          if (parsed["msg"].is_string()) {
-            entry.message = parsed["msg"].string_value();
-          }
-          if (!parsed["ctx"].is_null()) {
-            entry.context = parsed["ctx"].dump();
-          }
-        }
-        logs.push_back(std::move(entry));
-        break;
-      }
-      case cereal::Event::Which::ANDROID_LOG: {
-        const auto android = event.getAndroidLog();
-        LogEntry entry;
-        entry.mono_time = mono_time;
-        entry.boot_time = mono_time;
-        entry.wall_time = android_wall_time_seconds(android.getTs());
-        entry.level = android_priority_to_level(android.getPriority());
-        entry.source = android.hasTag() ? android.getTag().cStr() : "android";
-        entry.message = android.hasMessage() ? android.getMessage().cStr() : std::string();
-        entry.context = "pid=" + std::to_string(android.getPid()) + ", tid=" + std::to_string(android.getTid());
-        if (!entry.message.empty()) {
-          std::string parse_error;
-          const json11::Json parsed = json11::Json::parse(entry.message, parse_error);
-          if (parse_error.empty() && parsed.is_object()) {
-            if (parsed["MESSAGE"].is_string()) {
-              entry.message = parsed["MESSAGE"].string_value();
-            }
-            if (parsed["SYSLOG_IDENTIFIER"].is_string() && !parsed["SYSLOG_IDENTIFIER"].string_value().empty()) {
-              entry.source = parsed["SYSLOG_IDENTIFIER"].string_value();
-            }
-            if (const std::optional<int> priority = json_int_value(parsed["PRIORITY"]); priority.has_value()) {
-              entry.level = android_priority_to_level(priority.value());
-            }
-            if (const std::optional<uint64_t> wall_ts = json_u64_value(parsed["__REALTIME_TIMESTAMP"]); wall_ts.has_value()) {
-              entry.wall_time = android_wall_time_seconds(wall_ts.value());
-            }
-            entry.context = format_journal_context(parsed, android.getPid(), android.getTid());
-          }
-        }
-        entry.origin = LogOrigin::Android;
-        logs.push_back(std::move(entry));
-        break;
-      }
-      case cereal::Event::Which::SELFDRIVE_STATE: {
-        const auto state = event.getSelfdriveState();
-        const std::string alert_type = state.getAlertType().cStr();
-        const std::string alert_text1 = state.getAlertText1().cStr();
-        if (alert_text1.empty() && alert_type.empty()) {
-          break;
-        }
-        const std::string current_key = alert_type + "\n" + alert_text1 + "\n" + std::string(state.getAlertText2().cStr());
-        if (current_key == last_alert_key) {
-          break;
-        }
-        last_alert_key = current_key;
-
-        LogEntry entry;
-        entry.mono_time = mono_time;
-        entry.boot_time = mono_time;
-        entry.level = alert_status_to_level(state.getAlertStatus());
-        entry.source = "alert";
-        entry.func = alert_type;
-        entry.message = alert_message_text(state);
-        entry.origin = LogOrigin::Alert;
-        logs.push_back(std::move(entry));
-        break;
-      }
-      default:
-        break;
-    }
+    append_log_event(event_record.which, event, 0.0, &logs, &last_alert_key);
   }
 
   return logs;
@@ -1217,6 +1228,69 @@ void append_fast_node(const ResolvedNode &node,
   }
 }
 
+void append_event_fast(cereal::Event::Which which,
+                       int32_t eidx_segnum,
+                       kj::ArrayPtr<const capnp::word> data,
+                       const SchemaIndex &schema,
+                       const dbc_core::Database *can_dbc,
+                       bool skip_raw_can,
+                       double time_offset,
+                       SeriesAccumulator *series) {
+  if (eidx_segnum != -1) {
+    return;
+  }
+  const uint16_t which_index = static_cast<uint16_t>(which);
+  if (which_index >= schema.by_which.size() || !schema.by_which[which_index].has_value()) {
+    return;
+  }
+  const ResolvedService &service = *schema.by_which[which_index];
+  capnp::FlatArrayMessageReader event_reader(data);
+  const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
+  const double tm = static_cast<double>(event.getLogMonoTime()) / 1.0e9 - time_offset;
+  if (skip_raw_can && (service.service_name == "can" || service.service_name == "sendcan")) {
+    auto decode_message = [&](uint8_t bus, uint32_t address, const auto &dat_reader) {
+      if (can_dbc == nullptr) {
+        return;
+      }
+      const dbc_core::Message *message = can_dbc->message(address);
+      if (message == nullptr) {
+        return;
+      }
+      const auto bytes = dat_reader.begin();
+      const uint8_t *raw = bytes;
+      const size_t data_size = dat_reader.size();
+      const std::string base_path = "/" + service.service_name + "/" + std::to_string(bus) + "/" + message->name;
+      for (const dbc_core::Signal &signal : message->signals) {
+        std::optional<double> value = dbc_core::signal_value(signal, *message, raw, data_size);
+        if (!value.has_value()) {
+          continue;
+        }
+        const std::string path = base_path + "/" + signal.name;
+        append_dynamic_scalar_point(path, tm, *value, series);
+        if (series->enum_info.find(path) == series->enum_info.end()) {
+          std::vector<std::string> enum_names = can_dbc->enum_names(signal);
+          if (!enum_names.empty()) {
+            series->enum_info.emplace(path, EnumInfo{.names = std::move(enum_names)});
+          }
+        }
+      }
+    };
+    if (service.service_name == "can") {
+      for (const auto &msg : event.getCan()) {
+        decode_message(static_cast<uint8_t>(msg.getSrc()), msg.getAddress(), msg.getDat());
+      }
+    } else {
+      for (const auto &msg : event.getSendcan()) {
+        decode_message(static_cast<uint8_t>(msg.getSrc()), msg.getAddress(), msg.getDat());
+      }
+    }
+    return;
+  }
+
+  const capnp::DynamicStruct::Reader dynamic_event(event);
+  append_fast_node(service.payload, dynamic_event.get(service.union_field), tm, series);
+}
+
 void append_events_fast_range(const std::vector<Event> &events,
                               size_t begin,
                               size_t end,
@@ -1226,62 +1300,14 @@ void append_events_fast_range(const std::vector<Event> &events,
                               SeriesAccumulator *series) {
   for (size_t i = begin; i < end; ++i) {
     const Event &event_record = events[i];
-    if (event_record.eidx_segnum != -1) {
-      continue;
-    }
-    const uint16_t which = static_cast<uint16_t>(event_record.which);
-    if (which >= schema.by_which.size() || !schema.by_which[which].has_value()) {
-      continue;
-    }
-    const ResolvedService &service = *schema.by_which[which];
-    if (skip_raw_can && (service.service_name == "can" || service.service_name == "sendcan")) {
-      capnp::FlatArrayMessageReader event_reader(event_record.data);
-      const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-      const double tm = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
-      auto decode_message = [&](uint8_t bus, uint32_t address, const auto &dat_reader) {
-        if (can_dbc == nullptr) {
-          return;
-        }
-        const dbc_core::Message *message = can_dbc->message(address);
-        if (message == nullptr) {
-          return;
-        }
-        const auto bytes = dat_reader.begin();
-        const uint8_t *data = bytes;
-        const size_t data_size = dat_reader.size();
-        const std::string base_path = "/" + service.service_name + "/" + std::to_string(bus) + "/" + message->name;
-        for (const dbc_core::Signal &signal : message->signals) {
-          std::optional<double> value = dbc_core::signal_value(signal, *message, data, data_size);
-          if (!value.has_value()) {
-            continue;
-          }
-          const std::string path = base_path + "/" + signal.name;
-          append_dynamic_scalar_point(path, tm, *value, series);
-          if (series->enum_info.find(path) == series->enum_info.end()) {
-            std::vector<std::string> enum_names = can_dbc->enum_names(signal);
-            if (!enum_names.empty()) {
-              series->enum_info.emplace(path, EnumInfo{.names = std::move(enum_names)});
-            }
-          }
-        }
-      };
-      if (service.service_name == "can") {
-        for (const auto &msg : event.getCan()) {
-          decode_message(static_cast<uint8_t>(msg.getSrc()), msg.getAddress(), msg.getDat());
-        }
-      } else {
-        for (const auto &msg : event.getSendcan()) {
-          decode_message(static_cast<uint8_t>(msg.getSrc()), msg.getAddress(), msg.getDat());
-        }
-      }
-      continue;
-    }
-
-    capnp::FlatArrayMessageReader event_reader(event_record.data);
-    const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-    const capnp::DynamicStruct::Reader dynamic_event(event);
-    const double tm = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
-    append_fast_node(service.payload, dynamic_event.get(service.union_field), tm, series);
+    append_event_fast(event_record.which,
+                      event_record.eidx_segnum,
+                      event_record.data,
+                      schema,
+                      can_dbc,
+                      skip_raw_can,
+                      0.0,
+                      series);
   }
 }
 
@@ -1739,6 +1765,103 @@ std::vector<std::string> collect_route_roots(const std::vector<std::string> &pat
 
 }  // namespace
 
+struct StreamAccumulator::Impl {
+  const SchemaIndex &schema = SchemaIndex::instance();
+  SeriesAccumulator series = make_series_accumulator(schema);
+  std::vector<LogEntry> logs;
+  std::string last_alert_key;
+  std::string manual_dbc_name;
+  std::string detected_dbc_name;
+  std::string car_fingerprint;
+  std::optional<dbc_core::Database> can_dbc;
+  std::optional<double> time_offset;
+
+  void refresh_dbc() {
+    const std::string next_dbc = !manual_dbc_name.empty() ? manual_dbc_name : detect_dbc_for_fingerprint(car_fingerprint);
+    if (next_dbc == detected_dbc_name) {
+      return;
+    }
+    detected_dbc_name = next_dbc;
+    can_dbc.reset();
+    if (!detected_dbc_name.empty()) {
+      can_dbc.emplace(resolve_dbc_path(detected_dbc_name));
+    }
+  }
+};
+
+StreamAccumulator::StreamAccumulator(const std::string &dbc_name, std::optional<double> time_offset)
+  : impl_(std::make_unique<Impl>()) {
+  impl_->manual_dbc_name = dbc_name;
+  impl_->time_offset = time_offset;
+  impl_->refresh_dbc();
+}
+
+StreamAccumulator::~StreamAccumulator() = default;
+
+void StreamAccumulator::set_dbc_name(const std::string &dbc_name) {
+  impl_->manual_dbc_name = dbc_name;
+  impl_->refresh_dbc();
+}
+
+void StreamAccumulator::append_event(cereal::Event::Which which, kj::ArrayPtr<const capnp::word> data) {
+  capnp::FlatArrayMessageReader event_reader(data);
+  const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
+  const double boot_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
+  if (!impl_->time_offset.has_value()) {
+    impl_->time_offset = boot_time;
+  }
+  if (which == cereal::Event::Which::CAR_PARAMS) {
+    const std::string fingerprint = event.getCarParams().getCarFingerprint().cStr();
+    if (!fingerprint.empty() && fingerprint != impl_->car_fingerprint) {
+      impl_->car_fingerprint = fingerprint;
+      impl_->refresh_dbc();
+    }
+  }
+
+  append_event_fast(which,
+                    -1,
+                    data,
+                    impl_->schema,
+                    impl_->can_dbc ? &*impl_->can_dbc : nullptr,
+                    true,
+                    *impl_->time_offset,
+                    &impl_->series);
+  append_log_event(which, event, *impl_->time_offset, &impl_->logs, &impl_->last_alert_key);
+}
+
+StreamExtractBatch StreamAccumulator::take_batch() {
+  StreamExtractBatch batch;
+  batch.car_fingerprint = impl_->car_fingerprint;
+  batch.dbc_name = impl_->detected_dbc_name;
+  if (impl_->time_offset.has_value()) {
+    batch.has_time_offset = true;
+    batch.time_offset = *impl_->time_offset;
+  }
+  if (impl_->logs.empty() && populated_series_count(impl_->series) == 0 && impl_->series.enum_info.empty()) {
+    return batch;
+  }
+
+  SeriesAccumulator emitted = std::move(impl_->series);
+  batch.enum_info = std::move(emitted.enum_info);
+  batch.series = collect_series(std::move(emitted));
+  batch.logs = std::move(impl_->logs);
+  impl_->series = make_series_accumulator(impl_->schema);
+  impl_->logs.clear();
+  return batch;
+}
+
+const std::string &StreamAccumulator::car_fingerprint() const {
+  return impl_->car_fingerprint;
+}
+
+const std::string &StreamAccumulator::dbc_name() const {
+  return impl_->detected_dbc_name;
+}
+
+std::optional<double> StreamAccumulator::time_offset() const {
+  return impl_->time_offset;
+}
+
 SketchLayout load_sketch_layout(const fs::path &layout_path) {
   SketchLayout layout = parse_layout(layout_path);
   layout.roots = collect_layout_roots(layout);
@@ -1786,6 +1909,10 @@ RouteData load_route_data(const std::string &route_name,
 std::vector<std::string> available_dbc_names() {
   static const std::vector<std::string> names = available_dbc_names_impl();
   return names;
+}
+
+std::vector<std::string> collect_route_roots_for_paths(const std::vector<std::string> &paths) {
+  return collect_route_roots(paths);
 }
 
 }  // namespace jotpluggler

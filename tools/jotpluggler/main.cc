@@ -15,6 +15,9 @@ void print_usage(const char *argv0) {
       << "Options:\n"
       << "  --demo\n"
       << "  --data-dir <dir>\n"
+      << "  --stream\n"
+      << "  --address <host>\n"
+      << "  --buffer-seconds <seconds>\n"
       << "  --width <pixels>\n"
       << "  --height <pixels>\n"
       << "  --output <png>\n"
@@ -25,7 +28,9 @@ void print_usage(const char *argv0) {
       << "  " << argv0 << "\n"
       << "  " << argv0 << " --demo\n"
       << "  " << argv0 << " --layout longitudinal --demo\n"
-      << "  " << argv0 << " --layout longitudinal --demo --output /tmp/longitudinal.png\n";
+      << "  " << argv0 << " --layout longitudinal --demo --output /tmp/longitudinal.png\n"
+      << "  " << argv0 << " --stream --show\n"
+      << "  " << argv0 << " --stream --address 192.168.60.52 --buffer-seconds 45 --show\n";
 }
 
 bool parse_int(const char *value, int *out) {
@@ -35,6 +40,16 @@ bool parse_int(const char *value, int *out) {
     return false;
   }
   *out = static_cast<int>(parsed);
+  return true;
+}
+
+bool parse_double(const char *value, double *out) {
+  char *end = nullptr;
+  const double parsed = std::strtod(value, &end);
+  if (end == nullptr || *end != '\0') {
+    return false;
+  }
+  *out = parsed;
   return true;
 }
 
@@ -59,6 +74,15 @@ int main(int argc, char *argv[]) {
       options.route_name = kDemoRoute;
     } else if (arg == "--data-dir") {
       options.data_dir = require_value("--data-dir");
+    } else if (arg == "--stream") {
+      options.stream = true;
+    } else if (arg == "--address") {
+      options.stream_address = require_value("--address");
+    } else if (arg == "--buffer-seconds") {
+      if (!parse_double(require_value("--buffer-seconds"), &options.stream_buffer_seconds)) {
+        std::cerr << "Invalid buffer seconds\n";
+        return 2;
+      }
     } else if (arg == "--output") {
       options.output_path = require_value("--output");
     } else if (arg == "--width") {
@@ -92,6 +116,14 @@ int main(int argc, char *argv[]) {
   }
   if (options.width <= 0 || options.height <= 0) {
     std::cerr << "Width and height must be positive\n";
+    return 2;
+  }
+  if (options.stream && !options.route_name.empty()) {
+    std::cerr << "Route/file mode and --stream are mutually exclusive\n";
+    return 2;
+  }
+  if (options.stream_buffer_seconds <= 0.0) {
+    std::cerr << "Buffer seconds must be positive\n";
     return 2;
   }
 

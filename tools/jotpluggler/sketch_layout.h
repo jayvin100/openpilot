@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cereal/gen/cpp/log.capnp.h"
+
 #include <atomic>
 #include <array>
 #include <cstdint>
@@ -42,6 +44,7 @@ struct Curve {
   double value_offset = 0.0;
   bool runtime_only = false;
   std::optional<CustomPythonSeries> custom_python;
+  std::string runtime_error_message;
   std::vector<double> xs;
   std::vector<double> ys;
 };
@@ -130,6 +133,16 @@ struct RouteData {
   double x_max = 1.0;
 };
 
+struct StreamExtractBatch {
+  std::vector<RouteSeries> series;
+  std::vector<LogEntry> logs;
+  std::unordered_map<std::string, EnumInfo> enum_info;
+  std::string car_fingerprint;
+  std::string dbc_name;
+  bool has_time_offset = false;
+  double time_offset = 0.0;
+};
+
 struct SketchLayout {
   std::vector<WorkspaceTab> tabs;
   std::vector<std::string> roots;
@@ -159,8 +172,29 @@ struct RouteLoadProgress {
 
 using RouteLoadProgressCallback = std::function<void(const RouteLoadProgress &)>;
 
+class StreamAccumulator {
+public:
+  explicit StreamAccumulator(const std::string &dbc_name = {}, std::optional<double> time_offset = std::nullopt);
+  ~StreamAccumulator();
+
+  StreamAccumulator(const StreamAccumulator &) = delete;
+  StreamAccumulator &operator=(const StreamAccumulator &) = delete;
+
+  void set_dbc_name(const std::string &dbc_name);
+  void append_event(cereal::Event::Which which, kj::ArrayPtr<const capnp::word> data);
+  StreamExtractBatch take_batch();
+  const std::string &car_fingerprint() const;
+  const std::string &dbc_name() const;
+  std::optional<double> time_offset() const;
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 SketchLayout load_sketch_layout(const std::filesystem::path &layout_path);
 std::vector<std::string> available_dbc_names();
+std::vector<std::string> collect_route_roots_for_paths(const std::vector<std::string> &paths);
 RouteData load_route_data(const std::string &route_name,
                           const std::string &data_dir = {},
                           const std::string &dbc_name = {},

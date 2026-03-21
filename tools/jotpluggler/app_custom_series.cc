@@ -412,20 +412,31 @@ void refresh_custom_curve_samples(AppSession *session, UiState *state, Curve *cu
     return;
   }
   if (!session->route_data.has_time_range || session->route_data.series.empty()) {
+    curve->runtime_error_message.clear();
     curve->xs.clear();
     curve->ys.clear();
     return;
   }
   try {
     PythonEvalResult result = evaluate_custom_python_series(*session, *curve->custom_python);
+    curve->runtime_error_message.clear();
     curve->xs = std::move(result.xs);
     curve->ys = std::move(result.ys);
   } catch (const std::exception &err) {
     curve->xs.clear();
     curve->ys.clear();
-    state->error_text = std::string("Failed to evaluate custom series \"")
-      + app_curve_display_name(*curve) + "\":\n\n" + err.what();
-    state->open_error_popup = true;
+    const std::string err_text = err.what();
+    if (session->data_mode == SessionDataMode::Stream && err_text.rfind("Missing route series ", 0) == 0) {
+      curve->runtime_error_message = err_text;
+      return;
+    }
+    const std::string error_message = std::string("Failed to evaluate custom series \"")
+      + app_curve_display_name(*curve) + "\":\n\n" + err_text;
+    if (curve->runtime_error_message != error_message) {
+      curve->runtime_error_message = error_message;
+      state->error_text = error_message;
+      state->open_error_popup = true;
+    }
   }
 }
 

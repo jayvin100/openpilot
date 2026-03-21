@@ -236,6 +236,12 @@ bool reload_layout(AppSession *session, UiState *state, const std::string &layou
 bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir);
 void reset_shared_range(UiState *state, const AppSession &session);
 std::string curve_display_name(const Curve &curve);
+bool start_stream_session(AppSession *session,
+                          UiState *state,
+                          const std::string &address,
+                          double buffer_seconds,
+                          bool preserve_existing_data = false);
+void stop_stream_session(AppSession *session, UiState *state, bool preserve_data = true);
 
 void configure_style() {
   ImGui::StyleColorsLight();
@@ -410,6 +416,14 @@ void sync_ui_state(UiState *state, const SketchLayout &layout) {
 void sync_route_buffers(UiState *state, const AppSession &session) {
   copy_to_buffer(session.route_name, &state->route_buffer);
   copy_to_buffer(session.data_dir, &state->data_dir_buffer);
+}
+
+void sync_stream_buffers(UiState *state, const AppSession &session) {
+  copy_to_buffer(session.stream_address, &state->stream_address_buffer);
+  state->stream_remote = !session.stream_address.empty()
+    && session.stream_address != "127.0.0.1"
+    && session.stream_address != "localhost";
+  state->stream_buffer_seconds = session.stream_buffer_seconds;
 }
 
 fs::path default_layout_save_path(const AppSession &session) {
@@ -1028,6 +1042,8 @@ void apply_route_data(AppSession *session, UiState *state, RouteData route_data)
   reset_shared_range(state, *session);
 }
 
+#include "tools/jotpluggler/app_stream_flow.inc"
+
 const RouteSeries *find_route_series(const AppSession &session, const std::string &path) {
   auto it = session.series_by_path.find(path);
   return it == session.series_by_path.end() ? nullptr : it->second;
@@ -1125,15 +1141,36 @@ std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab 
 }
 
 void ensure_shared_range(UiState *state, const AppSession &session) {
-  if (state->has_shared_range) {
-    return;
-  }
   if (session.route_data.has_time_range) {
     state->route_x_min = session.route_data.x_min;
     state->route_x_max = session.route_data.x_max;
   } else {
     state->route_x_min = 0.0;
     state->route_x_max = 1.0;
+  }
+
+  if (state->has_shared_range) {
+    return;
+  }
+
+  if (session.data_mode == SessionDataMode::Stream) {
+    const double target_span = std::max(kMinHorizontalZoomSeconds, session.stream_buffer_seconds);
+    if (session.route_data.has_time_range) {
+      state->x_view_max = state->route_x_max;
+      state->x_view_min = state->x_view_max - target_span;
+    } else {
+      state->x_view_min = 0.0;
+      state->x_view_max = target_span;
+    }
+    if (state->x_view_max <= state->x_view_min) {
+      state->x_view_max = state->x_view_min + 1.0;
+    }
+    state->has_shared_range = true;
+    if (!state->has_tracker_time || state->tracker_time < state->route_x_min || state->tracker_time > state->route_x_max) {
+      state->tracker_time = state->route_x_max;
+      state->has_tracker_time = session.route_data.has_time_range;
+    }
+    return;
   }
 
   if (const WorkspaceTab *tab = active_tab(session.layout, *state); tab != nullptr) {
@@ -1161,7 +1198,7 @@ void ensure_shared_range(UiState *state, const AppSession &session) {
   }
 }
 
-void clamp_shared_range(UiState *state) {
+void clamp_shared_range(UiState *state, const AppSession &session) {
   if (!state->has_shared_range) {
     return;
   }
@@ -1172,6 +1209,19 @@ void clamp_shared_range(UiState *state) {
     span = min_span;
     state->x_view_min = center - span * 0.5;
     state->x_view_max = center + span * 0.5;
+  }
+  if (session.data_mode == SessionDataMode::Stream) {
+    if (session.route_data.has_time_range && state->x_view_max > state->route_x_max) {
+      state->x_view_min -= state->x_view_max - state->route_x_max;
+      state->x_view_max = state->route_x_max;
+    }
+    if (state->x_view_max <= state->x_view_min) {
+      state->x_view_max = state->x_view_min + min_span;
+    }
+    if (state->has_tracker_time && session.route_data.has_time_range) {
+      state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
+    }
+    return;
   }
   if (state->route_x_max > state->route_x_min) {
     if (state->x_view_min < state->route_x_min) {
@@ -1197,29 +1247,26 @@ void clamp_shared_range(UiState *state) {
 void reset_shared_range(UiState *state, const AppSession &session) {
   state->has_shared_range = false;
   ensure_shared_range(state, session);
-  clamp_shared_range(state);
+  clamp_shared_range(state, session);
 }
 
-void update_follow_range(UiState *state) {
+void update_follow_range(UiState *state, const AppSession &session) {
   if (!state->follow_latest || !state->has_shared_range) {
     return;
   }
-  const double span = std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
+  const double span = session.data_mode == SessionDataMode::Stream
+    ? std::max(kMinHorizontalZoomSeconds, session.stream_buffer_seconds)
+    : std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
   const double route_span = state->route_x_max - state->route_x_min;
   if (route_span <= 0.0) {
     return;
   }
-  if (route_span <= span) {
-    state->x_view_min = state->route_x_min;
-    state->x_view_max = state->route_x_max;
-  } else {
-    state->x_view_max = state->route_x_max;
-    state->x_view_min = state->x_view_max - span;
-  }
-  clamp_shared_range(state);
+  state->x_view_max = state->route_x_max;
+  state->x_view_min = state->x_view_max - span;
+  clamp_shared_range(state, session);
 }
 
-void advance_playback(UiState *state) {
+void advance_playback(UiState *state, const AppSession &session) {
   if (!state->playback_playing || !state->has_shared_range || state->route_x_max <= state->route_x_min) {
     return;
   }
@@ -1238,7 +1285,7 @@ void advance_playback(UiState *state) {
   if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
     state->x_view_min = state->tracker_time - span * 0.5;
     state->x_view_max = state->tracker_time + span * 0.5;
-    clamp_shared_range(state);
+    clamp_shared_range(state, session);
   }
 }
 
@@ -1266,22 +1313,15 @@ std::string layout_combo_label(const AppSession &session, const UiState &state) 
   return state.layout_dirty ? base + " *" : base;
 }
 
-std::string dbc_combo_label(const AppSession &session) {
-  if (!session.dbc_override.empty()) {
-    return session.dbc_override;
-  }
-  if (!session.route_data.dbc_name.empty()) {
-    return "Auto: " + session.route_data.dbc_name;
-  }
-  return "Auto";
-}
-
 float draw_main_menu_bar(AppSession *session, UiState *state) {
   float height = ImGui::GetFrameHeight();
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("File")) {
       if (ImGui::MenuItem("Open Route...")) {
         state->open_open_route = true;
+      }
+      if (ImGui::MenuItem("Stream...")) {
+        state->open_stream = true;
       }
       ImGui::Separator();
       if (ImGui::MenuItem("New Layout")) {
@@ -1331,53 +1371,6 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
     ImGui::EndMainMenuBar();
   }
   return height;
-}
-
-void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *state) {
-  ImGui::SetNextWindowPos(ImVec2(ui.content_x, ui.status_bar_y));
-  ImGui::SetNextWindowSize(ImVec2(ui.content_w, kStatusBarHeight));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 5.0f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(247, 248, 250));
-  ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(188, 193, 199));
-  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
-                                 ImGuiWindowFlags_NoMove |
-                                 ImGuiWindowFlags_NoResize |
-                                 ImGuiWindowFlags_NoSavedSettings;
-  if (ImGui::Begin("##status_bar", nullptr, flags)) {
-    ImGui::BeginDisabled(!session.route_data.has_time_range);
-    if (ImGui::Checkbox("Loop", &state->playback_loop)) {
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(state->playback_playing ? "Pause" : "Play", ImVec2(56.0f, 0.0f))) {
-      state->playback_playing = !state->playback_playing;
-    }
-    ImGui::SameLine();
-    const float time_width = 88.0f;
-    ImGui::SetNextItemWidth(std::max(160.0f, ImGui::GetContentRegionAvail().x - time_width - 16.0f));
-    if (ImGui::SliderScalar("##time_slider",
-                            ImGuiDataType_Double,
-                            &state->tracker_time,
-                            &state->route_x_min,
-                            &state->route_x_max,
-                            "%.3f")) {
-      const double span = std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
-      if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
-        state->x_view_min = state->tracker_time - span * 0.5;
-        state->x_view_max = state->tracker_time + span * 0.5;
-        clamp_shared_range(state);
-      }
-    }
-    ImGui::SameLine();
-    char tracker_text[64] = {};
-    std::snprintf(tracker_text, sizeof(tracker_text), "%.3f", state->has_tracker_time ? state->tracker_time : 0.0);
-    app_push_mono_font();
-    ImGui::TextUnformatted(tracker_text);
-    app_pop_mono_font();
-    ImGui::EndDisabled();
-  }
-  ImGui::End();
-  ImGui::PopStyleColor(2);
-  ImGui::PopStyleVar();
 }
 
 bool browser_node_matches(const BrowserNode &node, const std::string &filter) {
@@ -1485,35 +1478,7 @@ void draw_browser_node(AppSession *session,
   }
 }
 
-void draw_sidebar_resizer(const UiMetrics &ui, UiState *state) {
-  constexpr float kHandleWidth = 14.0f;
-  ImGui::SetNextWindowPos(ImVec2(ui.sidebar_width - kHandleWidth * 0.5f, ui.top_offset));
-  ImGui::SetNextWindowSize(ImVec2(kHandleWidth, std::max(1.0f, ui.height - ui.top_offset)));
-  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
-                                 ImGuiWindowFlags_NoMove |
-                                 ImGuiWindowFlags_NoResize |
-                                 ImGuiWindowFlags_NoSavedSettings |
-                                 ImGuiWindowFlags_NoBackground;
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-  if (ImGui::Begin("##sidebar_resizer", nullptr, flags)) {
-    ImGui::InvisibleButton("##sidebar_resizer_button", ImVec2(kHandleWidth, std::max(1.0f, ui.height - ui.top_offset)));
-    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    }
-    if (ImGui::IsItemActive()) {
-      const float max_width = std::min(kSidebarMaxWidth, ui.width * 0.6f);
-      state->sidebar_width = std::clamp(ImGui::GetIO().MousePos.x, kSidebarMinWidth, max_width);
-    }
-
-    ImDrawList *draw_list = ImGui::GetWindowDrawList();
-    const ImVec2 origin = ImGui::GetWindowPos();
-    draw_list->AddLine(ImVec2(origin.x + kHandleWidth * 0.5f, origin.y),
-                       ImVec2(origin.x + kHandleWidth * 0.5f, origin.y + std::max(1.0f, ui.height - ui.top_offset)),
-                       IM_COL32(194, 198, 204, 255));
-  }
-  ImGui::End();
-  ImGui::PopStyleVar();
-}
+#include "tools/jotpluggler/app_sidebar_flow.inc"
 
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed) {
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.top_offset));
@@ -1527,12 +1492,39 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
   if (ImGui::Begin("##sidebar", nullptr, flags)) {
     const RouteLoadSnapshot load = session->route_loader ? session->route_loader->snapshot() : RouteLoadSnapshot{};
     const bool show_load_progress = session->route_loader && (load.active || load.total_segments > 0);
+    const bool streaming = session->data_mode == SessionDataMode::Stream;
     if (show_camera_feed && session->camera_feed) {
       session->camera_feed->draw(ImGui::GetContentRegionAvail().x, load.active);
+    } else if (streaming) {
+      ImGui::SeparatorText("Camera");
+      ImGui::TextDisabled("Camera not available during live stream.");
+      ImGui::Spacing();
     }
 
-    ImGui::SeparatorText("Route");
-    if (!session->route_name.empty()) {
+    ImGui::SeparatorText(streaming ? "Stream" : "Route");
+    if (streaming) {
+      const StreamPollSnapshot stream = session->stream_poller ? session->stream_poller->snapshot() : StreamPollSnapshot{};
+      const bool paused = stream.paused || session->stream_paused;
+      const bool live = stream.connected && !paused;
+      const ImVec4 status_color = live ? color_rgb(38, 135, 67) : (paused ? color_rgb(168, 119, 34) : color_rgb(155, 63, 63));
+      ImGui::TextColored(status_color, "%s %s", live ? "●" : "○", stream.address.c_str());
+      ImGui::TextDisabled("%s%s", stream.remote ? "Remote (ZMQ)" : "Local (MSGQ)", paused ? "  paused" : "");
+      const double span = session->route_data.has_time_range ? (session->route_data.x_max - session->route_data.x_min) : 0.0;
+      const float fill = stream.buffer_seconds <= 0.0
+        ? 0.0f
+        : std::clamp(static_cast<float>(span / stream.buffer_seconds), 0.0f, 1.0f);
+      ImGui::ProgressBar(fill, ImVec2(-FLT_MIN, 0.0f), nullptr);
+      ImGui::TextDisabled("%.0fs buffer | %zu series", session->stream_buffer_seconds, session->route_data.series.size());
+      const char *button_label = paused ? "Resume" : "Pause";
+      if (ImGui::Button(button_label, ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
+        if (paused) {
+          start_stream_session(session, state, session->stream_address, session->stream_buffer_seconds, true);
+        } else {
+          stop_stream_session(session, state);
+          state->status_text = "Paused stream " + session->stream_address;
+        }
+      }
+    } else if (!session->route_name.empty()) {
       ImGui::TextWrapped("%s", session->route_name.c_str());
     } else {
       ImGui::TextDisabled("No route loaded");
@@ -1544,13 +1536,15 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##dbc_combo", dbc_combo_label(*session).c_str())) {
       const bool auto_selected = session->dbc_override.empty();
-      if (ImGui::Selectable("Auto", auto_selected)) {
-        session->dbc_override.clear();
-        if (!session->route_name.empty()) {
-          reload_session(session, state, session->route_name, session->data_dir);
-        } else {
-          state->status_text = "DBC auto-detect enabled";
-        }
+        if (ImGui::Selectable("Auto", auto_selected)) {
+          session->dbc_override.clear();
+          if (streaming) {
+            start_stream_session(session, state, session->stream_address, session->stream_buffer_seconds, false);
+          } else if (!session->route_name.empty()) {
+            reload_session(session, state, session->route_name, session->data_dir);
+          } else {
+            state->status_text = "DBC auto-detect enabled";
+          }
       }
       if (auto_selected) {
         ImGui::SetItemDefaultFocus();
@@ -1560,7 +1554,9 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
         const bool selected = session->dbc_override == dbc_name;
         if (ImGui::Selectable(dbc_name.c_str(), selected) && !selected) {
           session->dbc_override = dbc_name;
-          if (!session->route_name.empty()) {
+          if (streaming) {
+            start_stream_session(session, state, session->stream_address, session->stream_buffer_seconds, false);
+          } else if (!session->route_name.empty()) {
             reload_session(session, state, session->route_name, session->data_dir);
           } else {
             state->status_text = "DBC set to " + dbc_name;
@@ -2329,7 +2325,7 @@ PlotBounds current_plot_bounds_for_pane(const AppSession &session, const Pane &p
 
 void open_axis_limits_editor(const AppSession &session, UiState *state, int pane_index) {
   ensure_shared_range(state, session);
-  clamp_shared_range(state);
+  clamp_shared_range(state, session);
   const WorkspaceTab *tab = active_tab(session.layout, *state);
   if (tab == nullptr || pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
     return;
@@ -2391,7 +2387,7 @@ bool apply_axis_limits_editor(AppSession *session, UiState *state) {
   state->x_view_max = editor.x_max;
   state->follow_latest = false;
   state->suppress_range_side_effects = true;
-  clamp_shared_range(state);
+  clamp_shared_range(state, *session);
   persist_shared_range_to_tab(tab, *state);
 
   Pane &pane = tab->panes[static_cast<size_t>(editor.pane_index)];
@@ -2474,11 +2470,14 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
     if (!enum_context.enums.empty()) {
       ImPlot::SetupAxisFormat(ImAxis_Y1, format_enum_axis_tick, &enum_context);
     } else {
-      ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
+    ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
     }
     ImPlot::SetupAxisLinks(ImAxis_X1, &state->x_view_min, &state->x_view_max);
     if (state->route_x_max > state->route_x_min) {
-      ImPlot::SetupAxisLimitsConstraints(ImAxis_X1, state->route_x_min, state->route_x_max);
+      const double x_constraint_min = session.data_mode == SessionDataMode::Stream
+        ? state->route_x_min - std::max(kMinHorizontalZoomSeconds, session.stream_buffer_seconds)
+        : state->route_x_min;
+      ImPlot::SetupAxisLimitsConstraints(ImAxis_X1, x_constraint_min, state->route_x_max);
     }
     ImPlot::SetupMouseText(ImPlotLocation_SouthEast, ImPlotMouseTextFlags_NoAuxAxes);
     if (explicit_y || supported_count == 0) {
@@ -2519,7 +2518,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
     ImPlot::EndPlot();
   }
   app_pop_mono_font();
-  clamp_shared_range(state);
+  clamp_shared_range(state, session);
   if (std::abs(state->x_view_min - previous_x_min) > 1.0e-6
       || std::abs(state->x_view_max - previous_x_max) > 1.0e-6) {
     if (!state->suppress_range_side_effects) {
@@ -3125,6 +3124,9 @@ int run_app(const Options &options) {
     .route_name = options.route_name,
     .data_dir = options.data_dir,
     .dbc_override = {},
+    .stream_address = options.stream_address,
+    .stream_buffer_seconds = options.stream_buffer_seconds,
+    .data_mode = options.stream ? SessionDataMode::Stream : SessionDataMode::Route,
     .layout = options.layout.empty() ? make_empty_layout() : load_sketch_layout(layout_path),
   };
   UiState ui_state;
@@ -3134,10 +3136,12 @@ int run_app(const Options &options) {
   }
   sync_ui_state(&ui_state, session.layout);
   sync_route_buffers(&ui_state, session);
+  sync_stream_buffers(&ui_state, session);
   sync_layout_buffers(&ui_state, session);
 
-  session.async_route_loading = options.show && options.output_path.empty() && !options.sync_load;
-  if (!session.async_route_loading) {
+  session.async_route_loading = session.data_mode == SessionDataMode::Route
+    && options.show && options.output_path.empty() && !options.sync_load;
+  if (session.data_mode == SessionDataMode::Route && !session.async_route_loading) {
     TerminalRouteProgress route_progress(::isatty(STDERR_FILENO) != 0);
     rebuild_session_route_data(&session, &ui_state, [&](const RouteLoadProgress &update) {
       route_progress.update(update);
@@ -3148,12 +3152,17 @@ int run_app(const Options &options) {
   GlfwRuntime glfw_runtime(options);
   ImGuiRuntime imgui_runtime(glfw_runtime.window());
   configure_style();
-  session.camera_feed = std::make_unique<SidebarCameraFeed>();
-  session.camera_feed->set_route_data(session.route_data);
+  if (session.data_mode == SessionDataMode::Route) {
+    session.camera_feed = std::make_unique<SidebarCameraFeed>();
+    session.camera_feed->set_route_data(session.route_data);
+  }
 
   if (session.async_route_loading) {
     session.route_loader = std::make_unique<AsyncRouteLoader>(::isatty(STDERR_FILENO) != 0);
     start_async_route_load(&session, &ui_state);
+  } else if (session.data_mode == SessionDataMode::Stream) {
+    session.stream_poller = std::make_unique<StreamPoller>();
+    start_stream_session(&session, &ui_state, session.stream_address, session.stream_buffer_seconds);
   }
 
   const bool should_capture = !options.output_path.empty();
@@ -3174,6 +3183,9 @@ int run_app(const Options &options) {
       }
       render_frame(glfw_runtime.window(), &session, &ui_state, &output_path);
     }
+  }
+  if (session.stream_poller) {
+    session.stream_poller->stop();
   }
   session.camera_feed.reset();
   return exit_code;
