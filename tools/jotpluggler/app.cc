@@ -1,6 +1,5 @@
 #include "tools/jotpluggler/app.h"
 #include "tools/jotpluggler/bootstrap_icons.h"
-#include "tools/jotpluggler/bootstrap_icons_font_data.h"
 #include "imgui_impl_glfw.h"
 #include "tools/jotpluggler/sketch_layout.h"
 #include "tools/replay/framereader.h"

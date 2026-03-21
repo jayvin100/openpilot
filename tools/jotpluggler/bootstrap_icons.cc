@@ -1,13 +1,15 @@
 #include "tools/jotpluggler/bootstrap_icons.h"
-#include "tools/jotpluggler/bootstrap_icons_font_data.h"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <filesystem>
 #include <string>
+#include <unistd.h>
 
 namespace jotpluggler::bootstrap_icons {
 namespace {
+namespace fs = std::filesystem;
 
 struct IconEntry {
   const char *id;
@@ -33,19 +35,30 @@ constexpr std::array<IconEntry, 15> kIcons = {{
   {"zoom-out",              "\xef\x98\xad"},  // U+F62D
 }};
 
+fs::path repo_root() {
+  std::array<char, 4096> buf = {};
+  const ssize_t count = readlink("/proc/self/exe", buf.data(), buf.size() - 1);
+  if (count <= 0) {
+    return {};
+  }
+  return fs::path(std::string(buf.data(), static_cast<size_t>(count)))
+      .parent_path().parent_path().parent_path();
+}
+
 }  // namespace
 
 void load_font(float size) {
+  const fs::path ttf = repo_root() / "third_party" / "bootstrap" / "bootstrap-icons.ttf";
+  if (!fs::exists(ttf)) {
+    return;
+  }
+
   ImGuiIO &io = ImGui::GetIO();
   ImFontConfig config;
   config.MergeMode = true;
   config.GlyphMinAdvanceX = size;
-  config.FontDataOwnedByAtlas = false;
   static const ImWchar ranges[] = {0xF000, 0xF8FF, 0};
-  io.Fonts->AddFontFromMemoryTTF(
-      const_cast<unsigned char *>(kBootstrapIconsFontData),
-      static_cast<int>(kBootstrapIconsFontSize),
-      size, &config, ranges);
+  io.Fonts->AddFontFromFileTTF(ttf.c_str(), size, &config, ranges);
 }
 
 const char *glyph(std::string_view icon_id) {
