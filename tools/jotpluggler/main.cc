@@ -7,7 +7,6 @@
 namespace {
 
 constexpr const char *kDemoRoute = "5beb9b58bd12b691/0000010a--a51155e496";
-constexpr const char *kDefaultLayout = "longitudinal";
 
 void print_usage(const char *argv0) {
   std::cerr
@@ -23,6 +22,7 @@ void print_usage(const char *argv0) {
       << "\n"
       << "Examples:\n"
       << "  " << argv0 << " --demo\n"
+      << "  " << argv0 << " --layout longitudinal --demo\n"
       << "  " << argv0 << " --layout longitudinal --demo --output /tmp/longitudinal.png\n";
 }
 
@@ -40,7 +40,6 @@ bool parse_int(const char *value, int *out) {
 
 int main(int argc, char *argv[]) {
   jotpluggler::Options options;
-  bool demo_requested = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     const auto require_value = [&](const char *flag) -> const char * {
@@ -55,7 +54,6 @@ int main(int argc, char *argv[]) {
     if (arg == "--layout") {
       options.layout = require_value("--layout");
     } else if (arg == "--demo") {
-      demo_requested = true;
       options.route_name = kDemoRoute;
     } else if (arg == "--data-dir") {
       options.data_dir = require_value("--data-dir");
@@ -85,14 +83,11 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  if (demo_requested && options.layout.empty()) {
-    options.layout = kDefaultLayout;
-  }
   if (options.output_path.empty() && !options.show) {
     options.show = true;
   }
 
-  if (options.layout.empty() || options.route_name.empty()) {
+  if (options.route_name.empty()) {
     print_usage(argv[0]);
     return 2;
   }

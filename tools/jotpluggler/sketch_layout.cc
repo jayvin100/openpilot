@@ -108,6 +108,16 @@ double attr_double(xmlNodePtr node, const char *name, double default_value) {
   return end != nullptr && *end == '\0' ? parsed : default_value;
 }
 
+int attr_int(xmlNodePtr node, const char *name, int default_value) {
+  const std::string value = attr(node, name);
+  if (value.empty()) {
+    return default_value;
+  }
+  char *end = nullptr;
+  const long parsed = std::strtol(value.c_str(), &end, 10);
+  return end != nullptr && *end == '\0' ? static_cast<int>(parsed) : default_value;
+}
+
 std::string curve_leaf(std::string_view series_name) {
   if (series_name.empty()) {
     return "plot";
@@ -522,6 +532,9 @@ SketchLayout parse_layout(const fs::path &layout_path) {
   if (layout.tabs.empty()) {
     throw std::runtime_error("Layout has no tabs: " + layout_path.string());
   }
+  layout.current_tab_index = std::clamp(attr_int(first_child(tabbed_widget, "currentTabIndex"), "index", 0),
+                                        0,
+                                        static_cast<int>(layout.tabs.size()) - 1);
   return layout;
 }
 

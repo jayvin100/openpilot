@@ -39,9 +39,6 @@ constexpr float kContentGap = 12.0f;
 constexpr float kContentRightPadding = 8.0f;
 constexpr float kToolbarHeight = 24.0f;
 constexpr float kStatusBarHeight = 28.0f;
-constexpr float kTabStripHeight = 34.0f;
-constexpr float kPaneInset = 8.0f;
-constexpr float kPaneGutter = 8.0f;
 
 struct UiMetrics {
   float width = 0.0f;
@@ -52,10 +49,6 @@ struct UiMetrics {
   float content_y = 0.0f;
   float content_w = 0.0f;
   float content_h = 0.0f;
-  float pane_origin_x = 0.0f;
-  float pane_origin_y = 0.0f;
-  float pane_area_w = 0.0f;
-  float pane_area_h = 0.0f;
   float status_bar_y = 0.0f;
 };
 
@@ -82,11 +75,6 @@ struct PlotBounds {
   double y_max = 1.0;
 };
 
-struct UnsupportedCurve {
-  std::string label;
-  std::string reason;
-};
-
 struct TabUiState {
   bool dock_needs_build = true;
   int active_pane_index = 0;
@@ -103,6 +91,9 @@ struct UiState {
   bool request_close = false;
   bool reset_plot_view = false;
   bool request_reload = false;
+  bool request_new_tab = false;
+  bool request_duplicate_tab = false;
+  bool request_close_tab = false;
   bool follow_latest = false;
   bool has_shared_range = false;
   bool has_hover_time = false;
@@ -414,6 +405,15 @@ void configure_style() {
   style.Colors[ImGuiCol_ScrollbarGrab] = color_rgb(202, 207, 214);
   style.Colors[ImGuiCol_ScrollbarGrabHovered] = color_rgb(180, 186, 194);
   style.Colors[ImGuiCol_ScrollbarGrabActive] = color_rgb(164, 171, 180);
+  style.Colors[ImGuiCol_Tab] = color_rgb(232, 236, 241);
+  style.Colors[ImGuiCol_TabHovered] = color_rgb(240, 243, 246);
+  style.Colors[ImGuiCol_TabSelected] = color_rgb(245, 247, 249);
+  style.Colors[ImGuiCol_TabSelectedOverline] = color_rgb(176, 183, 192);
+  style.Colors[ImGuiCol_TabDimmed] = color_rgb(227, 231, 236);
+  style.Colors[ImGuiCol_TabDimmedSelected] = color_rgb(239, 242, 245);
+  style.Colors[ImGuiCol_TabDimmedSelectedOverline] = color_rgb(176, 183, 192);
+  style.Colors[ImGuiCol_DockingEmptyBg] = color_rgb(244, 246, 248);
+  style.Colors[ImGuiCol_DockingPreview] = color_rgb(69, 115, 184, 0.22f);
 
   ImPlotStyle &plot_style = ImPlot::GetStyle();
   plot_style.PlotBorderSize = 1.0f;
@@ -430,13 +430,9 @@ UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset) {
   ui.height = size.y;
   ui.top_offset = top_offset;
   ui.content_x = ui.sidebar_width + kContentGap;
-  ui.content_y = top_offset + 4.0f;
+  ui.content_y = top_offset;
   ui.content_w = std::max(1.0f, size.x - ui.content_x - kContentRightPadding);
-  ui.content_h = std::max(1.0f, size.y - ui.content_y - kStatusBarHeight - 4.0f);
-  ui.pane_origin_x = ui.content_x + kPaneInset;
-  ui.pane_origin_y = ui.content_y + kTabStripHeight + 4.0f;
-  ui.pane_area_w = std::max(1.0f, ui.content_w - 2.0f * kPaneInset);
-  ui.pane_area_h = std::max(1.0f, ui.content_h - kTabStripHeight - 8.0f);
+  ui.content_h = std::max(1.0f, size.y - ui.content_y - kStatusBarHeight);
   ui.status_bar_y = std::max(0.0f, size.y - kStatusBarHeight);
   return ui;
 }
@@ -457,10 +453,14 @@ std::string string_from_buffer(const std::array<char, N> &buffer) {
 }
 
 void sync_ui_state(UiState *state, const SketchLayout &layout) {
+  const bool initializing = state->tabs.empty();
   state->tabs.resize(layout.tabs.size());
   if (layout.tabs.empty()) {
     state->active_tab_index = 0;
     return;
+  }
+  if (initializing) {
+    state->active_tab_index = std::clamp(layout.current_tab_index, 0, static_cast<int>(layout.tabs.size()) - 1);
   }
   state->active_tab_index = std::clamp(state->active_tab_index, 0, static_cast<int>(layout.tabs.size()) - 1);
   for (size_t i = 0; i < layout.tabs.size(); ++i) {
@@ -500,26 +500,6 @@ TabUiState *active_tab_state(UiState *state) {
   return &state->tabs[static_cast<size_t>(index)];
 }
 
-const Pane *active_pane(const SketchLayout &layout, const UiState &state) {
-  const WorkspaceTab *tab = active_tab(layout, state);
-  if (tab == nullptr || tab->panes.empty()) {
-    return nullptr;
-  }
-  const TabUiState *tab_state = state.tabs.empty() ? nullptr : &state.tabs[static_cast<size_t>(std::clamp(state.active_tab_index, 0, static_cast<int>(state.tabs.size()) - 1))];
-  const int pane_index = tab_state == nullptr ? 0 : std::clamp(tab_state->active_pane_index, 0, static_cast<int>(tab->panes.size()) - 1);
-  return &tab->panes[static_cast<size_t>(pane_index)];
-}
-
-Pane *active_pane(SketchLayout *layout, UiState *state) {
-  WorkspaceTab *tab = active_tab(layout, *state);
-  TabUiState *tab_state = active_tab_state(state);
-  if (tab == nullptr || tab_state == nullptr || tab->panes.empty()) {
-    return nullptr;
-  }
-  tab_state->active_pane_index = std::clamp(tab_state->active_pane_index, 0, static_cast<int>(tab->panes.size()) - 1);
-  return &tab->panes[static_cast<size_t>(tab_state->active_pane_index)];
-}
-
 std::string pane_window_name(int tab_index, int pane_index, const Pane &pane) {
   std::string title = pane.title.empty() ? "plot" : pane.title;
   return title + "##tab" + std::to_string(tab_index) + "_pane" + std::to_string(pane_index);
@@ -529,31 +509,204 @@ ImGuiID dockspace_id_for_tab(int tab_index) {
   return ImHashStr(("jotpluggler_dockspace_" + std::to_string(tab_index)).c_str());
 }
 
+enum class PaneDropZone {
+  Center,
+  Left,
+  Right,
+  Top,
+  Bottom,
+};
+
+enum class PaneMenuActionKind {
+  None,
+  SplitLeft,
+  SplitRight,
+  SplitTop,
+  SplitBottom,
+  Clear,
+  Close,
+};
+
+struct PaneMenuAction {
+  PaneMenuActionKind kind = PaneMenuActionKind::None;
+  int pane_index = -1;
+};
+
+struct PaneCurveDragPayload {
+  int tab_index = -1;
+  int pane_index = -1;
+  int curve_index = -1;
+};
+
+struct PaneDropAction {
+  PaneDropZone zone = PaneDropZone::Center;
+  int target_pane_index = -1;
+  bool from_browser = false;
+  std::string browser_path;
+  PaneCurveDragPayload curve_ref;
+};
+
 std::string curve_display_name(const Curve &curve);
 bool add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path);
 bool curve_has_samples(const AppSession &session, const Curve &curve);
-std::vector<UnsupportedCurve> collect_unsupported_curves(const AppSession &session, const Pane &pane);
 
 bool curve_has_local_samples(const Curve &curve) {
   return curve.xs.size() > 1 && curve.xs.size() == curve.ys.size();
 }
 
-size_t total_curve_count(const WorkspaceTab &tab) {
-  size_t total = 0;
-  for (const Pane &pane : tab.panes) {
-    total += pane.curves.size();
+void mark_all_docks_dirty(UiState *state) {
+  for (TabUiState &tab_state : state->tabs) {
+    tab_state.dock_needs_build = true;
   }
-  return total;
 }
 
-size_t sampled_curve_count(const AppSession &session, const WorkspaceTab &tab) {
-  size_t total = 0;
-  for (const Pane &pane : tab.panes) {
-    for (const Curve &curve : pane.curves) {
-      total += curve.visible && curve_has_samples(session, curve) ? 1U : 0U;
+void mark_tab_dock_dirty(UiState *state, int tab_index) {
+  if (tab_index >= 0 && tab_index < static_cast<int>(state->tabs.size())) {
+    state->tabs[static_cast<size_t>(tab_index)].dock_needs_build = true;
+  }
+}
+
+void normalize_split_node(WorkspaceNode *node) {
+  if (node->is_pane) {
+    return;
+  }
+  for (WorkspaceNode &child : node->children) {
+    normalize_split_node(&child);
+  }
+  if (node->children.empty()) {
+    return;
+  }
+  if (node->children.size() == 1) {
+    *node = node->children.front();
+    return;
+  }
+  if (node->sizes.size() != node->children.size()) {
+    node->sizes.assign(node->children.size(), 1.0f / static_cast<float>(node->children.size()));
+    return;
+  }
+  float total = 0.0f;
+  for (float &size : node->sizes) {
+    size = std::max(size, 0.0f);
+    total += size;
+  }
+  if (total <= 0.0f) {
+    node->sizes.assign(node->children.size(), 1.0f / static_cast<float>(node->children.size()));
+    return;
+  }
+  for (float &size : node->sizes) {
+    size /= total;
+  }
+}
+
+void decrement_pane_indices(WorkspaceNode *node, int removed_index) {
+  if (node->is_pane) {
+    if (node->pane_index > removed_index) {
+      node->pane_index -= 1;
+    }
+    return;
+  }
+  for (WorkspaceNode &child : node->children) {
+    decrement_pane_indices(&child, removed_index);
+  }
+}
+
+bool remove_pane_node(WorkspaceNode *node, int pane_index) {
+  if (node->is_pane) {
+    return node->pane_index == pane_index;
+  }
+
+  for (size_t i = 0; i < node->children.size();) {
+    if (remove_pane_node(&node->children[i], pane_index)) {
+      node->children.erase(node->children.begin() + static_cast<std::ptrdiff_t>(i));
+      if (i < node->sizes.size()) {
+        node->sizes.erase(node->sizes.begin() + static_cast<std::ptrdiff_t>(i));
+      }
+    } else {
+      ++i;
     }
   }
-  return total;
+
+  normalize_split_node(node);
+  return !node->is_pane && node->children.empty();
+}
+
+bool split_pane_node(WorkspaceNode *node, int target_pane_index, SplitOrientation orientation,
+                     bool new_before, int new_pane_index) {
+  if (node->is_pane) {
+    if (node->pane_index != target_pane_index) {
+      return false;
+    }
+    WorkspaceNode existing_pane;
+    existing_pane.is_pane = true;
+    existing_pane.pane_index = target_pane_index;
+
+    WorkspaceNode new_pane;
+    new_pane.is_pane = true;
+    new_pane.pane_index = new_pane_index;
+
+    node->is_pane = false;
+    node->pane_index = -1;
+    node->orientation = orientation;
+    node->sizes = {0.5f, 0.5f};
+    node->children.clear();
+    if (new_before) {
+      node->children.push_back(std::move(new_pane));
+      node->children.push_back(std::move(existing_pane));
+    } else {
+      node->children.push_back(std::move(existing_pane));
+      node->children.push_back(std::move(new_pane));
+    }
+    return true;
+  }
+
+  for (WorkspaceNode &child : node->children) {
+    if (split_pane_node(&child, target_pane_index, orientation, new_before, new_pane_index)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+Pane make_empty_pane(const std::string &title = "plot") {
+  Pane pane;
+  pane.title = title;
+  return pane;
+}
+
+WorkspaceTab make_empty_tab(const std::string &tab_name) {
+  WorkspaceTab tab;
+  tab.tab_name = tab_name;
+  tab.panes.push_back(make_empty_pane());
+  tab.root.is_pane = true;
+  tab.root.pane_index = 0;
+  return tab;
+}
+
+SketchLayout make_empty_layout() {
+  SketchLayout layout;
+  layout.tabs.push_back(make_empty_tab("tab0"));
+  layout.current_tab_index = 0;
+  return layout;
+}
+
+bool tab_name_exists(const SketchLayout &layout, const std::string &name) {
+  return std::any_of(layout.tabs.begin(), layout.tabs.end(), [&](const WorkspaceTab &tab) {
+    return tab.tab_name == name;
+  });
+}
+
+std::string next_tab_name(const SketchLayout &layout, const std::string &base_name) {
+  std::string base = base_name.empty() ? "tab" : base_name;
+  if (!tab_name_exists(layout, base)) {
+    return base;
+  }
+  for (int i = 2; i < 1000; ++i) {
+    const std::string candidate = base + " " + std::to_string(i);
+    if (!tab_name_exists(layout, candidate)) {
+      return candidate;
+    }
+  }
+  return base + " copy";
 }
 
 std::string route_summary(const AppSession &session) {
@@ -787,7 +940,7 @@ float draw_main_menu_bar(UiState *state) {
   float height = ImGui::GetFrameHeight();
   ImGui::PushStyleColor(ImGuiCol_MenuBarBg, color_rgb(46, 46, 46));
   if (ImGui::BeginMainMenuBar()) {
-    if (ImGui::BeginMenu("App")) {
+    if (ImGui::BeginMenu("File")) {
       if (ImGui::MenuItem("Open Route...")) {
         state->open_open_route = true;
       }
@@ -796,7 +949,12 @@ float draw_main_menu_bar(UiState *state) {
         state->status_text = "Reloading route";
       }
       ImGui::Separator();
-      if (ImGui::MenuItem("Quit")) {
+      if (ImGui::MenuItem("Save Screenshot...")) {
+        state->open_save_screenshot = true;
+        state->status_text = "Screenshot export is CLI-driven for now";
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Close")) {
         state->request_close = true;
       }
       ImGui::EndMenu();
@@ -806,6 +964,17 @@ float draw_main_menu_bar(UiState *state) {
         state->reset_plot_view = true;
         state->status_text = "Plot view reset";
       }
+      ImGui::Separator();
+      if (ImGui::MenuItem("New Tab")) {
+        state->request_new_tab = true;
+      }
+      if (ImGui::MenuItem("Duplicate Tab")) {
+        state->request_duplicate_tab = true;
+      }
+      if (ImGui::MenuItem("Close Tab", nullptr, false, state->tabs.size() > 1)) {
+        state->request_close_tab = true;
+      }
+      ImGui::Separator();
       if (ImGui::MenuItem("Custom Series...")) {
         state->open_custom_series = true;
       }
@@ -822,72 +991,6 @@ float draw_main_menu_bar(UiState *state) {
   }
   ImGui::PopStyleColor();
   return height;
-}
-
-float draw_toolbar(const AppSession &session, UiState *state, float top_offset) {
-  ImGui::SetNextWindowPos(ImVec2(0.0f, top_offset));
-  ImGui::SetNextWindowSize(ImVec2(ImGui::GetMainViewport()->Size.x, kToolbarHeight));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 2.0f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(61, 69, 79));
-  ImGui::PushStyleColor(ImGuiCol_MenuBarBg, color_rgb(61, 69, 79));
-  ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(235, 238, 244));
-  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
-                                 ImGuiWindowFlags_NoMove |
-                                 ImGuiWindowFlags_NoResize |
-                                 ImGuiWindowFlags_NoSavedSettings |
-                                 ImGuiWindowFlags_MenuBar;
-  if (ImGui::Begin("##toolbar", nullptr, flags)) {
-    if (ImGui::BeginMenuBar()) {
-      if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("Save Screenshot...")) {
-          state->open_save_screenshot = true;
-          state->status_text = "Screenshot export is CLI-driven for now";
-        }
-        ImGui::Separator();
-        if (ImGui::MenuItem("Close")) {
-          state->request_close = true;
-        }
-        ImGui::EndMenu();
-      }
-      ImGui::EndMenuBar();
-    }
-
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Open Route")) {
-      state->open_open_route = true;
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Reload")) {
-      state->request_reload = true;
-      state->status_text = "Reloading route";
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", route_summary(session).c_str());
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
-    const WorkspaceTab *tab = active_tab(session.layout, *state);
-    ImGui::TextDisabled("%s", tab == nullptr || tab->tab_name.empty() ? "tab0" : tab->tab_name.c_str());
-  }
-  ImGui::End();
-  ImGui::PopStyleColor(3);
-  ImGui::PopStyleVar();
-  return kToolbarHeight;
-}
-
-void draw_workspace_background(const UiMetrics &ui) {
-  ImGuiViewport *viewport = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + ui.top_offset));
-  ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, std::max(1.0f, viewport->Size.y - ui.top_offset - kStatusBarHeight)));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(227, 229, 233));
-  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
-                                 ImGuiWindowFlags_NoMove |
-                                 ImGuiWindowFlags_NoSavedSettings |
-                                 ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                 ImGuiWindowFlags_NoInputs;
-  ImGui::Begin("##workspace_background", nullptr, flags);
-  ImGui::End();
-  ImGui::PopStyleColor();
 }
 
 void draw_status_bar(const UiMetrics &ui, UiState *state) {
@@ -967,7 +1070,7 @@ bool browser_node_matches(const BrowserNode &node, const std::string &filter) {
   return false;
 }
 
-void draw_browser_node(const BrowserNode &node, UiState *state, const std::string &filter) {
+void draw_browser_node(AppSession *session, const BrowserNode &node, UiState *state, const std::string &filter) {
   if (!browser_node_matches(node, filter)) {
     return;
   }
@@ -976,6 +1079,15 @@ void draw_browser_node(const BrowserNode &node, UiState *state, const std::strin
     const bool selected = state->selected_browser_path == node.full_path;
     if (ImGui::Selectable(node.label.c_str(), selected)) {
       state->selected_browser_path = node.full_path;
+    }
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+      state->selected_browser_path = node.full_path;
+      add_curve_to_active_pane(session, state, node.full_path);
+    }
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+      ImGui::SetDragDropPayload("JOTP_BROWSER_PATH", node.full_path.c_str(), node.full_path.size() + 1);
+      ImGui::TextUnformatted(node.full_path.c_str());
+      ImGui::EndDragDropSource();
     }
     return;
   }
@@ -987,7 +1099,7 @@ void draw_browser_node(const BrowserNode &node, UiState *state, const std::strin
   const bool open = ImGui::TreeNodeEx(node.label.c_str(), flags);
   if (open) {
     for (const BrowserNode &child : node.children) {
-      draw_browser_node(child, state, filter);
+      draw_browser_node(session, child, state, filter);
     }
     ImGui::TreePop();
   }
@@ -995,8 +1107,6 @@ void draw_browser_node(const BrowserNode &node, UiState *state, const std::strin
 
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
   const WorkspaceTab *tab = active_tab(session->layout, *state);
-  const Pane *pane = active_pane(session->layout, *state);
-  TabUiState *tab_state = active_tab_state(state);
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.top_offset));
   ImGui::SetNextWindowSize(ImVec2(ui.sidebar_width, std::max(1.0f, ui.height - ui.top_offset - kStatusBarHeight)));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(238, 240, 244));
@@ -1042,84 +1152,16 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
     }
     ImGui::Spacing();
 
-    ImGui::SeparatorText("Panes");
-    if (tab != nullptr && tab_state != nullptr && ImGui::BeginListBox("##pane_list", ImVec2(-FLT_MIN, 120.0f))) {
-      for (size_t i = 0; i < tab->panes.size(); ++i) {
-        const bool selected = static_cast<int>(i) == tab_state->active_pane_index;
-        const std::string &title = tab->panes[i].title.empty() ? std::string("plot") : tab->panes[i].title;
-        if (ImGui::Selectable(title.c_str(), selected)) {
-          tab_state->active_pane_index = static_cast<int>(i);
-          state->status_text = "Active pane updated";
-        }
-        if (selected) {
-          ImGui::SetItemDefaultFocus();
-        }
-      }
-      ImGui::EndListBox();
-    }
-    ImGui::Spacing();
-
-    ImGui::SeparatorText("Pane Curves");
-    const int total_curves = tab == nullptr ? 0 : static_cast<int>(total_curve_count(*tab));
-    const int sampled_curves = tab == nullptr ? 0 : static_cast<int>(sampled_curve_count(*session, *tab));
-    ImGui::TextDisabled("%d of %d", sampled_curves, total_curves);
-    const float child_height = std::max(72.0f, ImGui::GetContentRegionAvail().y - 320.0f);
-    if (pane != nullptr && ImGui::BeginListBox("##pane_curves", ImVec2(-FLT_MIN, child_height))) {
-      for (Curve &curve : active_pane(&session->layout, state)->curves) {
-        const std::string label = curve_display_name(curve);
-        if (ImGui::Checkbox(label.c_str(), &curve.visible)) {
-          state->status_text = curve.visible ? "Curve enabled" : "Curve hidden";
-        }
-      }
-      ImGui::EndListBox();
-    }
-
-    ImGui::SeparatorText("Timeseries Browser");
+    ImGui::SeparatorText("Timeseries List");
     ImGui::InputTextWithHint("##browser_filter", "filter paths", state->browser_filter.data(), state->browser_filter.size());
     ImGui::TextDisabled("%zu available", session->route_data.paths.size());
-    ImGui::BeginDisabled(state->selected_browser_path.empty());
-    if (ImGui::Button("Add To Pane", ImVec2(110.0f, 0.0f))) {
-      if (!state->selected_browser_path.empty()) {
-        add_curve_to_active_pane(session, state, state->selected_browser_path);
-      }
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", state->selected_browser_path.empty() ? "no selection" : state->selected_browser_path.c_str());
     if (ImGui::BeginChild("##timeseries_browser", ImVec2(0.0f, 170.0f), true)) {
       const std::string filter = string_from_buffer(state->browser_filter);
       for (const BrowserNode &node : session->browser_nodes) {
-        draw_browser_node(node, state, filter);
+        draw_browser_node(session, node, state, filter);
       }
     }
     ImGui::EndChild();
-
-    ImGui::SeparatorText("Sources");
-    if (ImGui::BeginListBox("##timeseries_roots", ImVec2(-FLT_MIN, 84.0f))) {
-      for (const std::string &root : session->route_data.roots) {
-        ImGui::Selectable(root.c_str(), false, ImGuiSelectableFlags_Disabled);
-      }
-      if (session->route_data.roots.empty()) {
-        for (const std::string &root : session->layout.roots) {
-          ImGui::Selectable(root.c_str(), false, ImGuiSelectableFlags_Disabled);
-        }
-      }
-      ImGui::EndListBox();
-    }
-
-    if (pane != nullptr) {
-      const std::vector<UnsupportedCurve> unsupported = collect_unsupported_curves(*session, *pane);
-      if (!unsupported.empty()) {
-        ImGui::SeparatorText("Unsupported");
-        const size_t shown = std::min<size_t>(unsupported.size(), 4);
-        for (size_t i = 0; i < shown; ++i) {
-          ImGui::BulletText("%s: %s", unsupported[i].label.c_str(), unsupported[i].reason.c_str());
-        }
-        if (unsupported.size() > shown) {
-          ImGui::TextDisabled("+%zu more", unsupported.size() - shown);
-        }
-      }
-    }
 
     if (ImGui::Button("Custom Series", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
       state->open_custom_series = true;
@@ -1162,31 +1204,166 @@ std::string path_curve_label(std::string_view path) {
   return parts.empty() ? std::string(path) : std::string(parts.back());
 }
 
-bool add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path) {
-  Pane *pane = active_pane(&session->layout, state);
-  if (pane == nullptr) {
-    state->status_text = "No active pane";
+Curve make_curve_for_path(const Pane &pane, const std::string &path) {
+  Curve curve;
+  curve.name = path;
+  curve.label = path_curve_label(path);
+  curve.color = next_curve_color(pane);
+  return curve;
+}
+
+bool add_curve_to_pane(WorkspaceTab *tab, int pane_index, Curve curve) {
+  if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
     return false;
   }
+  Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
+  for (Curve &existing : pane.curves) {
+    const bool same_named_curve = !curve.name.empty() && existing.name == curve.name;
+    const bool same_unnamed_curve = curve.name.empty() && existing.name.empty() && existing.label == curve.label;
+    if (same_named_curve || same_unnamed_curve) {
+      existing.visible = true;
+      return false;
+    }
+  }
+  if (pane.title.empty() || pane.title == "plot") {
+    pane.title = curve_display_name(curve);
+  }
+  pane.curves.push_back(std::move(curve));
+  return true;
+}
+
+bool add_path_curve_to_pane(AppSession *session, UiState *state, int pane_index, const std::string &path) {
   if (find_route_series(*session, path) == nullptr) {
     state->status_text = "Path not found in route";
     return false;
   }
-  for (Curve &curve : pane->curves) {
-    if (curve.name == path) {
-      curve.visible = true;
-      state->status_text = "Curve already present";
-      return true;
-    }
+  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  if (tab == nullptr || pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
+    state->status_text = "No active pane";
+    return false;
+  }
+  const bool inserted = add_curve_to_pane(tab, pane_index, make_curve_for_path(tab->panes[static_cast<size_t>(pane_index)], path));
+  state->status_text = inserted ? "Added " + path : "Curve already present";
+  return true;
+}
+
+bool copy_curve_to_pane(WorkspaceTab *tab, int pane_index, const Curve &curve) {
+  return add_curve_to_pane(tab, pane_index, curve);
+}
+
+bool add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path) {
+  const TabUiState *tab_state = active_tab_state(state);
+  if (tab_state == nullptr) {
+    state->status_text = "No active pane";
+    return false;
+  }
+  return add_path_curve_to_pane(session, state, tab_state->active_pane_index, path);
+}
+
+bool split_pane(WorkspaceTab *tab, int pane_index, PaneDropZone zone, std::optional<Curve> curve = std::nullopt) {
+  if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
+    return false;
+  }
+  if (zone == PaneDropZone::Center) {
+    return false;
   }
 
-  Curve curve;
-  curve.name = path;
-  curve.label = path_curve_label(path);
-  curve.color = next_curve_color(*pane);
-  pane->curves.push_back(std::move(curve));
-  state->status_text = "Added " + path;
+  const int new_pane_index = static_cast<int>(tab->panes.size());
+  Pane new_pane = make_empty_pane();
+  if (curve.has_value()) {
+    if (new_pane.title == "plot") {
+      new_pane.title = curve_display_name(*curve);
+    }
+    new_pane.curves.push_back(*curve);
+  }
+  tab->panes.push_back(std::move(new_pane));
+
+  SplitOrientation orientation = SplitOrientation::Horizontal;
+  bool new_before = false;
+  switch (zone) {
+    case PaneDropZone::Left:
+      orientation = SplitOrientation::Horizontal;
+      new_before = true;
+      break;
+    case PaneDropZone::Right:
+      orientation = SplitOrientation::Horizontal;
+      new_before = false;
+      break;
+    case PaneDropZone::Top:
+      orientation = SplitOrientation::Vertical;
+      new_before = true;
+      break;
+    case PaneDropZone::Bottom:
+      orientation = SplitOrientation::Vertical;
+      new_before = false;
+      break;
+    case PaneDropZone::Center:
+      break;
+  }
+  return split_pane_node(&tab->root, pane_index, orientation, new_before, new_pane_index);
+}
+
+bool close_pane(WorkspaceTab *tab, int pane_index) {
+  if (tab->panes.size() <= 1 || pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
+    return false;
+  }
+  if (remove_pane_node(&tab->root, pane_index)) {
+    return false;
+  }
+  tab->panes.erase(tab->panes.begin() + static_cast<std::ptrdiff_t>(pane_index));
+  decrement_pane_indices(&tab->root, pane_index);
+  normalize_split_node(&tab->root);
   return true;
+}
+
+void clear_pane(WorkspaceTab *tab, int pane_index) {
+  if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
+    return;
+  }
+  Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
+  pane.curves.clear();
+  pane.title = "plot";
+}
+
+void create_runtime_tab(SketchLayout *layout, UiState *state) {
+  const std::string tab_name = next_tab_name(*layout, "tab");
+  layout->tabs.push_back(make_empty_tab(tab_name));
+  state->tabs.push_back(TabUiState{.dock_needs_build = true, .active_pane_index = 0});
+  state->active_tab_index = static_cast<int>(layout->tabs.size()) - 1;
+  mark_all_docks_dirty(state);
+  state->status_text = "Created " + tab_name;
+}
+
+void duplicate_runtime_tab(SketchLayout *layout, UiState *state) {
+  if (layout->tabs.empty()) {
+    return;
+  }
+  const int source_index = std::clamp(state->active_tab_index, 0, static_cast<int>(layout->tabs.size()) - 1);
+  WorkspaceTab copy = layout->tabs[static_cast<size_t>(source_index)];
+  copy.tab_name = next_tab_name(*layout, copy.tab_name + " copy");
+  layout->tabs.push_back(std::move(copy));
+  const int active_pane_index = source_index < static_cast<int>(state->tabs.size()) ? state->tabs[static_cast<size_t>(source_index)].active_pane_index : 0;
+  state->tabs.push_back(TabUiState{.dock_needs_build = true, .active_pane_index = active_pane_index});
+  state->active_tab_index = static_cast<int>(layout->tabs.size()) - 1;
+  mark_all_docks_dirty(state);
+  state->status_text = "Duplicated tab";
+}
+
+void close_runtime_tab(SketchLayout *layout, UiState *state) {
+  if (layout->tabs.size() <= 1) {
+    return;
+  }
+  const int tab_index = std::clamp(state->active_tab_index, 0, static_cast<int>(layout->tabs.size()) - 1);
+  layout->tabs.erase(layout->tabs.begin() + static_cast<std::ptrdiff_t>(tab_index));
+  if (tab_index < static_cast<int>(state->tabs.size())) {
+    state->tabs.erase(state->tabs.begin() + static_cast<std::ptrdiff_t>(tab_index));
+  }
+  if (state->active_tab_index >= static_cast<int>(layout->tabs.size())) {
+    state->active_tab_index = static_cast<int>(layout->tabs.size()) - 1;
+  }
+  sync_ui_state(state, *layout);
+  mark_all_docks_dirty(state);
+  state->status_text = "Closed tab";
 }
 
 bool curve_has_samples(const AppSession &session, const Curve &curve) {
@@ -1198,33 +1375,6 @@ bool curve_has_samples(const AppSession &session, const Curve &curve) {
   }
   const RouteSeries *series = find_route_series(session, curve.name);
   return series != nullptr && series->times.size() > 1 && series->times.size() == series->values.size();
-}
-
-std::optional<UnsupportedCurve> unsupported_curve(const AppSession &session, const Curve &curve) {
-  if (!curve.visible) {
-    return std::nullopt;
-  }
-  if (curve_has_samples(session, curve)) {
-    return std::nullopt;
-  }
-  if (!curve.name.empty() && curve.name.front() != '/') {
-    return UnsupportedCurve{curve_display_name(curve), "custom math not implemented"};
-  }
-  if (!curve.name.empty()) {
-    return UnsupportedCurve{curve_display_name(curve), "route has no plottable data for this path"};
-  }
-  return UnsupportedCurve{curve_display_name(curve), "curve is not implemented"};
-}
-
-std::vector<UnsupportedCurve> collect_unsupported_curves(const AppSession &session, const Pane &pane) {
-  std::vector<UnsupportedCurve> unsupported;
-  unsupported.reserve(pane.curves.size());
-  for (const Curve &curve : pane.curves) {
-    if (auto status = unsupported_curve(session, curve); status.has_value()) {
-      unsupported.push_back(std::move(*status));
-    }
-  }
-  return unsupported;
 }
 
 void extend_range(const std::vector<double> &values, bool *found, double *min_value, double *max_value) {
@@ -1417,7 +1567,6 @@ PlotBounds compute_plot_bounds(const Pane &pane,
 }
 
 void draw_plot(const AppSession &session, const Pane &pane, UiState *state) {
-  std::vector<UnsupportedCurve> unsupported = collect_unsupported_curves(session, pane);
   std::vector<PreparedCurve> prepared_curves;
   prepared_curves.reserve(pane.curves.size());
   const int max_points = std::max(256, static_cast<int>(ImGui::GetContentRegionAvail().x) * 2);
@@ -1433,13 +1582,7 @@ void draw_plot(const AppSession &session, const Pane &pane, UiState *state) {
 
   const PlotBounds bounds = compute_plot_bounds(pane, prepared_curves, *state);
   const int supported_count = static_cast<int>(prepared_curves.size());
-  const float status_height = unsupported.empty()
-    ? 0.0f
-    : std::min(86.0f, 28.0f + 18.0f * static_cast<float>(std::min<size_t>(unsupported.size(), 3)));
-  ImVec2 plot_size = ImGui::GetContentRegionAvail();
-  if (status_height > 0.0f) {
-    plot_size.y = std::max(48.0f, plot_size.y - status_height - 6.0f);
-  }
+  const ImVec2 plot_size = ImGui::GetContentRegionAvail();
 
   ImPlot::PushStyleColor(ImPlotCol_PlotBg, color_rgb(255, 255, 255));
   ImPlot::PushStyleColor(ImPlotCol_PlotBorder, color_rgb(186, 190, 196));
@@ -1515,24 +1658,219 @@ void draw_plot(const AppSession &session, const Pane &pane, UiState *state) {
     }
   }
   ImPlot::PopStyleColor(6);
+}
 
-  if (unsupported.empty()) {
-    return;
+std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, int pane_index) {
+  if (!ImGui::BeginPopupContextWindow("##pane_context")) {
+    return std::nullopt;
   }
 
-  if (ImGui::BeginChild("##unsupported_curves", ImVec2(0.0f, status_height), true,
-                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-    ImGui::TextDisabled("Unsupported in current renderer:");
-    const size_t shown = std::min<size_t>(unsupported.size(), 3);
-    for (size_t i = 0; i < shown; ++i) {
-      const UnsupportedCurve &curve = unsupported[i];
-      ImGui::BulletText("%s: %s", curve.label.c_str(), curve.reason.c_str());
-    }
-    if (unsupported.size() > shown) {
-      ImGui::TextDisabled("+%zu more", unsupported.size() - shown);
-    }
+  PaneMenuAction action;
+  action.pane_index = pane_index;
+  if (ImGui::MenuItem("Split Left")) {
+    action.kind = PaneMenuActionKind::SplitLeft;
+  } else if (ImGui::MenuItem("Split Right")) {
+    action.kind = PaneMenuActionKind::SplitRight;
+  } else if (ImGui::MenuItem("Split Top")) {
+    action.kind = PaneMenuActionKind::SplitTop;
+  } else if (ImGui::MenuItem("Split Bottom")) {
+    action.kind = PaneMenuActionKind::SplitBottom;
+  } else if (ImGui::MenuItem("Clear Pane")) {
+    action.kind = PaneMenuActionKind::Clear;
+  } else if (ImGui::MenuItem("Close Pane", nullptr, false, tab.panes.size() > 1)) {
+    action.kind = PaneMenuActionKind::Close;
   }
-  ImGui::EndChild();
+  ImGui::EndPopup();
+  if (action.kind == PaneMenuActionKind::None) {
+    return std::nullopt;
+  }
+  return action;
+}
+
+std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_index) {
+  if (ImGui::GetDragDropPayload() == nullptr) {
+    return std::nullopt;
+  }
+
+  const ImVec2 window_pos = ImGui::GetWindowPos();
+  const ImVec2 content_min = ImGui::GetWindowContentRegionMin();
+  const ImVec2 content_max = ImGui::GetWindowContentRegionMax();
+  ImRect content_rect(ImVec2(window_pos.x + content_min.x, window_pos.y + content_min.y),
+                      ImVec2(window_pos.x + content_max.x, window_pos.y + content_max.y));
+  content_rect.Expand(ImVec2(-6.0f, -6.0f));
+  if (content_rect.GetWidth() < 60.0f || content_rect.GetHeight() < 60.0f) {
+    return std::nullopt;
+  }
+
+  const float edge_w = std::min(90.0f, content_rect.GetWidth() * 0.24f);
+  const float edge_h = std::min(72.0f, content_rect.GetHeight() * 0.24f);
+  struct ZoneRect {
+    PaneDropZone zone;
+    ImRect rect;
+  };
+  const std::array<ZoneRect, 5> zones = {{
+    {PaneDropZone::Left, ImRect(content_rect.Min, ImVec2(content_rect.Min.x + edge_w, content_rect.Max.y))},
+    {PaneDropZone::Right, ImRect(ImVec2(content_rect.Max.x - edge_w, content_rect.Min.y), content_rect.Max)},
+    {PaneDropZone::Top, ImRect(content_rect.Min, ImVec2(content_rect.Max.x, content_rect.Min.y + edge_h))},
+    {PaneDropZone::Bottom, ImRect(ImVec2(content_rect.Min.x, content_rect.Max.y - edge_h), content_rect.Max)},
+    {PaneDropZone::Center, ImRect(ImVec2(content_rect.Min.x + edge_w, content_rect.Min.y + edge_h),
+                                  ImVec2(content_rect.Max.x - edge_w, content_rect.Max.y - edge_h))},
+  }};
+
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  for (const ZoneRect &zone : zones) {
+    if (zone.rect.GetWidth() <= 0.0f || zone.rect.GetHeight() <= 0.0f) {
+      continue;
+    }
+
+    ImGui::PushID(static_cast<int>(zone.zone) * 1000 + pane_index + tab_index * 100);
+    ImGui::SetCursorScreenPos(zone.rect.Min);
+    ImGui::InvisibleButton("##drop_zone", zone.rect.GetSize());
+    if (ImGui::BeginDragDropTarget()) {
+      if (const ImGuiPayload *payload =
+            ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATH", ImGuiDragDropFlags_AcceptBeforeDelivery)) {
+        if (payload->Preview) {
+          draw_list->AddRectFilled(zone.rect.Min, zone.rect.Max, IM_COL32(70, 130, 220, 55));
+          draw_list->AddRect(zone.rect.Min, zone.rect.Max, IM_COL32(45, 95, 175, 220), 0.0f, 0, 2.0f);
+        }
+        if (payload->Delivery) {
+          PaneDropAction action;
+          action.zone = zone.zone;
+          action.target_pane_index = pane_index;
+          action.from_browser = true;
+          action.browser_path = static_cast<const char *>(payload->Data);
+          ImGui::EndDragDropTarget();
+          ImGui::PopID();
+          return action;
+        }
+      }
+      if (const ImGuiPayload *payload =
+            ImGui::AcceptDragDropPayload("JOTP_PANE_CURVE", ImGuiDragDropFlags_AcceptBeforeDelivery)) {
+        if (payload->Preview) {
+          draw_list->AddRectFilled(zone.rect.Min, zone.rect.Max, IM_COL32(70, 130, 220, 55));
+          draw_list->AddRect(zone.rect.Min, zone.rect.Max, IM_COL32(45, 95, 175, 220), 0.0f, 0, 2.0f);
+        }
+        if (payload->Delivery) {
+          PaneDropAction action;
+          action.zone = zone.zone;
+          action.target_pane_index = pane_index;
+          action.curve_ref = *static_cast<const PaneCurveDragPayload *>(payload->Data);
+          ImGui::EndDragDropTarget();
+          ImGui::PopID();
+          return action;
+        }
+      }
+      ImGui::EndDragDropTarget();
+    }
+    ImGui::PopID();
+  }
+  return std::nullopt;
+}
+
+bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
+                            const PaneMenuAction &action) {
+  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  TabUiState *tab_state = active_tab_state(state);
+  if (tab == nullptr || tab_state == nullptr) {
+    return false;
+  }
+
+  switch (action.kind) {
+    case PaneMenuActionKind::SplitLeft:
+      if (split_pane(tab, pane_index, PaneDropZone::Left)) {
+        tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+      }
+      break;
+    case PaneMenuActionKind::SplitRight:
+      if (split_pane(tab, pane_index, PaneDropZone::Right)) {
+        tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+      }
+      break;
+    case PaneMenuActionKind::SplitTop:
+      if (split_pane(tab, pane_index, PaneDropZone::Top)) {
+        tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+      }
+      break;
+    case PaneMenuActionKind::SplitBottom:
+      if (split_pane(tab, pane_index, PaneDropZone::Bottom)) {
+        tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+      }
+      break;
+    case PaneMenuActionKind::Clear:
+      clear_pane(tab, pane_index);
+      tab_state->active_pane_index = pane_index;
+      break;
+    case PaneMenuActionKind::Close:
+      if (close_pane(tab, pane_index)) {
+        tab_state->active_pane_index = std::clamp(pane_index, 0, static_cast<int>(tab->panes.size()) - 1);
+      }
+      break;
+    case PaneMenuActionKind::None:
+      return false;
+  }
+
+  mark_tab_dock_dirty(state, state->active_tab_index);
+  state->status_text = "Workspace updated";
+  return true;
+}
+
+bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropAction &action) {
+  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  TabUiState *tab_state = active_tab_state(state);
+  if (tab == nullptr || tab_state == nullptr) {
+    return false;
+  }
+
+  if (action.from_browser) {
+    if (action.zone == PaneDropZone::Center) {
+      const bool ok = add_path_curve_to_pane(session, state, action.target_pane_index, action.browser_path);
+      if (ok) {
+        tab_state->active_pane_index = action.target_pane_index;
+        mark_tab_dock_dirty(state, state->active_tab_index);
+      }
+      return ok;
+    }
+    Pane &target = tab->panes[static_cast<size_t>(action.target_pane_index)];
+    Curve curve = make_curve_for_path(target, action.browser_path);
+    if (split_pane(tab, action.target_pane_index, action.zone, curve)) {
+      tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+      mark_tab_dock_dirty(state, state->active_tab_index);
+      state->status_text = "Split pane and added " + action.browser_path;
+      return true;
+    }
+    return false;
+  }
+
+  if (action.curve_ref.tab_index < 0
+      || action.curve_ref.tab_index >= static_cast<int>(session->layout.tabs.size())) {
+    return false;
+  }
+  WorkspaceTab &source_tab = session->layout.tabs[static_cast<size_t>(action.curve_ref.tab_index)];
+  if (action.curve_ref.pane_index < 0
+      || action.curve_ref.pane_index >= static_cast<int>(source_tab.panes.size())) {
+    return false;
+  }
+  const Pane &source_pane = source_tab.panes[static_cast<size_t>(action.curve_ref.pane_index)];
+  if (action.curve_ref.curve_index < 0
+      || action.curve_ref.curve_index >= static_cast<int>(source_pane.curves.size())) {
+    return false;
+  }
+  const Curve curve = source_pane.curves[static_cast<size_t>(action.curve_ref.curve_index)];
+
+  if (action.zone == PaneDropZone::Center) {
+    const bool inserted = copy_curve_to_pane(tab, action.target_pane_index, curve);
+    tab_state->active_pane_index = action.target_pane_index;
+    mark_tab_dock_dirty(state, state->active_tab_index);
+    state->status_text = inserted ? "Added " + curve_display_name(curve) : "Curve already present";
+    return true;
+  }
+  if (split_pane(tab, action.target_pane_index, action.zone, curve)) {
+    tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+    mark_tab_dock_dirty(state, state->active_tab_index);
+    state->status_text = "Split pane and added " + curve_display_name(curve);
+    return true;
+  }
+  return false;
 }
 
 ImGuiDir dock_direction(SplitOrientation orientation) {
@@ -1595,6 +1933,8 @@ void draw_pane_windows(AppSession *session, UiState *state) {
 
   for (size_t i = 0; i < tab->panes.size(); ++i) {
     Pane &pane = tab->panes[i];
+    std::optional<PaneMenuAction> menu_action;
+    std::optional<PaneDropAction> drop_action;
     ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(250, 250, 251));
     ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(194, 198, 204));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, color_rgb(252, 252, 253));
@@ -1609,29 +1949,62 @@ void draw_pane_windows(AppSession *session, UiState *state) {
         tab_state->active_pane_index = static_cast<int>(i);
       }
       draw_plot(*session, pane, state);
+      menu_action = draw_pane_context_menu(*tab, static_cast<int>(i));
+      drop_action = draw_pane_drop_target(state->active_tab_index, static_cast<int>(i));
     }
     ImGui::End();
     ImGui::PopStyleColor(5);
+    if (menu_action.has_value() && apply_pane_menu_action(session, state, static_cast<int>(i), *menu_action)) {
+      return;
+    }
+    if (drop_action.has_value() && apply_pane_drop_action(session, state, *drop_action)) {
+      return;
+    }
   }
 }
 
-void draw_workspace(const AppSession &session, const UiMetrics &ui, UiState *state) {
+void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
   ImGui::SetNextWindowPos(ImVec2(ui.content_x, ui.content_y));
   ImGui::SetNextWindowSize(ImVec2(ui.content_w, ui.content_h));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(244, 246, 248));
   ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(186, 191, 198));
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
                                  ImGuiWindowFlags_NoMove |
                                  ImGuiWindowFlags_NoResize |
-                                 ImGuiWindowFlags_NoSavedSettings;
+                                 ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoScrollbar |
+                                 ImGuiWindowFlags_NoScrollWithMouse;
   if (ImGui::Begin("##workspace_host", nullptr, flags)) {
     if (ImGui::BeginTabBar("##layout_tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
-      for (size_t i = 0; i < session.layout.tabs.size(); ++i) {
-        const WorkspaceTab &tab = session.layout.tabs[i];
+      enum class TabActionKind {
+        None,
+        New,
+        Duplicate,
+        Close,
+      };
+      TabActionKind pending_action = TabActionKind::None;
+      int pending_tab_index = -1;
+      for (size_t i = 0; i < session->layout.tabs.size(); ++i) {
+        const WorkspaceTab &tab = session->layout.tabs[i];
         const bool selected = static_cast<int>(i) == state->active_tab_index;
         const bool opened = ImGui::BeginTabItem(tab.tab_name.empty() ? "tab" : tab.tab_name.c_str(),
                                                 nullptr,
                                                 selected ? ImGuiTabItemFlags_SetSelected : 0);
+        if (ImGui::BeginPopupContextItem()) {
+          if (ImGui::MenuItem("New Tab")) {
+            pending_action = TabActionKind::New;
+          }
+          if (ImGui::MenuItem("Duplicate Tab")) {
+            pending_action = TabActionKind::Duplicate;
+            pending_tab_index = static_cast<int>(i);
+          }
+          if (ImGui::MenuItem("Close Tab", nullptr, false, session->layout.tabs.size() > 1)) {
+            pending_action = TabActionKind::Close;
+            pending_tab_index = static_cast<int>(i);
+          }
+          ImGui::EndPopup();
+        }
         if (opened) {
           state->active_tab_index = static_cast<int>(i);
           if (i < state->tabs.size()) {
@@ -1642,9 +2015,27 @@ void draw_workspace(const AppSession &session, const UiMetrics &ui, UiState *sta
         }
       }
       ImGui::EndTabBar();
+
+      if (state->request_new_tab || pending_action == TabActionKind::New) {
+        create_runtime_tab(&session->layout, state);
+        state->request_new_tab = false;
+      } else if (state->request_duplicate_tab || pending_action == TabActionKind::Duplicate) {
+        if (pending_tab_index >= 0) {
+          state->active_tab_index = pending_tab_index;
+        }
+        duplicate_runtime_tab(&session->layout, state);
+        state->request_duplicate_tab = false;
+      } else if (state->request_close_tab || pending_action == TabActionKind::Close) {
+        if (pending_tab_index >= 0) {
+          state->active_tab_index = pending_tab_index;
+        }
+        close_runtime_tab(&session->layout, state);
+        state->request_close_tab = false;
+      }
     }
   }
   ImGui::End();
+  ImGui::PopStyleVar();
   ImGui::PopStyleColor(2);
 }
 
@@ -1748,11 +2139,9 @@ void render_layout(AppSession *session, UiState *state) {
     clamp_shared_range(state);
   }
   const float menu_height = draw_main_menu_bar(state);
-  const float toolbar_height = draw_toolbar(*session, state, menu_height);
-  const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height + toolbar_height);
-  draw_workspace_background(ui);
+  const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height);
   draw_sidebar(session, ui, state);
-  draw_workspace(*session, ui, state);
+  draw_workspace(session, ui, state);
   draw_pane_windows(session, state);
   draw_status_bar(ui, state);
   draw_popups(session, state);
@@ -1821,12 +2210,12 @@ void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const
 }
 
 int run_app(const Options &options) {
-  const fs::path layout_path = resolve_layout_path(options.layout);
+  const fs::path layout_path = options.layout.empty() ? fs::path() : resolve_layout_path(options.layout);
   AppSession session = {
     .layout_path = layout_path,
     .route_name = options.route_name,
     .data_dir = options.data_dir,
-    .layout = load_sketch_layout(layout_path),
+    .layout = options.layout.empty() ? make_empty_layout() : load_sketch_layout(layout_path),
   };
   UiState ui_state;
   sync_ui_state(&ui_state, session.layout);

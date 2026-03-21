@@ -32,6 +32,12 @@ Open the app interactively:
 ./tools/jotpluggler/jotpluggler --demo
 ```
 
+Open a specific PlotJuggler layout:
+
+```bash
+./tools/jotpluggler/jotpluggler --layout longitudinal --demo
+```
+
 Export a screenshot without opening a visible window:
 
 ```bash
@@ -44,7 +50,8 @@ Export a screenshot without opening a visible window:
   0000010a--a51155e496/0
 ```
 
-`--demo` opens the default `longitudinal` layout on the bundled demo route.
+If you omit `--layout`, JotPlugger starts with a blank one-pane workspace.
+`--demo` only provides the bundled demo route.
 The app also accepts a positional `route` like the other log tools, plus `--data-dir`.
 Multi-tab PlotJuggler layouts now render as real app tabs, and the sidebar can target panes, browse route series, add curves, and toggle visibility.
 Plots share a real x-range with follow/reset controls and route-backed direct curve rendering.

@@ -72,6 +72,7 @@ struct RouteData {
 struct SketchLayout {
   std::vector<WorkspaceTab> tabs;
   std::vector<std::string> roots;
+  int current_tab_index = 0;
 };
 
 enum class RouteLoadStage {
