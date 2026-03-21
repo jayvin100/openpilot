@@ -26,7 +26,7 @@ imgui_static = File(f"{imgui.LIB_DIR}/libimgui.a")
 glfw_static = File(f"{imgui.LIB_DIR}/libglfw3.a")
 frameworks = []
 libs = [replay_lib, common, messaging, visionipc, cereal, imgui_static, glfw_static,
-        "avformat", "avcodec", "swresample", "avutil", "x264", "yuv", "z", "bz2", "zstd", "m", "pthread"]
+        "avformat", "avcodec", "avutil", "x264", "yuv", "z", "bz2", "zstd", "m", "pthread"]
 if arch == "Darwin":
   frameworks = ["OpenGL", "Cocoa", "IOKit", "CoreFoundation", "CoreVideo"]
 else:

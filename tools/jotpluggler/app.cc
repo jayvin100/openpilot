@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "system/camerad/cameras/nv12_info.h"
+#include "third_party/json11/json11.hpp"
 
 namespace jotpluggler {
 namespace fs = std::filesystem;
@@ -927,11 +928,6 @@ std::string curve_color_hex(const std::array<uint8_t, 3> &color) {
   return buf;
 }
 
-std::string format_json_double(double value) {
-  std::ostringstream out;
-  out << std::fixed << std::setprecision(6) << value;
-  return out.str();
-}
 
 void ensure_parent_dir(const fs::path &path) {
   const fs::path parent = path.parent_path();
@@ -945,67 +941,24 @@ struct ProcessResult {
   std::string stderr_text;
 };
 
-std::string read_fd_to_string(int fd) {
-  std::string text;
-  std::array<char, 4096> buffer = {};
-  while (true) {
-    const ssize_t count = ::read(fd, buffer.data(), buffer.size());
-    if (count <= 0) {
-      break;
-    }
-    text.append(buffer.data(), static_cast<size_t>(count));
+ProcessResult run_process(const std::vector<std::string> &args) {
+  std::string command;
+  for (const std::string &arg : args) {
+    if (!command.empty()) command += ' ';
+    command += shell_quote(arg);
   }
-  return text;
-}
-
-ProcessResult run_process_capture_stderr(const std::vector<std::string> &args) {
-  if (args.empty()) {
-    throw std::runtime_error("Process arguments are empty");
-  }
-
-  int stderr_pipe[2] = {-1, -1};
-  if (::pipe(stderr_pipe) != 0) {
-    throw std::runtime_error("pipe() failed");
-  }
-
-  const pid_t pid = ::fork();
-  if (pid < 0) {
-    ::close(stderr_pipe[0]);
-    ::close(stderr_pipe[1]);
-    throw std::runtime_error("fork() failed");
-  }
-
-  if (pid == 0) {
-    ::dup2(stderr_pipe[1], STDERR_FILENO);
-    ::close(stderr_pipe[0]);
-    ::close(stderr_pipe[1]);
-
-    std::vector<char *> argv;
-    argv.reserve(args.size() + 1);
-    for (const std::string &arg : args) {
-      argv.push_back(const_cast<char *>(arg.c_str()));
-    }
-    argv.push_back(nullptr);
-    ::execvp(argv[0], argv.data());
-    _exit(127);
-  }
-
-  ::close(stderr_pipe[1]);
+  command += " 2>&1";
   ProcessResult result;
-  result.stderr_text = read_fd_to_string(stderr_pipe[0]);
-  ::close(stderr_pipe[0]);
-
-  int status = 0;
-  if (::waitpid(pid, &status, 0) < 0) {
-    throw std::runtime_error("waitpid() failed");
+  FILE *pipe = popen(command.c_str(), "r");
+  if (pipe == nullptr) {
+    throw std::runtime_error("popen() failed");
   }
-  if (WIFEXITED(status)) {
-    result.exit_code = WEXITSTATUS(status);
-  } else if (WIFSIGNALED(status)) {
-    result.exit_code = 128 + WTERMSIG(status);
-  } else {
-    result.exit_code = 1;
+  std::array<char, 4096> buf = {};
+  while (fgets(buf.data(), static_cast<int>(buf.size()), pipe) != nullptr) {
+    result.stderr_text += buf.data();
   }
+  const int status = pclose(pipe);
+  result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
   return result;
 }
 
@@ -1535,167 +1488,89 @@ std::string next_tab_name(const SketchLayout &layout, const std::string &base_na
   return base + " copy";
 }
 
-void write_indent(std::ostream &out, int spaces) {
-  out << std::string(static_cast<size_t>(std::max(spaces, 0)), ' ');
-}
-
-void write_curve_json(std::ostream &out, const Curve &curve, int indent) {
-  if (curve.runtime_only) {
-    return;
-  }
-  write_indent(out, indent);
-  out << "{"
-      << "\"name\": \"" << json_escape(curve.name) << "\", "
-      << "\"color\": \"" << curve_color_hex(curve.color) << "\"";
+json11::Json curve_to_json(const Curve &curve) {
+  json11::Json::object obj = {
+    {"name", curve.name},
+    {"color", curve_color_hex(curve.color)},
+  };
   if (curve.derivative) {
-    out << ", \"transform\": \"derivative\"";
+    obj["transform"] = "derivative";
   } else if (std::abs(curve.value_scale - 1.0) > 1.0e-9 || std::abs(curve.value_offset) > 1.0e-9) {
-    out << ", \"transform\": \"scale\""
-        << ", \"scale\": " << format_json_double(curve.value_scale)
-        << ", \"offset\": " << format_json_double(curve.value_offset);
+    obj["transform"] = "scale";
+    obj["scale"] = curve.value_scale;
+    obj["offset"] = curve.value_offset;
   }
-  out << "}";
+  return obj;
 }
 
-void write_range_json(std::ostream &out, const PlotRange &range) {
-  out << "{"
-      << "\"left\": " << format_json_double(range.left)
-      << ", \"right\": " << format_json_double(range.right)
-      << ", \"top\": " << format_json_double(range.top)
-      << ", \"bottom\": " << format_json_double(range.bottom)
-      << "}";
-}
-
-void write_y_limits_json(std::ostream &out, const PlotRange &range) {
-  out << "{";
-  bool first = true;
-  if (range.has_y_limit_min) {
-    out << "\"min\": " << format_json_double(range.y_limit_min);
-    first = false;
-  }
-  if (range.has_y_limit_max) {
-    if (!first) {
-      out << ", ";
-    }
-    out << "\"max\": " << format_json_double(range.y_limit_max);
-  }
-  out << "}";
-}
-
-void write_workspace_node_json(std::ostream &out, const WorkspaceNode &node, const WorkspaceTab &tab, int indent) {
+json11::Json workspace_node_to_json(const WorkspaceNode &node, const WorkspaceTab &tab) {
   if (node.is_pane) {
     if (node.pane_index < 0 || node.pane_index >= static_cast<int>(tab.panes.size())) {
-      return;
+      return nullptr;
     }
     const Pane &pane = tab.panes[static_cast<size_t>(node.pane_index)];
-    write_indent(out, indent);
-    out << "{\n";
-    write_indent(out, indent + 2);
-    out << "\"title\": \"" << json_escape(pane.title.empty() ? std::string(kUntitledPaneTitle) : pane.title) << "\"";
+    json11::Json::object obj = {
+      {"title", pane.title.empty() ? std::string(kUntitledPaneTitle) : pane.title},
+    };
     if (pane.range.valid) {
-      out << ",\n";
-      write_indent(out, indent + 2);
-      out << "\"range\": ";
-      write_range_json(out, pane.range);
+      obj["range"] = json11::Json::object{
+        {"left", pane.range.left}, {"right", pane.range.right},
+        {"top", pane.range.top}, {"bottom", pane.range.bottom},
+      };
     }
     if (pane.range.has_y_limit_min || pane.range.has_y_limit_max) {
-      out << ",\n";
-      write_indent(out, indent + 2);
-      out << "\"y_limits\": ";
-      write_y_limits_json(out, pane.range);
+      json11::Json::object limits;
+      if (pane.range.has_y_limit_min) limits["min"] = pane.range.y_limit_min;
+      if (pane.range.has_y_limit_max) limits["max"] = pane.range.y_limit_max;
+      obj["y_limits"] = limits;
     }
-    out << ",\n";
-    write_indent(out, indent + 2);
-    out << "\"curves\": [";
-    bool first_curve = true;
+    json11::Json::array curves;
     for (const Curve &curve : pane.curves) {
-      if (curve.runtime_only) {
-        continue;
+      if (!curve.runtime_only) {
+        curves.push_back(curve_to_json(curve));
       }
-      if (first_curve) {
-        out << "\n";
-        first_curve = false;
-      } else {
-        out << ",\n";
-      }
-      write_curve_json(out, curve, indent + 4);
     }
-    if (!first_curve) {
-      out << "\n";
-      write_indent(out, indent + 2);
-    }
-    out << "]\n";
-    write_indent(out, indent);
-    out << "}";
-    return;
+    obj["curves"] = curves;
+    return obj;
   }
 
   if (node.children.empty()) {
-    return;
+    return nullptr;
   }
-  write_indent(out, indent);
-  out << "{\n";
-  write_indent(out, indent + 2);
-  out << "\"split\": \"" << (node.orientation == SplitOrientation::Horizontal ? "horizontal" : "vertical") << "\",\n";
-  write_indent(out, indent + 2);
-  out << "\"sizes\": [";
+  json11::Json::array sizes;
   for (size_t i = 0; i < node.children.size(); ++i) {
-    if (i != 0) {
-      out << ", ";
-    }
-    const float size = i < node.sizes.size() ? node.sizes[i] : 1.0f / static_cast<float>(node.children.size());
-    out << format_json_double(size);
+    sizes.push_back(i < node.sizes.size() ? static_cast<double>(node.sizes[i])
+                                          : 1.0 / static_cast<double>(node.children.size()));
   }
-  out << "],\n";
-  write_indent(out, indent + 2);
-  out << "\"children\": [\n";
-  for (size_t i = 0; i < node.children.size(); ++i) {
-    write_workspace_node_json(out, node.children[i], tab, indent + 4);
-    if (i + 1 < node.children.size()) {
-      out << ",";
-    }
-    out << "\n";
+  json11::Json::array children;
+  for (const WorkspaceNode &child : node.children) {
+    children.push_back(workspace_node_to_json(child, tab));
   }
-  write_indent(out, indent + 2);
-  out << "]\n";
-  write_indent(out, indent);
-  out << "}";
+  return json11::Json::object{
+    {"split", node.orientation == SplitOrientation::Horizontal ? "horizontal" : "vertical"},
+    {"sizes", sizes},
+    {"children", children},
+  };
 }
 
 void save_layout_json(const SketchLayout &layout, const fs::path &path) {
   ensure_parent_dir(path);
+  json11::Json::array tabs;
+  for (const WorkspaceTab &tab : layout.tabs) {
+    tabs.push_back(json11::Json::object{
+      {"name", tab.tab_name},
+      {"root", workspace_node_to_json(tab.root, tab)},
+    });
+  }
+  json11::Json root = json11::Json::object{
+    {"current_tab_index", std::clamp(layout.current_tab_index, 0, std::max(0, static_cast<int>(layout.tabs.size()) - 1))},
+    {"tabs", tabs},
+  };
   std::ofstream out(path);
   if (!out) {
     throw std::runtime_error("Failed to open layout for writing: " + path.string());
   }
-
-  out << "{\n";
-  write_indent(out, 2);
-  out << "\"current_tab_index\": "
-      << std::clamp(layout.current_tab_index, 0, std::max(0, static_cast<int>(layout.tabs.size()) - 1))
-      << ",\n";
-  write_indent(out, 2);
-  out << "\"tabs\": [\n";
-  for (size_t i = 0; i < layout.tabs.size(); ++i) {
-    const WorkspaceTab &tab = layout.tabs[i];
-    write_indent(out, 4);
-    out << "{\n";
-    write_indent(out, 6);
-    out << "\"name\": \"" << json_escape(tab.tab_name) << "\",\n";
-    write_indent(out, 6);
-    out << "\"root\": ";
-    write_workspace_node_json(out, tab.root, tab, 6);
-    out << "\n";
-    write_indent(out, 4);
-    out << "}";
-    if (i + 1 < layout.tabs.size()) {
-      out << ",";
-    }
-    out << "\n";
-  }
-  write_indent(out, 2);
-  out << "]\n";
-  out << "}\n";
+  out << root.dump() << "\n";
 }
 
 void clear_layout_autosave(const AppSession &session) {
@@ -2193,7 +2068,7 @@ PythonEvalResult evaluate_custom_python_series(const AppSession &session,
     manifest << "}\n";
     manifest.close();
 
-    const ProcessResult process = run_process_capture_stderr({
+    const ProcessResult process = run_process({
       "python3",
       math_eval_script_path().string(),
       manifest_path.string(),
