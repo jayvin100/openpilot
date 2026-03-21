@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -41,6 +42,12 @@ public:
             const ProgressCallback &progress = {});
   std::vector<Event> events;
 
+  uint64_t compressed_size() const { return compressed_size_; }
+  uint64_t decompressed_size() const { return decompressed_size_; }
+  double download_seconds() const { return download_seconds_; }
+  double decompress_seconds() const { return decompress_seconds_; }
+  double parse_seconds() const { return parse_seconds_; }
+
 private:
   void migrateOldEvents();
 
@@ -48,4 +55,9 @@ private:
   bool requires_migration = true;
   std::vector<bool> filters_;
   MonotonicBuffer buffer_{1024 * 1024};
+  uint64_t compressed_size_ = 0;
+  uint64_t decompressed_size_ = 0;
+  double download_seconds_ = 0.0;
+  double decompress_seconds_ = 0.0;
+  double parse_seconds_ = 0.0;
 };

@@ -6,7 +6,7 @@
 
 namespace {
 
-constexpr const char *kDemoRoute = "5beb9b58bd12b691/0000010a--a51155e496/0";
+constexpr const char *kDemoRoute = "5beb9b58bd12b691/0000010a--a51155e496";
 
 void print_usage(const char *argv0) {
   std::cerr
@@ -19,6 +19,7 @@ void print_usage(const char *argv0) {
       << "  --height <pixels>\n"
       << "  --output <png>\n"
       << "  --show\n"
+      << "  --sync-load\n"
       << "\n"
       << "Examples:\n"
       << "  " << argv0 << "\n"
@@ -72,6 +73,8 @@ int main(int argc, char *argv[]) {
       }
     } else if (arg == "--show") {
       options.show = true;
+    } else if (arg == "--sync-load") {
+      options.sync_load = true;
     } else if (arg == "--help" || arg == "-h") {
       print_usage(argv[0]);
       return 0;

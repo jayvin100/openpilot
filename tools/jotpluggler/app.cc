@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cfloat>
@@ -23,11 +24,14 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unistd.h>
 #include <vector>
@@ -62,6 +66,8 @@ struct BrowserNode {
   std::vector<BrowserNode> children;
 };
 
+class AsyncRouteLoader;
+
 struct AppSession {
   fs::path layout_path;
   fs::path autosave_path;
@@ -71,6 +77,8 @@ struct AppSession {
   RouteData route_data;
   std::unordered_map<std::string, const RouteSeries *> series_by_path;
   std::vector<BrowserNode> browser_nodes;
+  std::unique_ptr<AsyncRouteLoader> route_loader;
+  bool async_route_loading = false;
 };
 
 struct PlotBounds {
@@ -87,9 +95,6 @@ struct TabUiState {
 };
 
 struct UiState {
-  bool streaming = false;
-  int buffer_size = 5;
-  int source_index = 0;
   bool open_custom_series = false;
   bool open_open_route = false;
   bool open_new_layout = false;
@@ -98,7 +103,6 @@ struct UiState {
   bool request_close = false;
   bool reset_plot_view = false;
   bool request_reset_layout = false;
-  bool request_reload = false;
   bool request_save_layout = false;
   bool request_new_tab = false;
   bool request_duplicate_tab = false;
@@ -135,6 +139,13 @@ struct UiState {
   double tracker_time = 0.0;
   double playback_rate = 1.0;
   double playback_step = 0.1;
+};
+
+struct RouteLoadSnapshot {
+  bool active = false;
+  size_t total_segments = 0;
+  size_t segments_downloaded = 0;
+  size_t segments_parsed = 0;
 };
 
 void glfw_error_callback(int error, const char *description) {
@@ -231,13 +242,9 @@ public:
   explicit TerminalRouteProgress(bool enabled) : enabled_(enabled) {}
 
   void update(const RouteLoadProgress &progress) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!enabled_) {
       return;
-    }
-
-    if (progress.segment_index != active_segment_) {
-      active_segment_ = progress.segment_index;
-      saw_download_ = false;
     }
 
     double overall = 0.0;
@@ -245,28 +252,23 @@ public:
     if (progress.stage == RouteLoadStage::Finished) {
       overall = 1.0;
       detail = "Ready";
-    } else if (progress.segment_count > 0) {
-      double segment_fraction = 0.0;
-      if (progress.total > 0) {
-        segment_fraction = std::clamp(progress.current / static_cast<double>(progress.total), 0.0, 1.0);
-      }
-
-      double within_segment = 0.0;
-      if (progress.stage == RouteLoadStage::DownloadingSegment) {
-        saw_download_ = true;
-        within_segment = 0.35 * segment_fraction;
-        detail = "Downloading segment " + std::to_string(progress.segment_index + 1) + "/" + std::to_string(progress.segment_count);
-      } else if (progress.stage == RouteLoadStage::ParsingSegment) {
-        within_segment = saw_download_ ? 0.35 + 0.65 * segment_fraction : segment_fraction;
-        detail = "Parsing segment " + std::to_string(progress.segment_index + 1) + "/" + std::to_string(progress.segment_count);
-      }
-      overall = std::clamp((progress.segment_index + within_segment) / static_cast<double>(progress.segment_count), 0.0, 1.0);
+    } else if (progress.total_segments > 0) {
+      const double total_work = static_cast<double>(progress.total_segments) * 2.0;
+      const double complete_work = static_cast<double>(progress.segments_downloaded + progress.segments_parsed);
+      overall = total_work <= 0.0 ? 0.0 : std::clamp(complete_work / total_work, 0.0, 1.0);
+      std::ostringstream desc;
+      desc << "Downloaded " << progress.segments_downloaded << "/" << progress.total_segments
+           << "  Parsed " << progress.segments_parsed << "/" << progress.total_segments
+           << "  " << std::fixed << std::setprecision(0)
+           << (static_cast<double>(progress.bytes_downloaded) / (1024.0 * 1024.0)) << " MB";
+      detail = desc.str();
     }
 
     render(overall, detail);
   }
 
   void finish() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!enabled_ || !rendered_) {
       return;
     }
@@ -308,11 +310,116 @@ private:
 
   bool enabled_ = false;
   bool rendered_ = false;
-  bool saw_download_ = false;
-  size_t active_segment_ = 0;
   int last_percent_ = -1;
   size_t last_line_width_ = 0;
   std::string last_detail_;
+  std::mutex mutex_;
+};
+
+class AsyncRouteLoader {
+public:
+  explicit AsyncRouteLoader(bool enable_terminal_progress)
+      : terminal_progress_(enable_terminal_progress) {}
+
+  ~AsyncRouteLoader() {
+    join();
+  }
+
+  void start(const std::string &route_name, const std::string &data_dir) {
+    join();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      route_name_ = route_name;
+      data_dir_ = data_dir;
+      result_.reset();
+      error_text_.clear();
+    }
+    active_.store(!route_name.empty());
+    completed_.store(route_name.empty());
+    success_.store(route_name.empty());
+    total_segments_.store(0);
+    segments_downloaded_.store(0);
+    segments_parsed_.store(0);
+    if (route_name.empty()) {
+      return;
+    }
+
+    worker_ = std::thread([this]() {
+      try {
+        RouteData route_data = load_route_data(route_name_, data_dir_, [this](const RouteLoadProgress &progress) {
+          total_segments_.store(progress.total_segments > 0 ? progress.total_segments : progress.segment_count);
+          segments_downloaded_.store(progress.segments_downloaded);
+          segments_parsed_.store(progress.segments_parsed);
+          terminal_progress_.update(progress);
+        });
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          result_ = std::make_unique<RouteData>(std::move(route_data));
+          error_text_.clear();
+        }
+        success_.store(true);
+      } catch (const std::exception &err) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        result_.reset();
+        error_text_ = err.what();
+        success_.store(false);
+      }
+      active_.store(false);
+      completed_.store(true);
+      terminal_progress_.finish();
+    });
+  }
+
+  RouteLoadSnapshot snapshot() const {
+    RouteLoadSnapshot snapshot;
+    snapshot.active = active_.load();
+    snapshot.total_segments = total_segments_.load();
+    snapshot.segments_downloaded = segments_downloaded_.load();
+    snapshot.segments_parsed = segments_parsed_.load();
+    return snapshot;
+  }
+
+  bool consume(RouteData *route_data, std::string *error_text) {
+    if (!completed_.load()) {
+      return false;
+    }
+    join();
+    std::lock_guard<std::mutex> lock(mutex_);
+    completed_.store(false);
+    if (result_) {
+      *route_data = std::move(*result_);
+      result_.reset();
+      if (error_text != nullptr) {
+        error_text->clear();
+      }
+      return true;
+    }
+    if (error_text != nullptr) {
+      *error_text = error_text_;
+    }
+    return true;
+  }
+
+private:
+  void join() {
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+  mutable std::mutex mutex_;
+  std::thread worker_;
+  std::unique_ptr<RouteData> result_;
+  std::string route_name_;
+  std::string data_dir_;
+  std::string error_text_;
+  std::atomic<bool> active_{false};
+  std::atomic<bool> completed_{false};
+  std::atomic<bool> success_{false};
+  std::atomic<size_t> total_segments_{0};
+  std::atomic<size_t> segments_downloaded_{0};
+  std::atomic<size_t> segments_parsed_{0};
+  TerminalRouteProgress terminal_progress_;
 };
 
 std::string shell_quote(const std::string &value) {
@@ -476,6 +583,7 @@ void run_or_throw(const std::string &command, const std::string &action) {
 }
 
 bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg);
+void reset_shared_range(UiState *state, const AppSession &session);
 
 ImVec4 color_rgb(int r, int g, int b, float alpha = 1.0f) {
   return ImVec4(static_cast<float>(r) / 255.0f,
@@ -1137,11 +1245,26 @@ std::vector<BrowserNode> build_browser_tree(const std::vector<std::string> &path
   return nodes;
 }
 
+const RouteSeries *find_route_series(const AppSession &session, const std::string &path);
+
 void rebuild_route_index(AppSession *session) {
   session->series_by_path.clear();
   for (const RouteSeries &series : session->route_data.series) {
     session->series_by_path.emplace(series.path, &series);
   }
+}
+
+void apply_route_data(AppSession *session, UiState *state, RouteData route_data) {
+  session->route_data = std::move(route_data);
+  rebuild_route_index(session);
+  session->browser_nodes = build_browser_tree(session->route_data.paths);
+  if (!state->selected_browser_path.empty() && find_route_series(*session, state->selected_browser_path) == nullptr) {
+    state->selected_browser_path.clear();
+  }
+  state->has_shared_range = false;
+  state->has_hover_time = false;
+  state->has_tracker_time = false;
+  reset_shared_range(state, *session);
 }
 
 const RouteSeries *find_route_series(const AppSession &session, const std::string &path) {
@@ -1468,6 +1591,21 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
                                  ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoSavedSettings;
   if (ImGui::Begin("##sidebar", nullptr, flags)) {
+    if (session->route_loader) {
+      const RouteLoadSnapshot load = session->route_loader->snapshot();
+      if (load.active || load.total_segments > 0) {
+        const float total = static_cast<float>(std::max<size_t>(1, load.total_segments));
+        const float progress = load.total_segments == 0
+          ? 0.0f
+          : std::clamp(static_cast<float>(load.segments_downloaded + load.segments_parsed) / (2.0f * total), 0.0f, 1.0f);
+        if (!session->route_name.empty()) {
+          ImGui::TextWrapped("%s", session->route_name.c_str());
+        }
+        ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0.0f), nullptr);
+        ImGui::Spacing();
+      }
+    }
+
     ImGui::SeparatorText("Layout");
     const std::vector<std::string> layouts = available_layout_names();
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -2713,25 +2851,48 @@ bool save_layout(AppSession *session, UiState *state, const std::string &layout_
 
 void rebuild_session_route_data(AppSession *session, UiState *state,
                                 const RouteLoadProgressCallback &progress = {}) {
-  session->route_data = load_route_data(session->route_name, session->data_dir, progress);
-  rebuild_route_index(session);
-  session->browser_nodes = build_browser_tree(session->route_data.paths);
-  if (!state->selected_browser_path.empty() && find_route_series(*session, state->selected_browser_path) == nullptr) {
-    state->selected_browser_path.clear();
+  apply_route_data(session, state, load_route_data(session->route_name, session->data_dir, progress));
+}
+
+void start_async_route_load(AppSession *session, UiState *state) {
+  if (!session->route_loader) {
+    return;
   }
-  state->has_shared_range = false;
-  state->has_hover_time = false;
-  state->has_tracker_time = false;
-  reset_shared_range(state, *session);
+  apply_route_data(session, state, RouteData{});
+  session->route_loader->start(session->route_name, session->data_dir);
+  state->status_text = session->route_name.empty() ? "Ready" : "Loading route " + session->route_name;
+}
+
+void poll_async_route_load(AppSession *session, UiState *state) {
+  if (!session->route_loader) {
+    return;
+  }
+  RouteData loaded_route;
+  std::string error_text;
+  if (!session->route_loader->consume(&loaded_route, &error_text)) {
+    return;
+  }
+  if (!error_text.empty()) {
+    state->error_text = error_text;
+    state->open_error_popup = true;
+    state->status_text = "Failed to load route";
+    return;
+  }
+  apply_route_data(session, state, std::move(loaded_route));
+  state->status_text = session->route_name.empty() ? "Ready" : "Loaded route " + session->route_name;
 }
 
 bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir) {
   try {
     session->route_name = route_name;
     session->data_dir = data_dir;
-    rebuild_session_route_data(session, state);
+    if (session->async_route_loading) {
+      start_async_route_load(session, state);
+    } else {
+      rebuild_session_route_data(session, state);
+      state->status_text = "Loaded route " + route_name;
+    }
     sync_route_buffers(state, *session);
-    state->status_text = "Loaded route " + route_name;
     return true;
   } catch (const std::exception &err) {
     state->error_text = err.what();
@@ -2929,6 +3090,7 @@ void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const
     reset_layout(session, state);
     state->request_reset_layout = false;
   }
+  poll_async_route_load(session, state);
 
   render_layout(session, state);
   ImGui::Render();
@@ -2945,10 +3107,6 @@ void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const
     save_framebuffer_png(*capture_path, framebuffer_width, framebuffer_height);
   }
   glfwSwapBuffers(window);
-  if (state->request_reload) {
-    reload_session(session, state, session->route_name, session->data_dir);
-    state->request_reload = false;
-  }
   state->reset_plot_view = false;
 }
 
@@ -2967,17 +3125,26 @@ int run_app(const Options &options) {
     ui_state.layout_dirty = true;
   }
   sync_ui_state(&ui_state, session.layout);
-  TerminalRouteProgress route_progress(::isatty(STDERR_FILENO) != 0);
-  rebuild_session_route_data(&session, &ui_state, [&](const RouteLoadProgress &update) {
-    route_progress.update(update);
-  });
-  route_progress.finish();
   sync_route_buffers(&ui_state, session);
   sync_layout_buffers(&ui_state, session);
+
+  session.async_route_loading = options.show && options.output_path.empty() && !options.sync_load;
+  if (!session.async_route_loading) {
+    TerminalRouteProgress route_progress(::isatty(STDERR_FILENO) != 0);
+    rebuild_session_route_data(&session, &ui_state, [&](const RouteLoadProgress &update) {
+      route_progress.update(update);
+    });
+    route_progress.finish();
+  }
 
   GlfwRuntime glfw_runtime(options);
   ImGuiRuntime imgui_runtime(glfw_runtime.window());
   configure_style();
+
+  if (session.async_route_loading) {
+    session.route_loader = std::make_unique<AsyncRouteLoader>(::isatty(STDERR_FILENO) != 0);
+    start_async_route_load(&session, &ui_state);
+  }
 
   const bool should_capture = !options.output_path.empty();
   const fs::path output_path = should_capture ? fs::path(options.output_path) : fs::path();

@@ -37,7 +37,7 @@ Run `jotpluggler` as a black-box renderer, then compare:
 
 ```bash
 ./tools/jotpluggler_validator/validate.py validate-command \
-  --command-template 'tools/jotpluggler/jotpluggler --layout {layout} --data-dir {data_dir} --show {route}'
+  --command-template 'tools/jotpluggler/jotpluggler --sync-load --layout {layout} --data-dir {data_dir} --show {route}'
 ```
 
 The command template receives these placeholders:

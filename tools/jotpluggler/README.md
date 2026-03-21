@@ -5,6 +5,7 @@
 Current scope:
 - native C++ parsing of PlotJuggler layout XML
 - native C++ route-wide extraction of direct numeric `/service/path` series
+- schema-indexed fast route loading with parallel segment workers
 - GLFW + Dear ImGui + ImPlot rendering
 - real PlotJuggler tab support with a docked workspace
 - route open/reload controls, layout load/save controls, and pane/curve selection in the UI
@@ -54,9 +55,15 @@ If you omit `--layout`, JotPlugger starts with a blank one-pane workspace.
 If you omit the route too, JotPlugger starts as an empty shell like PlotJuggler.
 `--demo` only provides the bundled demo route.
 The app also accepts a positional `route` like the other log tools, plus `--data-dir`.
+Interactive `--show` mode now opens the window first and loads route data in the background.
+Use `--sync-load` when you want deterministic blocking startup, for example screenshot capture or validation.
 Multi-tab PlotJuggler layouts now render as real app tabs, and the sidebar exposes PJ-style layout and timeseries sections.
 Plots use route-backed direct curve rendering with a shared `t=0` time base and a playback/timeline bar aligned to the plot region.
 Curves without direct sampled data are shown as unsupported instead of being faked.
+
+Useful loader knobs:
+- `JOTP_LOAD_WORKERS=<n>` overrides the automatic worker count for route loading.
+- `JOTP_COMPARE_SLOW_FAST=1` runs a one-shot internal slow-vs-fast loader equivalence check before returning route data.
 
 ## Validation
 

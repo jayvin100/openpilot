@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -92,6 +93,11 @@ struct RouteLoadProgress {
   size_t segment_count = 0;
   uint64_t current = 0;
   uint64_t total = 0;
+  size_t segments_downloaded = 0;
+  size_t segments_parsed = 0;
+  size_t total_segments = 0;
+  uint64_t bytes_downloaded = 0;
+  int num_workers = 1;
   std::string segment_name;
 };
 

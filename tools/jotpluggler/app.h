@@ -12,6 +12,7 @@ struct Options {
   int width = 1600;
   int height = 900;
   bool show = false;
+  bool sync_load = false;
 };
 
 int run(const Options &options);
