@@ -47,6 +47,9 @@ constexpr float kSidebarWidth = 282.0f;
 constexpr float kContentGap = 0.0f;
 constexpr float kContentRightPadding = 0.0f;
 constexpr float kStatusBarHeight = 40.0f;
+constexpr double kMinHorizontalZoomSeconds = 2.0;
+constexpr double kPlotYPadFraction = 0.28;
+constexpr size_t kCursorOverlayValueCount = 3;
 
 struct UiMetrics {
   float width = 0.0f;
@@ -97,11 +100,9 @@ struct TabUiState {
 struct UiState {
   bool open_custom_series = false;
   bool open_open_route = false;
-  bool open_new_layout = false;
   bool open_load_layout = false;
   bool open_save_layout = false;
   bool request_close = false;
-  bool reset_plot_view = false;
   bool request_reset_layout = false;
   bool request_save_layout = false;
   bool request_new_tab = false;
@@ -109,18 +110,18 @@ struct UiState {
   bool request_close_tab = false;
   bool follow_latest = false;
   bool has_shared_range = false;
-  bool has_hover_time = false;
   bool has_tracker_time = false;
   bool layout_dirty = false;
   bool playback_loop = false;
   bool playback_playing = false;
+  bool show_deprecated_fields = false;
+  bool suppress_range_side_effects = false;
   int active_tab_index = 0;
   int next_tab_runtime_id = 1;
   int requested_tab_index = -1;
   int rename_tab_index = -1;
   bool focus_rename_tab_input = false;
   std::vector<TabUiState> tabs;
-  std::array<char, 128> new_layout_name_buffer = {};
   std::array<char, 128> route_buffer = {};
   std::array<char, 128> rename_tab_buffer = {};
   std::array<char, 128> browser_filter = {};
@@ -128,6 +129,8 @@ struct UiState {
   std::array<char, 512> load_layout_buffer = {};
   std::array<char, 512> save_layout_buffer = {};
   std::string selected_browser_path;
+  std::vector<std::string> selected_browser_paths;
+  std::string browser_selection_anchor;
   std::string error_text;
   bool open_error_popup = false;
   std::string status_text = "Ready";
@@ -135,7 +138,6 @@ struct UiState {
   double route_x_max = 1.0;
   double x_view_min = 0.0;
   double x_view_max = 1.0;
-  double hovered_time = 0.0;
   double tracker_time = 0.0;
   double playback_rate = 1.0;
   double playback_step = 0.1;
@@ -1246,6 +1248,123 @@ std::vector<BrowserNode> build_browser_tree(const std::vector<std::string> &path
 }
 
 const RouteSeries *find_route_series(const AppSession &session, const std::string &path);
+bool browser_node_matches(const BrowserNode &node, const std::string &filter);
+
+bool is_deprecated_browser_path(const std::string &path) {
+  return path.find("DEPRECATED") != std::string::npos;
+}
+
+std::vector<std::string> visible_browser_paths(const RouteData &route_data, bool show_deprecated_fields) {
+  if (show_deprecated_fields) {
+    return route_data.paths;
+  }
+  std::vector<std::string> filtered;
+  filtered.reserve(route_data.paths.size());
+  for (const std::string &path : route_data.paths) {
+    if (!is_deprecated_browser_path(path)) {
+      filtered.push_back(path);
+    }
+  }
+  return filtered;
+}
+
+bool browser_selection_contains(const UiState &state, std::string_view path) {
+  return std::find(state.selected_browser_paths.begin(), state.selected_browser_paths.end(), path)
+    != state.selected_browser_paths.end();
+}
+
+void set_browser_selection_single(UiState *state, const std::string &path) {
+  state->selected_browser_paths = {path};
+  state->selected_browser_path = path;
+  state->browser_selection_anchor = path;
+}
+
+void toggle_browser_selection(UiState *state, const std::string &path) {
+  auto it = std::find(state->selected_browser_paths.begin(), state->selected_browser_paths.end(), path);
+  if (it == state->selected_browser_paths.end()) {
+    state->selected_browser_paths.push_back(path);
+  } else {
+    state->selected_browser_paths.erase(it);
+  }
+  state->selected_browser_path = path;
+  state->browser_selection_anchor = path;
+  if (state->selected_browser_paths.empty()) {
+    state->selected_browser_path.clear();
+  }
+}
+
+void select_browser_range(UiState *state, const std::vector<std::string> &visible_paths, const std::string &clicked_path) {
+  if (visible_paths.empty()) {
+    set_browser_selection_single(state, clicked_path);
+    return;
+  }
+
+  const std::string anchor = state->browser_selection_anchor.empty() ? clicked_path : state->browser_selection_anchor;
+  const auto anchor_it = std::find(visible_paths.begin(), visible_paths.end(), anchor);
+  const auto clicked_it = std::find(visible_paths.begin(), visible_paths.end(), clicked_path);
+  if (clicked_it == visible_paths.end()) {
+    return;
+  }
+  if (anchor_it == visible_paths.end()) {
+    set_browser_selection_single(state, clicked_path);
+    return;
+  }
+
+  const auto [begin_it, end_it] = std::minmax(anchor_it, clicked_it);
+  std::vector<std::string> selected;
+  selected.reserve(static_cast<size_t>(std::distance(begin_it, end_it)) + 1);
+  for (auto it = begin_it; it != end_it + 1; ++it) {
+    selected.push_back(*it);
+  }
+  state->selected_browser_paths = std::move(selected);
+  state->selected_browser_path = clicked_path;
+}
+
+void prune_browser_selection(UiState *state, const std::vector<std::string> &visible_paths) {
+  auto is_visible = [&](const std::string &path) {
+    return std::find(visible_paths.begin(), visible_paths.end(), path) != visible_paths.end();
+  };
+
+  state->selected_browser_paths.erase(
+    std::remove_if(state->selected_browser_paths.begin(), state->selected_browser_paths.end(),
+                   [&](const std::string &path) { return !is_visible(path); }),
+    state->selected_browser_paths.end());
+
+  if (!state->selected_browser_path.empty() && !is_visible(state->selected_browser_path)) {
+    state->selected_browser_path.clear();
+  }
+  if (!state->browser_selection_anchor.empty() && !is_visible(state->browser_selection_anchor)) {
+    state->browser_selection_anchor.clear();
+  }
+  if (state->selected_browser_paths.empty()) {
+    state->selected_browser_path.clear();
+  } else if (state->selected_browser_path.empty()) {
+    state->selected_browser_path = state->selected_browser_paths.back();
+  }
+}
+
+void collect_visible_leaf_paths(const BrowserNode &node,
+                                const std::string &filter,
+                                std::vector<std::string> *out) {
+  if (!browser_node_matches(node, filter)) {
+    return;
+  }
+  if (node.children.empty()) {
+    if (!node.full_path.empty()) {
+      out->push_back(node.full_path);
+    }
+    return;
+  }
+  for (const BrowserNode &child : node.children) {
+    collect_visible_leaf_paths(child, filter, out);
+  }
+}
+
+void rebuild_browser_nodes(AppSession *session, UiState *state) {
+  const std::vector<std::string> paths = visible_browser_paths(session->route_data, state->show_deprecated_fields);
+  session->browser_nodes = build_browser_tree(paths);
+  prune_browser_selection(state, paths);
+}
 
 void rebuild_route_index(AppSession *session) {
   session->series_by_path.clear();
@@ -1257,12 +1376,8 @@ void rebuild_route_index(AppSession *session) {
 void apply_route_data(AppSession *session, UiState *state, RouteData route_data) {
   session->route_data = std::move(route_data);
   rebuild_route_index(session);
-  session->browser_nodes = build_browser_tree(session->route_data.paths);
-  if (!state->selected_browser_path.empty() && find_route_series(*session, state->selected_browser_path) == nullptr) {
-    state->selected_browser_path.clear();
-  }
+  rebuild_browser_nodes(session, state);
   state->has_shared_range = false;
-  state->has_hover_time = false;
   state->has_tracker_time = false;
   reset_shared_range(state, *session);
 }
@@ -1332,7 +1447,7 @@ void clamp_shared_range(UiState *state) {
   if (!state->has_shared_range) {
     return;
   }
-  const double min_span = 0.1;
+  const double min_span = kMinHorizontalZoomSeconds;
   double span = state->x_view_max - state->x_view_min;
   if (span < min_span) {
     const double center = 0.5 * (state->x_view_min + state->x_view_max);
@@ -1371,7 +1486,7 @@ void update_follow_range(UiState *state) {
   if (!state->follow_latest || !state->has_shared_range) {
     return;
   }
-  const double span = std::max(0.1, state->x_view_max - state->x_view_min);
+  const double span = std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
   const double route_span = state->route_x_max - state->route_x_min;
   if (route_span <= 0.0) {
     return;
@@ -1401,7 +1516,7 @@ void advance_playback(UiState *state) {
     }
   }
 
-  const double span = std::max(0.1, state->x_view_max - state->x_view_min);
+  const double span = std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
   if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
     state->x_view_min = state->tracker_time - span * 0.5;
     state->x_view_max = state->tracker_time + span * 0.5;
@@ -1446,7 +1561,7 @@ std::string layout_combo_label(const AppSession &session, const UiState &state) 
   return state.layout_dirty ? base + " *" : base;
 }
 
-float draw_main_menu_bar(UiState *state) {
+float draw_main_menu_bar(AppSession *session, UiState *state) {
   float height = ImGui::GetFrameHeight();
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("File")) {
@@ -1454,8 +1569,18 @@ float draw_main_menu_bar(UiState *state) {
         state->open_open_route = true;
       }
       ImGui::Separator();
-      if (ImGui::MenuItem("New Layout...")) {
-        state->open_new_layout = true;
+      if (ImGui::MenuItem("New Layout")) {
+        session->layout = make_empty_layout();
+        session->layout_path.clear();
+        session->autosave_path.clear();
+        state->layout_dirty = false;
+        state->status_text = "New untitled layout";
+        state->tabs.clear();
+        cancel_rename_tab(state);
+        sync_ui_state(state, session->layout);
+        sync_layout_buffers(state, *session);
+        mark_all_docks_dirty(state);
+        reset_shared_range(state, *session);
       }
       if (ImGui::MenuItem("Load Layout...")) {
         state->open_load_layout = true;
@@ -1470,8 +1595,15 @@ float draw_main_menu_bar(UiState *state) {
         state->request_reset_layout = true;
       }
       ImGui::Separator();
+      if (ImGui::MenuItem("Show DEPRECATED Fields", nullptr, state->show_deprecated_fields)) {
+        state->show_deprecated_fields = !state->show_deprecated_fields;
+        rebuild_browser_nodes(session, state);
+      }
+      ImGui::Separator();
       if (ImGui::MenuItem("Reset Plot View")) {
-        state->reset_plot_view = true;
+        reset_shared_range(state, *session);
+        state->follow_latest = false;
+        state->suppress_range_side_effects = true;
         state->status_text = "Plot view reset";
       }
       ImGui::Separator();
@@ -1513,7 +1645,7 @@ void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *st
                             &state->route_x_min,
                             &state->route_x_max,
                             "%.3f")) {
-      const double span = std::max(0.1, state->x_view_max - state->x_view_min);
+      const double span = std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
       if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
         state->x_view_min = state->tracker_time - span * 0.5;
         state->x_view_max = state->tracker_time + span * 0.5;
@@ -1546,18 +1678,30 @@ bool browser_node_matches(const BrowserNode &node, const std::string &filter) {
   return false;
 }
 
-void draw_browser_node(AppSession *session, const BrowserNode &node, UiState *state, const std::string &filter) {
+void draw_browser_node(AppSession *session,
+                       const BrowserNode &node,
+                       UiState *state,
+                       const std::string &filter,
+                       const std::vector<std::string> &visible_paths) {
   if (!browser_node_matches(node, filter)) {
     return;
   }
 
   if (node.children.empty()) {
-    const bool selected = state->selected_browser_path == node.full_path;
-    if (ImGui::Selectable(node.label.c_str(), selected)) {
-      state->selected_browser_path = node.full_path;
+    const bool selected = browser_selection_contains(*state, node.full_path);
+    if (ImGui::Selectable(node.label.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
+      const bool shift_down = ImGui::GetIO().KeyShift;
+      const bool ctrl_down = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+      if (shift_down) {
+        select_browser_range(state, visible_paths, node.full_path);
+      } else if (ctrl_down) {
+        toggle_browser_selection(state, node.full_path);
+      } else {
+        set_browser_selection_single(state, node.full_path);
+      }
     }
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
-      state->selected_browser_path = node.full_path;
+      set_browser_selection_single(state, node.full_path);
       add_curve_to_active_pane(session, state, node.full_path);
     }
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
@@ -1575,7 +1719,7 @@ void draw_browser_node(AppSession *session, const BrowserNode &node, UiState *st
   const bool open = ImGui::TreeNodeEx(node.label.c_str(), flags);
   if (open) {
     for (const BrowserNode &child : node.children) {
-      draw_browser_node(session, child, state, filter);
+      draw_browser_node(session, child, state, filter, visible_paths);
     }
     ImGui::TreePop();
   }
@@ -1610,8 +1754,18 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
     const std::vector<std::string> layouts = available_layout_names();
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##layout_combo", layout_combo_label(*session, *state).c_str())) {
-      if (ImGui::Selectable("New Layout...")) {
-        state->open_new_layout = true;
+      if (ImGui::Selectable("New Layout")) {
+        session->layout = make_empty_layout();
+        session->layout_path.clear();
+        session->autosave_path.clear();
+        state->layout_dirty = false;
+        state->status_text = "New untitled layout";
+        state->tabs.clear();
+        cancel_rename_tab(state);
+        sync_ui_state(state, session->layout);
+        sync_layout_buffers(state, *session);
+        mark_all_docks_dirty(state);
+        reset_shared_range(state, *session);
       }
       ImGui::Separator();
       const std::string current_layout = session->layout_path.empty() ? std::string("untitled") : session->layout_path.stem().string();
@@ -1626,8 +1780,18 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
       }
       ImGui::EndCombo();
     }
-    if (ImGui::Button("New...", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
-      state->open_new_layout = true;
+    if (ImGui::Button("New", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
+      session->layout = make_empty_layout();
+      session->layout_path.clear();
+      session->autosave_path.clear();
+      state->layout_dirty = false;
+      state->status_text = "New untitled layout";
+      state->tabs.clear();
+      cancel_rename_tab(state);
+      sync_ui_state(state, session->layout);
+      sync_layout_buffers(state, *session);
+      mark_all_docks_dirty(state);
+      reset_shared_range(state, *session);
     }
     if (ImGui::Button("Save", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
       state->request_save_layout = true;
@@ -1646,8 +1810,12 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
     const float browser_height = std::max(1.0f, ImGui::GetContentRegionAvail().y - footer_height);
     if (ImGui::BeginChild("##timeseries_browser", ImVec2(0.0f, browser_height), true)) {
       const std::string filter = string_from_buffer(state->browser_filter);
+      std::vector<std::string> visible_paths;
       for (const BrowserNode &node : session->browser_nodes) {
-        draw_browser_node(session, node, state, filter);
+        collect_visible_leaf_paths(node, filter, &visible_paths);
+      }
+      for (const BrowserNode &node : session->browser_nodes) {
+        draw_browser_node(session, node, state, filter, visible_paths);
       }
     }
     ImGui::EndChild();
@@ -2003,6 +2171,87 @@ void decimate_samples(const std::vector<double> &xs_in,
   }
 }
 
+std::optional<double> sample_curve_value_at_time(const PreparedCurve &curve, double tm) {
+  if (curve.xs.size() < 2 || curve.xs.size() != curve.ys.size()) {
+    return std::nullopt;
+  }
+  if (tm < curve.xs.front() || tm > curve.xs.back()) {
+    return std::nullopt;
+  }
+
+  const auto upper = std::lower_bound(curve.xs.begin(), curve.xs.end(), tm);
+  if (upper == curve.xs.begin()) {
+    return curve.ys.front();
+  }
+  if (upper == curve.xs.end()) {
+    return curve.ys.back();
+  }
+
+  const size_t upper_index = static_cast<size_t>(std::distance(curve.xs.begin(), upper));
+  const size_t lower_index = upper_index - 1;
+  const double x0 = curve.xs[lower_index];
+  const double x1 = curve.xs[upper_index];
+  const double y0 = curve.ys[lower_index];
+  const double y1 = curve.ys[upper_index];
+  if (std::abs(tm - x1) < 1.0e-9) {
+    return y1;
+  }
+  if (curve.stairs || x1 <= x0) {
+    return y0;
+  }
+  const double alpha = (tm - x0) / (x1 - x0);
+  return y0 + (y1 - y0) * alpha;
+}
+
+void draw_cursor_overlay(const std::vector<PreparedCurve> &prepared_curves, double cursor_time) {
+  std::vector<std::string> lines;
+  lines.reserve(1 + std::min(prepared_curves.size(), kCursorOverlayValueCount));
+
+  char time_line[64] = {};
+  std::snprintf(time_line, sizeof(time_line), "t=%.3f", cursor_time);
+  lines.emplace_back(time_line);
+
+  for (const PreparedCurve &curve : prepared_curves) {
+    if (lines.size() > kCursorOverlayValueCount) {
+      break;
+    }
+    std::optional<double> value = sample_curve_value_at_time(curve, cursor_time);
+    if (!value.has_value()) {
+      continue;
+    }
+    char value_line[256] = {};
+    std::snprintf(value_line, sizeof(value_line), "%s %.6g", curve.label.c_str(), *value);
+    lines.emplace_back(value_line);
+  }
+
+  if (lines.size() <= 1) {
+    return;
+  }
+
+  const ImVec2 plot_pos = ImPlot::GetPlotPos();
+  const float line_height = ImGui::GetTextLineHeight();
+  float text_width = 0.0f;
+  for (const std::string &line : lines) {
+    text_width = std::max(text_width, ImGui::CalcTextSize(line.c_str()).x);
+  }
+
+  const ImVec2 box_min(plot_pos.x + 10.0f, plot_pos.y + 10.0f);
+  const ImVec2 box_max(box_min.x + text_width + 16.0f,
+                       box_min.y + static_cast<float>(lines.size()) * line_height + 12.0f);
+  ImDrawList *draw_list = ImPlot::GetPlotDrawList();
+  draw_list->AddRectFilled(box_min, box_max, ImGui::GetColorU32(color_rgb(250, 251, 252, 0.92f)), 4.0f);
+  draw_list->AddRect(box_min, box_max, ImGui::GetColorU32(color_rgb(186, 190, 196)), 4.0f);
+
+  ImVec2 text_pos(box_min.x + 8.0f, box_min.y + 6.0f);
+  for (size_t i = 0; i < lines.size(); ++i) {
+    const ImU32 color = i == 0
+      ? ImGui::GetColorU32(color_rgb(70, 77, 86))
+      : ImGui::GetColorU32(color_rgb(88, 96, 104));
+    draw_list->AddText(text_pos, color, lines[i].c_str());
+    text_pos.y += line_height;
+  }
+}
+
 bool build_curve_series(const AppSession &session,
                         const Curve &curve,
                         const UiState &state,
@@ -2128,7 +2377,7 @@ PlotBounds compute_plot_bounds(const Pane &pane,
     min_value = 0.0;
     max_value = 1.0;
   }
-  ensure_non_degenerate_range(&min_value, &max_value, 0.06, 0.1);
+  ensure_non_degenerate_range(&min_value, &max_value, kPlotYPadFraction, 0.1);
   if (pane.range.has_y_limit_min) {
     min_value = pane.range.y_limit_min;
   }
@@ -2160,6 +2409,8 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   const PlotBounds bounds = compute_plot_bounds(*pane, prepared_curves, *state);
   const int supported_count = static_cast<int>(prepared_curves.size());
   const ImVec2 plot_size = ImGui::GetContentRegionAvail();
+  const bool has_cursor_time = state->has_tracker_time;
+  const double cursor_time = state->tracker_time;
 
   ImPlot::PushStyleColor(ImPlotCol_PlotBg, color_rgb(255, 255, 255));
   ImPlot::PushStyleColor(ImPlotCol_PlotBorder, color_rgb(186, 190, 196));
@@ -2214,23 +2465,25 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
         }
       }
     }
-    if (state->has_tracker_time) {
+    if (has_cursor_time) {
+      const double clamped_cursor_time = std::clamp(cursor_time, state->route_x_min, state->route_x_max);
       ImPlotSpec cursor_spec;
       cursor_spec.LineColor = color_rgb(108, 118, 128, 0.7f);
       cursor_spec.LineWeight = 1.0f;
       cursor_spec.Flags = ImPlotItemFlags_NoLegend;
-      ImPlot::PlotInfLines("##tracker_cursor", &state->tracker_time, 1, cursor_spec);
+      ImPlot::PlotInfLines("##tracker_cursor", &clamped_cursor_time, 1, cursor_spec);
+      draw_cursor_overlay(prepared_curves, clamped_cursor_time);
     }
-    if (ImPlot::IsPlotHovered()) {
-      state->hovered_time = ImPlot::GetPlotMousePos().x;
-      state->has_hover_time = true;
+    if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+      state->tracker_time = std::clamp(ImPlot::GetPlotMousePos().x, state->route_x_min, state->route_x_max);
+      state->has_tracker_time = true;
     }
     ImPlot::EndPlot();
   }
   clamp_shared_range(state);
   if (std::abs(state->x_view_min - previous_x_min) > 1.0e-6
       || std::abs(state->x_view_max - previous_x_max) > 1.0e-6) {
-    if (!state->reset_plot_view) {
+    if (!state->suppress_range_side_effects) {
       state->follow_latest = false;
     }
   }
@@ -2405,7 +2658,10 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
       }
       break;
     case PaneMenuActionKind::ResetView:
-      state->reset_plot_view = true;
+      reset_shared_range(state, *session);
+      state->follow_latest = false;
+      state->suppress_range_side_effects = true;
+      state->status_text = "Plot view reset";
       break;
     case PaneMenuActionKind::Clear:
       clear_pane(tab, pane_index);
@@ -2693,8 +2949,24 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
       ImGui::PushStyleColor(ImGuiCol_Tab, color_rgb(210, 217, 225));
       ImGui::PushStyleColor(ImGuiCol_TabHovered, color_rgb(224, 230, 237));
       ImGui::PushStyleColor(ImGuiCol_TabSelected, color_rgb(242, 245, 248));
-      if (ImGui::TabItemButton("  +  ", ImGuiTabItemFlags_Trailing)) {
+      if (ImGui::TabItemButton("   ##new_tab_button", ImGuiTabItemFlags_Trailing)) {
         pending_action = TabActionKind::New;
+      }
+      {
+        const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+        ImDrawList *draw_list = ImGui::GetWindowDrawList();
+        const ImU32 color = ImGui::GetColorU32(color_rgb(72, 79, 88));
+        const ImVec2 center((rect.Min.x + rect.Max.x) * 0.5f, (rect.Min.y + rect.Max.y) * 0.5f);
+        constexpr float half_extent = 6.25f;
+        constexpr float thickness = 2.0f;
+        draw_list->AddLine(ImVec2(center.x - half_extent, center.y),
+                           ImVec2(center.x + half_extent, center.y),
+                           color,
+                           thickness);
+        draw_list->AddLine(ImVec2(center.x, center.y - half_extent),
+                           ImVec2(center.x, center.y + half_extent),
+                           color,
+                           thickness);
       }
       show_hover_tooltip("New Tab");
       ImGui::PopStyleColor(3);
@@ -2734,34 +3006,6 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
   ImGui::End();
   ImGui::PopStyleVar();
   ImGui::PopStyleColor(2);
-}
-
-bool create_new_layout(AppSession *session, UiState *state, const std::string &layout_name) {
-  try {
-    const std::string stem = sanitize_layout_stem(layout_name);
-    const fs::path path = layouts_dir() / (stem + ".xml");
-    if (fs::exists(path)) {
-      throw std::runtime_error("Layout already exists: " + path.filename().string());
-    }
-    session->layout = make_empty_layout();
-    session->layout_path = path;
-    session->autosave_path = autosave_path_for_layout(path);
-    save_layout_xml(session->layout, path);
-    clear_layout_autosave(*session);
-    state->layout_dirty = false;
-    state->tabs.clear();
-    cancel_rename_tab(state);
-    sync_ui_state(state, session->layout);
-    sync_layout_buffers(state, *session);
-    reset_shared_range(state, *session);
-    state->status_text = "Created layout " + path.filename().string();
-    return true;
-  } catch (const std::exception &err) {
-    state->error_text = err.what();
-    state->open_error_popup = true;
-    state->status_text = "Failed to create layout";
-    return false;
-  }
 }
 
 bool reset_layout(AppSession *session, UiState *state) {
@@ -2911,11 +3155,6 @@ void draw_popups(AppSession *session, UiState *state) {
     ImGui::OpenPopup("Open Route");
     state->open_open_route = false;
   }
-  if (state->open_new_layout) {
-    copy_to_buffer("new-layout", &state->new_layout_name_buffer);
-    ImGui::OpenPopup("New Layout");
-    state->open_new_layout = false;
-  }
   if (state->open_load_layout) {
     sync_layout_buffers(state, *session);
     ImGui::OpenPopup("Load Layout");
@@ -2931,22 +3170,6 @@ void draw_popups(AppSession *session, UiState *state) {
     "Custom Series",
     "Custom Series",
     "Custom series editing is not implemented yet.");
-  if (ImGui::BeginPopupModal("New Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Create a new PlotJuggler layout in tools/plotjuggler/layouts.");
-    ImGui::Separator();
-    ImGui::InputText("Name", state->new_layout_name_buffer.data(), state->new_layout_name_buffer.size());
-    ImGui::Spacing();
-    if (ImGui::Button("Create", ImVec2(120.0f, 0.0f))) {
-      if (create_new_layout(session, state, string_from_buffer(state->new_layout_name_buffer))) {
-        ImGui::CloseCurrentPopup();
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
   if (ImGui::BeginPopupModal("Open Route", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted("Load a route into the current layout.");
     ImGui::Separator();
@@ -3014,10 +3237,9 @@ void draw_popups(AppSession *session, UiState *state) {
 
 void render_layout(AppSession *session, UiState *state) {
   ensure_shared_range(state, *session);
-  if (state->reset_plot_view) {
-    reset_shared_range(state, *session);
-  } else if (state->follow_latest) {
+  if (state->follow_latest) {
     update_follow_range(state);
+    state->suppress_range_side_effects = true;
   } else {
     clamp_shared_range(state);
   }
@@ -3028,7 +3250,7 @@ void render_layout(AppSession *session, UiState *state) {
     step_tracker(state, 1.0);
   }
   advance_playback(state);
-  const float menu_height = draw_main_menu_bar(state);
+  const float menu_height = draw_main_menu_bar(session, state);
   const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height);
   draw_sidebar(session, ui, state);
   draw_workspace(session, ui, state);
@@ -3080,7 +3302,7 @@ void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const
 
   if (state->request_save_layout) {
     if (session->layout_path.empty()) {
-      state->open_new_layout = true;
+      state->open_save_layout = true;
     } else {
       save_layout(session, state, session->layout_path.string());
     }
@@ -3107,7 +3329,7 @@ void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const
     save_framebuffer_png(*capture_path, framebuffer_width, framebuffer_height);
   }
   glfwSwapBuffers(window);
-  state->reset_plot_view = false;
+  state->suppress_range_side_effects = false;
 }
 
 int run_app(const Options &options) {

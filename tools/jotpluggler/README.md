@@ -63,7 +63,6 @@ Curves without direct sampled data are shown as unsupported instead of being fak
 
 Useful loader knobs:
 - `JOTP_LOAD_WORKERS=<n>` overrides the automatic worker count for route loading.
-- `JOTP_COMPARE_SLOW_FAST=1` runs a one-shot internal slow-vs-fast loader equivalence check before returning route data.
 
 ## Validation
 

@@ -15,6 +15,7 @@
 #include <map>
 #include <mutex>
 #include <memory>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <regex>
@@ -68,6 +69,7 @@ enum class ResolvedNodeKind {
 struct ResolvedNode {
   ResolvedNodeKind kind = ResolvedNodeKind::Ignore;
   ScalarKind scalar_kind = ScalarKind::None;
+  int fixed_slot = -1;
   bool has_field = false;
   capnp::StructSchema::Field field;
   std::string segment;
@@ -85,9 +87,22 @@ struct ResolvedService {
 };
 
 struct SchemaIndex {
-  std::unordered_map<uint16_t, ResolvedService> by_which;
+  std::vector<std::optional<ResolvedService>> by_which;
+  size_t fixed_series_count = 0;
+  std::vector<std::string> fixed_paths;
 
   static const SchemaIndex &instance();
+};
+
+constexpr size_t kInvalidDynamicSlot = std::numeric_limits<size_t>::max();
+
+struct SeriesAccumulator {
+  explicit SeriesAccumulator(size_t fixed_count = 0) : fixed_series(fixed_count) {}
+
+  std::vector<RouteSeries> fixed_series;
+  std::vector<RouteSeries> dynamic_series;
+  std::unordered_map<std::string, size_t> dynamic_slots;
+  std::unordered_map<std::string, std::vector<size_t>> list_scalar_slots;
 };
 
 struct LoadStats {
@@ -156,20 +171,20 @@ struct LoadStats {
 
     std::cerr << std::fixed << std::setprecision(1);
     std::cerr << "route loaded in " << duration_seconds(load_start, load_end)
-              << "s (" << segment_count << " segments, " << num_workers << " workers)\n";
+              << "s (" << segment_count << " segments, worker budget " << num_workers << ")\n";
     std::cerr << "  resolve:      " << duration_seconds(load_start, resolve_end) << "s\n";
-    std::cerr << "  download:     " << total_download << "s total (" << (segment_count == 0 ? 0.0 : total_download / segment_count)
+    std::cerr << "  fetch comp:   " << total_download << "s total (" << (segment_count == 0 ? 0.0 : total_download / segment_count)
               << "s avg, " << (static_cast<double>(total_compressed) / (1024.0 * 1024.0)) << " MB)\n";
     std::cerr << "  decompress:   " << total_decompress << "s total (" << (static_cast<double>(total_decompressed) / (1024.0 * 1024.0))
               << " MB)\n";
-    std::cerr << "  event parse:  " << total_parse << "s total (" << total_events << " events)\n";
-    std::cerr << "  extract:      " << total_extract << "s total\n";
+    std::cerr << "  capnp parse:  " << total_parse << "s total (" << total_events << " events)\n";
+    std::cerr << "  series ext:   " << total_extract << "s total\n";
     std::cerr << "  merge:        " << duration_seconds(merge_start, merge_end) << "s\n";
     std::cerr << "  series:       " << final_series_count << " paths\n";
     std::cerr << "  per segment:\n";
     for (const SegmentStats &segment : segments) {
       std::cerr << "    seg " << std::setw(2) << segment.segment_number << ": "
-                << (segment.failed ? "FAILED" : "download " + std::to_string(segment.download_seconds)
+                << (segment.failed ? "FAILED" : "fetch " + std::to_string(segment.download_seconds)
                   + "s  decompress " + std::to_string(segment.decompress_seconds)
                   + "s  parse " + std::to_string(segment.parse_seconds)
                   + "s  extract " + std::to_string(segment.extract_seconds)
@@ -665,7 +680,10 @@ ResolvedNode build_resolved_type(const capnp::Type &type,
                                  bool has_field,
                                  capnp::StructSchema::Field field,
                                  std::string segment,
-                                 std::string path) {
+                                 std::string path,
+                                 size_t *next_fixed_slot,
+                                 std::vector<std::string> *fixed_paths,
+                                 bool dynamic_path = false) {
   ResolvedNode node;
   node.has_field = has_field;
   node.field = field;
@@ -674,6 +692,10 @@ ResolvedNode build_resolved_type(const capnp::Type &type,
   node.scalar_kind = scalar_kind_for_type(type);
   if (node.scalar_kind != ScalarKind::None) {
     node.kind = ResolvedNodeKind::Scalar;
+    if (!dynamic_path) {
+      node.fixed_slot = static_cast<int>((*next_fixed_slot)++);
+      fixed_paths->push_back(node.path);
+    }
     return node;
   }
 
@@ -686,7 +708,10 @@ ResolvedNode build_resolved_type(const capnp::Type &type,
         true,
         child,
         child_segment,
-        node.path + "/" + child_segment));
+        node.path + "/" + child_segment,
+        next_fixed_slot,
+        fixed_paths,
+        dynamic_path));
     }
     return node;
   }
@@ -700,7 +725,14 @@ ResolvedNode build_resolved_type(const capnp::Type &type,
     node.kind = ResolvedNodeKind::List;
     node.skip_large_scalar_list = scalar_kind_for_type(element_type) != ScalarKind::None;
     node.element = std::make_unique<ResolvedNode>(
-      build_resolved_type(element_type, false, capnp::StructSchema::Field(), "", node.path));
+      build_resolved_type(element_type,
+                          false,
+                          capnp::StructSchema::Field(),
+                          "",
+                          node.path,
+                          next_fixed_slot,
+                          fixed_paths,
+                          true));
     return node;
   }
 
@@ -712,6 +744,12 @@ const SchemaIndex &SchemaIndex::instance() {
   static const SchemaIndex index = [] {
     SchemaIndex out;
     const auto event_schema = capnp::Schema::from<cereal::Event>().asStruct();
+    uint16_t max_discriminant = 0;
+    for (auto union_field : event_schema.getUnionFields()) {
+      max_discriminant = std::max<uint16_t>(max_discriminant, union_field.getProto().getDiscriminantValue());
+    }
+    out.by_which.resize(static_cast<size_t>(max_discriminant) + 1);
+    size_t next_fixed_slot = 0;
     for (auto union_field : event_schema.getUnionFields()) {
       ResolvedService service;
       service.event_which = union_field.getProto().getDiscriminantValue();
@@ -722,29 +760,15 @@ const SchemaIndex &SchemaIndex::instance() {
         false,
         capnp::StructSchema::Field(),
         service.service_name,
-        "/" + service.service_name);
-      out.by_which.emplace(service.event_which, std::move(service));
+        "/" + service.service_name,
+        &next_fixed_slot,
+        &out.fixed_paths);
+      out.by_which[service.event_which] = std::move(service);
     }
+    out.fixed_series_count = next_fixed_slot;
     return out;
   }();
   return index;
-}
-
-std::optional<double> dynamic_value_to_double(const capnp::DynamicValue::Reader &value) {
-  switch (value.getType()) {
-    case capnp::DynamicValue::Type::BOOL:
-      return value.as<bool>() ? 1.0 : 0.0;
-    case capnp::DynamicValue::Type::INT:
-      return static_cast<double>(value.as<int64_t>());
-    case capnp::DynamicValue::Type::UINT:
-      return static_cast<double>(value.as<uint64_t>());
-    case capnp::DynamicValue::Type::FLOAT:
-      return value.as<double>();
-    case capnp::DynamicValue::Type::ENUM:
-      return static_cast<double>(value.as<capnp::DynamicEnum>().getRaw());
-    default:
-      return std::nullopt;
-  }
 }
 
 bool is_absolute_curve(const std::string &name) {
@@ -771,27 +795,81 @@ std::optional<double> scalar_value_to_double(const capnp::DynamicValue::Reader &
   return std::nullopt;
 }
 
-void append_scalar_point(const std::string &path,
+void append_scalar_point(RouteSeries *series,
+                         const std::string &path,
+                         double tm,
+                         double value) {
+  if (series->path.empty()) {
+    series->path = path;
+  }
+  series->times.push_back(tm);
+  series->values.push_back(value);
+}
+
+void append_fixed_scalar_point(RouteSeries *series, double tm, double value) {
+  series->times.push_back(tm);
+  series->values.push_back(value);
+}
+
+SeriesAccumulator make_series_accumulator(const SchemaIndex &schema) {
+  SeriesAccumulator out(schema.fixed_series_count);
+  for (size_t i = 0; i < schema.fixed_paths.size(); ++i) {
+    out.fixed_series[i].path = schema.fixed_paths[i];
+  }
+  return out;
+}
+
+size_t ensure_dynamic_slot(const std::string &path, SeriesAccumulator *series) {
+  auto [it, inserted] = series->dynamic_slots.try_emplace(path, series->dynamic_series.size());
+  if (inserted) {
+    series->dynamic_series.push_back(RouteSeries{it->first});
+  }
+  return it->second;
+}
+
+RouteSeries *ensure_dynamic_series(const std::string &path, SeriesAccumulator *series) {
+  return &series->dynamic_series[ensure_dynamic_slot(path, series)];
+}
+
+RouteSeries *ensure_list_scalar_series(const std::string &base_path, size_t index, SeriesAccumulator *series) {
+  auto [it, _] = series->list_scalar_slots.try_emplace(base_path);
+  std::vector<size_t> &slots = it->second;
+  if (slots.size() <= index) {
+    slots.resize(index + 1, kInvalidDynamicSlot);
+  }
+  if (slots[index] == kInvalidDynamicSlot) {
+    slots[index] = ensure_dynamic_slot(base_path + "/" + std::to_string(index), series);
+  }
+  return &series->dynamic_series[slots[index]];
+}
+
+void append_dynamic_scalar_point(const std::string &path, double tm, double value, SeriesAccumulator *series) {
+  append_scalar_point(ensure_dynamic_series(path, series), path, tm, value);
+}
+
+void append_scalar_value(const ResolvedNode &node,
+                         const std::string *path_override,
                          double tm,
                          double value,
-                         std::unordered_map<std::string, RouteSeries> *series_by_path) {
-  RouteSeries &series = (*series_by_path)[path];
-  if (series.path.empty()) {
-    series.path = path;
+                         SeriesAccumulator *series) {
+  if (path_override == nullptr && node.fixed_slot >= 0) {
+    append_fixed_scalar_point(&series->fixed_series[static_cast<size_t>(node.fixed_slot)], tm, value);
+    return;
   }
-  series.times.push_back(tm);
-  series.values.push_back(value);
+
+  const std::string &path = path_override != nullptr ? *path_override : node.path;
+  append_dynamic_scalar_point(path, tm, value, series);
 }
 
 void append_fast_node(const ResolvedNode &node,
                       const capnp::DynamicValue::Reader &value,
                       double tm,
-                      std::unordered_map<std::string, RouteSeries> *series_by_path,
+                      SeriesAccumulator *series,
                       const std::string *path_override = nullptr) {
   switch (node.kind) {
     case ResolvedNodeKind::Scalar: {
       if (std::optional<double> scalar = scalar_value_to_double(value, node.scalar_kind); scalar.has_value()) {
-        append_scalar_point(path_override != nullptr ? *path_override : node.path, tm, *scalar, series_by_path);
+        append_scalar_value(node, path_override, tm, *scalar, series);
       }
       return;
     }
@@ -802,10 +880,10 @@ void append_fast_node(const ResolvedNode &node,
           continue;
         }
         if (path_override == nullptr) {
-          append_fast_node(child, reader.get(child.field), tm, series_by_path, nullptr);
+          append_fast_node(child, reader.get(child.field), tm, series, nullptr);
         } else {
           const std::string child_path = child.segment.empty() ? *path_override : (*path_override + "/" + child.segment);
-          append_fast_node(child, reader.get(child.field), tm, series_by_path, &child_path);
+          append_fast_node(child, reader.get(child.field), tm, series, &child_path);
         }
       }
       return;
@@ -822,9 +900,18 @@ void append_fast_node(const ResolvedNode &node,
         return;
       }
       const std::string &base_path = path_override != nullptr ? *path_override : node.path;
+      if (node.element->kind == ResolvedNodeKind::Scalar) {
+        for (uint i = 0; i < list.size(); ++i) {
+          if (std::optional<double> scalar = scalar_value_to_double(list[i], node.element->scalar_kind); scalar.has_value()) {
+            RouteSeries *item_series = ensure_list_scalar_series(base_path, i, series);
+            append_fixed_scalar_point(item_series, tm, *scalar);
+          }
+        }
+        return;
+      }
       for (uint i = 0; i < list.size(); ++i) {
         const std::string item_path = base_path + "/" + std::to_string(i);
-        append_fast_node(*node.element, list[i], tm, series_by_path, &item_path);
+        append_fast_node(*node.element, list[i], tm, series, &item_path);
       }
       return;
     }
@@ -833,132 +920,68 @@ void append_fast_node(const ResolvedNode &node,
   }
 }
 
-void append_events_fast(const std::vector<Event> &events,
-                        const SchemaIndex &schema,
-                        std::unordered_map<std::string, RouteSeries> *series_by_path) {
-  for (const Event &event_record : events) {
-    auto it = schema.by_which.find(static_cast<uint16_t>(event_record.which));
-    if (it == schema.by_which.end()) {
+void append_events_fast_range(const std::vector<Event> &events,
+                              size_t begin,
+                              size_t end,
+                              const SchemaIndex &schema,
+                              SeriesAccumulator *series) {
+  for (size_t i = begin; i < end; ++i) {
+    const Event &event_record = events[i];
+    const uint16_t which = static_cast<uint16_t>(event_record.which);
+    if (which >= schema.by_which.size() || !schema.by_which[which].has_value()) {
       continue;
     }
+    const ResolvedService &service = *schema.by_which[which];
 
     capnp::FlatArrayMessageReader event_reader(event_record.data);
     const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
     const capnp::DynamicStruct::Reader dynamic_event(event);
-    if (!dynamic_event.has(it->second.union_field)) {
-      continue;
-    }
     const double tm = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
-    append_fast_node(it->second.payload, dynamic_event.get(it->second.union_field), tm, series_by_path);
+    append_fast_node(service.payload, dynamic_event.get(service.union_field), tm, series);
   }
 }
 
-void append_dynamic_series(const std::string &path,
-                           const capnp::DynamicValue::Reader &value,
-                           double tm,
-                           std::unordered_map<std::string, RouteSeries> *series_by_path) {
-  if (std::optional<double> scalar = dynamic_value_to_double(value); scalar.has_value()) {
-    append_scalar_point(path, tm, *scalar, series_by_path);
+void merge_route_series(RouteSeries *dst, RouteSeries *src) {
+  if (src->times.empty()) {
+    return;
+  }
+  if (dst->times.empty()) {
+    *dst = std::move(*src);
     return;
   }
 
-  switch (value.getType()) {
-    case capnp::DynamicValue::Type::STRUCT: {
-      const capnp::DynamicStruct::Reader reader = value.as<capnp::DynamicStruct>();
-      for (auto field : reader.getSchema().getFields()) {
-        if (!reader.has(field)) {
-          continue;
-        }
-        const std::string child_path = path + "/" + field.getProto().getName().cStr();
-        append_dynamic_series(child_path, reader.get(field), tm, series_by_path);
-      }
-      return;
-    }
-    case capnp::DynamicValue::Type::LIST: {
-      const capnp::DynamicList::Reader list = value.as<capnp::DynamicList>();
-      if (list.size() == 0) {
-        return;
-      }
-      const capnp::DynamicValue::Reader first = list[0];
-      if ((first.getType() == capnp::DynamicValue::Type::INT
-           || first.getType() == capnp::DynamicValue::Type::UINT
-           || first.getType() == capnp::DynamicValue::Type::FLOAT
-           || first.getType() == capnp::DynamicValue::Type::BOOL
-           || first.getType() == capnp::DynamicValue::Type::ENUM) && list.size() > 16) {
-        return;
-      }
-      if (first.getType() == capnp::DynamicValue::Type::TEXT
-          || first.getType() == capnp::DynamicValue::Type::DATA
-          || first.getType() == capnp::DynamicValue::Type::CAPABILITY
-          || first.getType() == capnp::DynamicValue::Type::UNKNOWN) {
-        return;
-      }
-      for (uint i = 0; i < list.size(); ++i) {
-        append_dynamic_series(path + "/" + std::to_string(i), list[i], tm, series_by_path);
-      }
-      return;
-    }
-    default:
-      return;
-  }
+  dst->times.reserve(dst->times.size() + src->times.size());
+  dst->values.reserve(dst->values.size() + src->values.size());
+  dst->times.insert(dst->times.end(), src->times.begin(), src->times.end());
+  dst->values.insert(dst->values.end(), src->values.begin(), src->values.end());
 }
 
-void append_events_to_series_slow(const std::vector<Event> &events,
-                                  std::unordered_map<std::string, RouteSeries> *series_by_path) {
-  for (const Event &event_record : events) {
-    capnp::FlatArrayMessageReader event_reader(event_record.data);
-    const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-    const capnp::DynamicStruct::Reader dynamic_event(event);
-    auto maybe_active_field = dynamic_event.which();
-    KJ_IF_MAYBE(active_field, maybe_active_field) {
-      const std::string service((*active_field).getProto().getName().cStr());
-      const capnp::DynamicValue::Reader payload = dynamic_event.get(*active_field);
-      const double tm = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
-      append_dynamic_series("/" + service, payload, tm, series_by_path);
-    }
-  }
-}
-
-void verify_fast_series_matches_slow(const std::map<int, SegmentLogs> &segments, const SchemaIndex &schema) {
-  if (const char *raw = std::getenv("JOTP_COMPARE_SLOW_FAST"); raw == nullptr || std::string_view(raw) != "1") {
-    return;
+void merge_series_accumulator(SeriesAccumulator *dst, SeriesAccumulator *src) {
+  if (dst->fixed_series.size() != src->fixed_series.size()) {
+    throw std::runtime_error("Fixed-series slot count mismatch during merge");
   }
 
-  std::unordered_map<std::string, RouteSeries> slow_series;
-  std::unordered_map<std::string, RouteSeries> fast_series;
-  for (const auto &[segment_number, segment] : segments) {
-    const std::string &log_path = !segment.rlog.empty() ? segment.rlog : segment.qlog;
-    if (log_path.empty()) {
+  for (size_t i = 0; i < dst->fixed_series.size(); ++i) {
+    merge_route_series(&dst->fixed_series[i], &src->fixed_series[i]);
+  }
+  for (auto &series : src->dynamic_series) {
+    if (series.path.empty()) {
       continue;
     }
-    LogReader reader;
-    if (!reader.load(log_path, nullptr, true)) {
-      throw std::runtime_error("Failed to load log segment during loader verification: " + log_path);
-    }
-    append_events_to_series_slow(reader.events, &slow_series);
-    append_events_fast(reader.events, schema, &fast_series);
+    RouteSeries &dst_series = dst->dynamic_series[ensure_dynamic_slot(series.path, dst)];
+    merge_route_series(&dst_series, &series);
   }
+}
 
-  if (slow_series.size() != fast_series.size()) {
-    throw std::runtime_error("Fast loader mismatch: path count " + std::to_string(fast_series.size())
-                             + " != " + std::to_string(slow_series.size()));
+size_t populated_series_count(const SeriesAccumulator &series) {
+  size_t count = 0;
+  for (const RouteSeries &fixed : series.fixed_series) {
+    count += !fixed.times.empty();
   }
-
-  for (const auto &[path, slow] : slow_series) {
-    auto it = fast_series.find(path);
-    if (it == fast_series.end()) {
-      throw std::runtime_error("Fast loader missing path: " + path);
-    }
-    const RouteSeries &fast = it->second;
-    if (slow.times.size() != fast.times.size() || slow.values.size() != fast.values.size()) {
-      throw std::runtime_error("Fast loader sample count mismatch on " + path);
-    }
-    for (size_t i = 0; i < slow.times.size(); ++i) {
-      if (std::abs(slow.times[i] - fast.times[i]) > 1.0e-9 || std::abs(slow.values[i] - fast.values[i]) > 1.0e-9) {
-        throw std::runtime_error("Fast loader sample mismatch on " + path + " at index " + std::to_string(i));
-      }
-    }
+  for (const RouteSeries &dynamic : series.dynamic_series) {
+    count += !dynamic.times.empty();
   }
+  return count;
 }
 
 bool series_is_sorted(const RouteSeries &series) {
@@ -990,18 +1013,36 @@ void sort_series_by_time(RouteSeries *series) {
   series->values = std::move(sorted_values);
 }
 
-RouteData build_route_data(std::unordered_map<std::string, RouteSeries> &&series_by_path) {
+std::vector<RouteSeries> collect_series(SeriesAccumulator &&series) {
+  std::vector<RouteSeries> out;
+  out.reserve(series.fixed_series.size() + series.dynamic_series.size());
+  for (auto &fixed : series.fixed_series) {
+    sort_series_by_time(&fixed);
+    if (!fixed.times.empty()) {
+      out.push_back(std::move(fixed));
+    }
+  }
+  for (auto &dynamic : series.dynamic_series) {
+    sort_series_by_time(&dynamic);
+    if (!dynamic.times.empty()) {
+      out.push_back(std::move(dynamic));
+    }
+  }
+  return out;
+}
+
+RouteData build_route_data(std::vector<RouteSeries> &&series_list) {
   RouteData route_data;
-  route_data.series.reserve(series_by_path.size());
-  route_data.paths.reserve(series_by_path.size());
-  for (auto &[path, series] : series_by_path) {
+  route_data.series.reserve(series_list.size());
+  route_data.paths.reserve(series_list.size());
+  for (RouteSeries &series : series_list) {
     if (series.times.empty()) {
       continue;
     }
     route_data.has_time_range = true;
     route_data.x_min = route_data.series.empty() ? series.times.front() : std::min(route_data.x_min, series.times.front());
     route_data.x_max = route_data.series.empty() ? series.times.back() : std::max(route_data.x_max, series.times.back());
-    route_data.paths.push_back(path);
+    route_data.paths.push_back(series.path);
     route_data.series.push_back(std::move(series));
   }
 
@@ -1025,7 +1066,7 @@ RouteData build_route_data(std::unordered_map<std::string, RouteSeries> &&series
   return route_data;
 }
 
-size_t load_worker_count(size_t segment_count) {
+size_t load_worker_budget() {
   size_t worker_count = std::thread::hardware_concurrency();
   if (worker_count == 0) {
     worker_count = 1;
@@ -1037,22 +1078,80 @@ size_t load_worker_count(size_t segment_count) {
       worker_count = static_cast<size_t>(parsed);
     }
   }
-  return std::max<size_t>(1, std::min(worker_count, segment_count));
+  return std::max<size_t>(1, worker_count);
 }
 
-std::unordered_map<std::string, RouteSeries> load_route_series_parallel(
+size_t segment_worker_count(size_t segment_count, size_t worker_budget) {
+  return std::max<size_t>(1, std::min(worker_budget, segment_count));
+}
+
+size_t extract_chunk_count(size_t event_count, size_t worker_budget, size_t segment_workers) {
+  if (event_count < 4096) {
+    return 1;
+  }
+  const size_t per_segment_budget = std::max<size_t>(1, worker_budget / std::max<size_t>(1, segment_workers));
+  const size_t chunk_target = std::max<size_t>(1, (event_count + 14999) / 15000);
+  return std::max<size_t>(1, std::min({per_segment_budget, chunk_target, static_cast<size_t>(8)}));
+}
+
+SeriesAccumulator extract_segment_series(const std::vector<Event> &events,
+                                         const SchemaIndex &schema,
+                                         size_t worker_budget,
+                                         size_t segment_workers) {
+  const size_t chunk_count = extract_chunk_count(events.size(), worker_budget, segment_workers);
+  if (chunk_count <= 1 || events.empty()) {
+    SeriesAccumulator series = make_series_accumulator(schema);
+    append_events_fast_range(events, 0, events.size(), schema, &series);
+    return series;
+  }
+
+  const size_t events_per_chunk = (events.size() + chunk_count - 1) / chunk_count;
+  std::vector<SeriesAccumulator> chunk_results;
+  chunk_results.reserve(chunk_count);
+  for (size_t i = 0; i < chunk_count; ++i) {
+    chunk_results.push_back(make_series_accumulator(schema));
+  }
+
+  std::vector<std::thread> workers;
+  workers.reserve(chunk_count > 0 ? chunk_count - 1 : 0);
+  for (size_t chunk = 1; chunk < chunk_count; ++chunk) {
+    workers.emplace_back([&, chunk]() {
+      const size_t begin = chunk * events_per_chunk;
+      const size_t end = std::min(events.size(), begin + events_per_chunk);
+      append_events_fast_range(events, begin, end, schema, &chunk_results[chunk]);
+    });
+  }
+  append_events_fast_range(events, 0, std::min(events.size(), events_per_chunk), schema, &chunk_results[0]);
+  for (std::thread &worker : workers) {
+    worker.join();
+  }
+
+  SeriesAccumulator merged = make_series_accumulator(schema);
+  for (SeriesAccumulator &chunk : chunk_results) {
+    merge_series_accumulator(&merged, &chunk);
+  }
+  return merged;
+}
+
+std::vector<RouteSeries> load_route_series_parallel(
     const std::map<int, SegmentLogs> &segments,
     const SchemaIndex &schema,
     LoadStats *stats) {
   struct SegmentResult {
-    std::unordered_map<std::string, RouteSeries> series;
+    SeriesAccumulator series;
   };
 
   const std::vector<std::pair<int, SegmentLogs>> segment_list(segments.begin(), segments.end());
-  std::vector<SegmentResult> results(segment_list.size());
+  std::vector<SegmentResult> results;
+  results.reserve(segment_list.size());
+  for (size_t i = 0; i < segment_list.size(); ++i) {
+    results.emplace_back(SegmentResult{make_series_accumulator(schema)});
+  }
   std::atomic<size_t> next_segment{0};
   std::mutex error_mutex;
   std::string first_error;
+  const size_t worker_budget = static_cast<size_t>(stats->num_workers);
+  const size_t segment_workers = segment_worker_count(segment_list.size(), worker_budget);
 
   auto worker = [&]() {
     while (true) {
@@ -1099,18 +1198,18 @@ std::unordered_map<std::string, RouteSeries> load_route_series_parallel(
       stats->publish(RouteLoadStage::DownloadingSegment, index, std::to_string(segment_number));
 
       const auto extract_start = LoadStats::Clock::now();
-      append_events_fast(reader.events, schema, &results[index].series);
+      results[index].series = extract_segment_series(reader.events, schema, worker_budget, segment_workers);
       segment_stats.extract_seconds = std::chrono::duration<double>(LoadStats::Clock::now() - extract_start).count();
       segment_stats.event_count = reader.events.size();
-      segment_stats.series_count = results[index].series.size();
+      segment_stats.series_count = populated_series_count(results[index].series);
       stats->segments_parsed.fetch_add(1);
       stats->publish(RouteLoadStage::ParsingSegment, index, std::to_string(segment_number));
     }
   };
 
   std::vector<std::thread> workers;
-  workers.reserve(static_cast<size_t>(stats->num_workers));
-  for (int i = 0; i < stats->num_workers; ++i) {
+  workers.reserve(segment_workers);
+  for (size_t i = 0; i < segment_workers; ++i) {
     workers.emplace_back(worker);
   }
   for (std::thread &thread : workers) {
@@ -1122,23 +1221,13 @@ std::unordered_map<std::string, RouteSeries> load_route_series_parallel(
   }
 
   stats->merge_start = LoadStats::Clock::now();
-  std::unordered_map<std::string, RouteSeries> merged;
+  SeriesAccumulator merged = make_series_accumulator(schema);
   for (size_t i = 0; i < results.size(); ++i) {
-    for (auto &[path, series] : results[i].series) {
-      RouteSeries &dst = merged[path];
-      if (dst.path.empty()) {
-        dst.path = path;
-      }
-      dst.times.insert(dst.times.end(), series.times.begin(), series.times.end());
-      dst.values.insert(dst.values.end(), series.values.begin(), series.values.end());
-    }
-    results[i].series.clear();
+    merge_series_accumulator(&merged, &results[i].series);
   }
-  for (auto &[path, series] : merged) {
-    sort_series_by_time(&series);
-  }
+  std::vector<RouteSeries> all_series = collect_series(std::move(merged));
   stats->merge_end = LoadStats::Clock::now();
-  return merged;
+  return all_series;
 }
 
 std::vector<std::string> collect_layout_roots(const SketchLayout &layout) {
@@ -1200,14 +1289,13 @@ RouteData load_route_data(const std::string &route_name,
   stats.resolve_end = LoadStats::Clock::now();
   stats.segment_count = segments.size();
   stats.total_segments.store(segments.size());
-  stats.num_workers = static_cast<int>(load_worker_count(segments.size()));
+  stats.num_workers = static_cast<int>(load_worker_budget());
   stats.segments.resize(segments.size());
   stats.publish(RouteLoadStage::Resolving, 0, {});
 
   const SchemaIndex &schema = SchemaIndex::instance();
-  verify_fast_series_matches_slow(segments, schema);
-  std::unordered_map<std::string, RouteSeries> series_by_path = load_route_series_parallel(segments, schema, &stats);
-  RouteData route_data = build_route_data(std::move(series_by_path));
+  std::vector<RouteSeries> series = load_route_series_parallel(segments, schema, &stats);
+  RouteData route_data = build_route_data(std::move(series));
   stats.load_end = LoadStats::Clock::now();
   stats.publish(RouteLoadStage::Finished, segments.size(), {});
   stats.print_summary(route_data.series.size());
