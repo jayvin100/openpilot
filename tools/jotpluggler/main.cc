@@ -6,7 +6,7 @@
 
 namespace {
 
-constexpr const char *kDemoRoute = "5beb9b58bd12b691/0000010a--a51155e496";
+constexpr const char *kDemoRoute = "5beb9b58bd12b691/0000010a--a51155e496/0";
 
 void print_usage(const char *argv0) {
   std::cerr

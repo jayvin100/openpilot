@@ -396,34 +396,9 @@ Curve parse_curve(xmlNodePtr curve_node) {
 }
 
 std::string pane_title(xmlNodePtr dock_area_node, const std::vector<Curve> &curves) {
+  (void)curves;
   const std::string raw = attr(dock_area_node, "name");
-  if (!raw.empty() && raw != "...") {
-    return raw;
-  }
-
-  std::vector<std::string> leaves;
-  for (const auto &curve : curves) {
-    const std::string leaf = curve_leaf(curve.name);
-    if (!leaf.empty() && std::find(leaves.begin(), leaves.end(), leaf) == leaves.end()) {
-      leaves.push_back(leaf);
-    }
-    if (leaves.size() == 3) {
-      break;
-    }
-  }
-
-  if (leaves.empty()) {
-    return "plot";
-  }
-
-  std::string title;
-  for (size_t i = 0; i < leaves.size(); ++i) {
-    if (i != 0) {
-      title += " / ";
-    }
-    title += leaves[i];
-  }
-  return title;
+  return raw.empty() ? "..." : raw;
 }
 
 Pane parse_dock_area(xmlNodePtr dock_area_node) {
@@ -483,7 +458,7 @@ WorkspaceNode parse_workspace_node(xmlNodePtr node, WorkspaceTab *tab) {
 
 WorkspaceTab parse_tab(xmlNodePtr tab, const fs::path &layout_path) {
   WorkspaceTab workspace_tab;
-  workspace_tab.tab_name = attr(tab, "tab_name", "tab0");
+  workspace_tab.tab_name = attr(tab, "tab_name", "tab1");
 
   xmlNodePtr container = first_child(tab, "Container");
   if (container == nullptr) {

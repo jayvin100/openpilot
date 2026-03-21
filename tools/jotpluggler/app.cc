@@ -34,10 +34,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
+constexpr const char *kUntitledPaneTitle = "...";
+
 constexpr float kSidebarWidth = 282.0f;
 constexpr float kContentGap = 12.0f;
 constexpr float kContentRightPadding = 8.0f;
-constexpr float kToolbarHeight = 24.0f;
 constexpr float kStatusBarHeight = 28.0f;
 
 struct UiMetrics {
@@ -98,8 +99,12 @@ struct UiState {
   bool has_shared_range = false;
   bool has_hover_time = false;
   int active_tab_index = 0;
+  int requested_tab_index = -1;
+  int rename_tab_index = -1;
+  bool focus_rename_tab_input = false;
   std::vector<TabUiState> tabs;
   std::array<char, 128> route_buffer = {};
+  std::array<char, 128> rename_tab_buffer = {};
   std::array<char, 128> browser_filter = {};
   std::array<char, 512> data_dir_buffer = {};
   std::string selected_browser_path;
@@ -417,11 +422,11 @@ void configure_style() {
 
   ImPlotStyle &plot_style = ImPlot::GetStyle();
   plot_style.PlotBorderSize = 1.0f;
-  plot_style.MinorAlpha = 0.0f;
+  plot_style.MinorAlpha = 0.4f;
   plot_style.LegendPadding = ImVec2(6.0f, 6.0f);
   plot_style.LegendInnerPadding = ImVec2(6.0f, 4.0f);
   plot_style.LegendSpacing = ImVec2(8.0f, 3.0f);
-  plot_style.PlotPadding = ImVec2(10.0f, 8.0f);
+  plot_style.PlotPadding = ImVec2(3.0f, 5.0f);
 }
 
 UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset) {
@@ -457,10 +462,12 @@ void sync_ui_state(UiState *state, const SketchLayout &layout) {
   state->tabs.resize(layout.tabs.size());
   if (layout.tabs.empty()) {
     state->active_tab_index = 0;
+    state->requested_tab_index = -1;
     return;
   }
   if (initializing) {
     state->active_tab_index = std::clamp(layout.current_tab_index, 0, static_cast<int>(layout.tabs.size()) - 1);
+    state->requested_tab_index = state->active_tab_index;
   }
   state->active_tab_index = std::clamp(state->active_tab_index, 0, static_cast<int>(layout.tabs.size()) - 1);
   for (size_t i = 0; i < layout.tabs.size(); ++i) {
@@ -501,8 +508,32 @@ TabUiState *active_tab_state(UiState *state) {
 }
 
 std::string pane_window_name(int tab_index, int pane_index, const Pane &pane) {
-  std::string title = pane.title.empty() ? "plot" : pane.title;
+  std::string title = pane.title.empty() ? kUntitledPaneTitle : pane.title;
   return title + "##tab" + std::to_string(tab_index) + "_pane" + std::to_string(pane_index);
+}
+
+std::string tab_item_label(const WorkspaceTab &tab, int tab_index) {
+  return tab.tab_name + "##workspace_tab_" + std::to_string(tab_index);
+}
+
+void request_tab_selection(UiState *state, int tab_index) {
+  state->active_tab_index = tab_index;
+  state->requested_tab_index = tab_index;
+}
+
+void begin_rename_tab(const SketchLayout &layout, UiState *state, int tab_index) {
+  if (tab_index < 0 || tab_index >= static_cast<int>(layout.tabs.size())) {
+    return;
+  }
+  copy_to_buffer(layout.tabs[static_cast<size_t>(tab_index)].tab_name, &state->rename_tab_buffer);
+  state->rename_tab_index = tab_index;
+  state->focus_rename_tab_input = true;
+  request_tab_selection(state, tab_index);
+}
+
+void cancel_rename_tab(UiState *state) {
+  state->rename_tab_index = -1;
+  state->focus_rename_tab_input = false;
 }
 
 ImGuiID dockspace_id_for_tab(int tab_index) {
@@ -667,7 +698,7 @@ bool split_pane_node(WorkspaceNode *node, int target_pane_index, SplitOrientatio
   return false;
 }
 
-Pane make_empty_pane(const std::string &title = "plot") {
+Pane make_empty_pane(const std::string &title = kUntitledPaneTitle) {
   Pane pane;
   pane.title = title;
   return pane;
@@ -684,7 +715,7 @@ WorkspaceTab make_empty_tab(const std::string &tab_name) {
 
 SketchLayout make_empty_layout() {
   SketchLayout layout;
-  layout.tabs.push_back(make_empty_tab("tab0"));
+  layout.tabs.push_back(make_empty_tab("tab1"));
   layout.current_tab_index = 0;
   return layout;
 }
@@ -696,6 +727,18 @@ bool tab_name_exists(const SketchLayout &layout, const std::string &name) {
 }
 
 std::string next_tab_name(const SketchLayout &layout, const std::string &base_name) {
+  if (base_name == "tab" || base_name == "tab1") {
+    int max_suffix = 0;
+    for (const WorkspaceTab &tab : layout.tabs) {
+      if (tab.tab_name.size() > 3 && tab.tab_name.rfind("tab", 0) == 0) {
+        const std::string suffix = tab.tab_name.substr(3);
+        if (!suffix.empty() && std::all_of(suffix.begin(), suffix.end(), ::isdigit)) {
+          max_suffix = std::max(max_suffix, std::stoi(suffix));
+        }
+      }
+    }
+    return "tab" + std::to_string(std::max(1, max_suffix + 1));
+  }
   std::string base = base_name.empty() ? "tab" : base_name;
   if (!tab_name_exists(layout, base)) {
     return base;
@@ -938,7 +981,7 @@ void show_not_implemented_modal(const char *popup_name, const char *title, const
 
 float draw_main_menu_bar(UiState *state) {
   float height = ImGui::GetFrameHeight();
-  ImGui::PushStyleColor(ImGuiCol_MenuBarBg, color_rgb(46, 46, 46));
+  ImGui::PushStyleColor(ImGuiCol_MenuBarBg, color_rgb(238, 240, 244));
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("File")) {
       if (ImGui::MenuItem("Open Route...")) {
@@ -1106,7 +1149,6 @@ void draw_browser_node(AppSession *session, const BrowserNode &node, UiState *st
 }
 
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
-  const WorkspaceTab *tab = active_tab(session->layout, *state);
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.top_offset));
   ImGui::SetNextWindowSize(ImVec2(ui.sidebar_width, std::max(1.0f, ui.height - ui.top_offset - kStatusBarHeight)));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(238, 240, 244));
@@ -1126,10 +1168,6 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
       state->request_reload = true;
       state->status_text = "Reloading route";
     }
-    ImGui::Spacing();
-
-    ImGui::SeparatorText("Layout");
-    ImGui::TextUnformatted(tab == nullptr || tab->tab_name.empty() ? "tab0" : tab->tab_name.c_str());
     ImGui::Spacing();
 
     ImGui::SeparatorText("Timeline");
@@ -1225,9 +1263,6 @@ bool add_curve_to_pane(WorkspaceTab *tab, int pane_index, Curve curve) {
       return false;
     }
   }
-  if (pane.title.empty() || pane.title == "plot") {
-    pane.title = curve_display_name(curve);
-  }
   pane.curves.push_back(std::move(curve));
   return true;
 }
@@ -1271,9 +1306,6 @@ bool split_pane(WorkspaceTab *tab, int pane_index, PaneDropZone zone, std::optio
   const int new_pane_index = static_cast<int>(tab->panes.size());
   Pane new_pane = make_empty_pane();
   if (curve.has_value()) {
-    if (new_pane.title == "plot") {
-      new_pane.title = curve_display_name(*curve);
-    }
     new_pane.curves.push_back(*curve);
   }
   tab->panes.push_back(std::move(new_pane));
@@ -1322,14 +1354,14 @@ void clear_pane(WorkspaceTab *tab, int pane_index) {
   }
   Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
   pane.curves.clear();
-  pane.title = "plot";
+  pane.title = kUntitledPaneTitle;
 }
 
 void create_runtime_tab(SketchLayout *layout, UiState *state) {
-  const std::string tab_name = next_tab_name(*layout, "tab");
+  const std::string tab_name = next_tab_name(*layout, "tab1");
   layout->tabs.push_back(make_empty_tab(tab_name));
   state->tabs.push_back(TabUiState{.dock_needs_build = true, .active_pane_index = 0});
-  state->active_tab_index = static_cast<int>(layout->tabs.size()) - 1;
+  request_tab_selection(state, static_cast<int>(layout->tabs.size()) - 1);
   mark_all_docks_dirty(state);
   state->status_text = "Created " + tab_name;
 }
@@ -1344,7 +1376,7 @@ void duplicate_runtime_tab(SketchLayout *layout, UiState *state) {
   layout->tabs.push_back(std::move(copy));
   const int active_pane_index = source_index < static_cast<int>(state->tabs.size()) ? state->tabs[static_cast<size_t>(source_index)].active_pane_index : 0;
   state->tabs.push_back(TabUiState{.dock_needs_build = true, .active_pane_index = active_pane_index});
-  state->active_tab_index = static_cast<int>(layout->tabs.size()) - 1;
+  request_tab_selection(state, static_cast<int>(layout->tabs.size()) - 1);
   mark_all_docks_dirty(state);
   state->status_text = "Duplicated tab";
 }
@@ -1362,8 +1394,51 @@ void close_runtime_tab(SketchLayout *layout, UiState *state) {
     state->active_tab_index = static_cast<int>(layout->tabs.size()) - 1;
   }
   sync_ui_state(state, *layout);
+  state->requested_tab_index = state->active_tab_index;
   mark_all_docks_dirty(state);
   state->status_text = "Closed tab";
+}
+
+void rename_runtime_tab(SketchLayout *layout, UiState *state) {
+  if (state->rename_tab_index < 0 || state->rename_tab_index >= static_cast<int>(layout->tabs.size())) {
+    return;
+  }
+  layout->tabs[static_cast<size_t>(state->rename_tab_index)].tab_name = string_from_buffer(state->rename_tab_buffer);
+  state->status_text = "Renamed tab";
+  layout->current_tab_index = state->rename_tab_index;
+  cancel_rename_tab(state);
+}
+
+void draw_inline_tab_editor(AppSession *session, UiState *state, const ImRect &tab_rect) {
+  const int rename_tab_index = state->rename_tab_index;
+  if (rename_tab_index < 0 || rename_tab_index >= static_cast<int>(session->layout.tabs.size())) {
+    return;
+  }
+
+  const float width = std::max(48.0f, tab_rect.Max.x - tab_rect.Min.x - 10.0f);
+  const ImVec2 pos = ImVec2(tab_rect.Min.x + 5.0f, tab_rect.Min.y + 2.0f);
+  ImGui::SetCursorScreenPos(pos);
+  ImGui::PushItemWidth(width);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f, 2.0f));
+  if (state->focus_rename_tab_input) {
+    ImGui::SetKeyboardFocusHere();
+    state->focus_rename_tab_input = false;
+  }
+  const bool submitted = ImGui::InputText("##rename_tab_inline",
+                                          state->rename_tab_buffer.data(),
+                                          state->rename_tab_buffer.size(),
+                                          ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_EnterReturnsTrue);
+  const bool active = ImGui::IsItemActive();
+  const bool escape = active && ImGui::IsKeyPressed(ImGuiKey_Escape);
+  const bool deactivated = ImGui::IsItemDeactivated();
+  ImGui::PopStyleVar();
+  ImGui::PopItemWidth();
+
+  if (escape) {
+    cancel_rename_tab(state);
+  } else if (submitted || deactivated) {
+    rename_runtime_tab(&session->layout, state);
+  }
 }
 
 bool curve_has_samples(const AppSession &session, const Curve &curve) {
@@ -1588,7 +1663,7 @@ void draw_plot(const AppSession &session, const Pane &pane, UiState *state) {
   ImPlot::PushStyleColor(ImPlotCol_PlotBorder, color_rgb(186, 190, 196));
   ImPlot::PushStyleColor(ImPlotCol_LegendBg, color_rgb(248, 249, 251, 0.92f));
   ImPlot::PushStyleColor(ImPlotCol_LegendBorder, color_rgb(168, 175, 184));
-  ImPlot::PushStyleColor(ImPlotCol_AxisGrid, color_rgb(226, 231, 236));
+  ImPlot::PushStyleColor(ImPlotCol_AxisGrid, color_rgb(212, 218, 225));
   ImPlot::PushStyleColor(ImPlotCol_AxisText, color_rgb(95, 103, 112));
 
   ImPlotFlags plot_flags = ImPlotFlags_NoTitle | ImPlotFlags_NoMenus | ImPlotFlags_Crosshairs;
@@ -1881,6 +1956,11 @@ void build_dock_tree(const WorkspaceNode &node, const WorkspaceTab &tab, int tab
   if (node.is_pane) {
     if (node.pane_index >= 0 && node.pane_index < static_cast<int>(tab.panes.size())) {
       ImGui::DockBuilderDockWindow(pane_window_name(tab_index, node.pane_index, tab.panes[static_cast<size_t>(node.pane_index)]).c_str(), dock_id);
+      if (ImGuiDockNode *dock_node = ImGui::DockBuilderGetNode(dock_id); dock_node != nullptr) {
+        dock_node->LocalFlags |= ImGuiDockNodeFlags_AutoHideTabBar |
+                                 ImGuiDockNodeFlags_NoWindowMenuButton |
+                                 ImGuiDockNodeFlags_NoCloseButton;
+      }
     }
     return;
   }
@@ -1917,7 +1997,7 @@ void ensure_dockspace(const WorkspaceTab &tab, int tab_index, TabUiState *tab_st
 
   const ImGuiID dockspace_id = dockspace_id_for_tab(tab_index);
   ImGui::DockBuilderRemoveNode(dockspace_id);
-  ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+  ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace | ImGuiDockNodeFlags_AutoHideTabBar);
   ImGui::DockBuilderSetNodeSize(dockspace_id, dockspace_size);
   build_dock_tree(tab.root, tab, tab_index, dockspace_id);
   ImGui::DockBuilderFinish(dockspace_id);
@@ -1935,6 +2015,7 @@ void draw_pane_windows(AppSession *session, UiState *state) {
     Pane &pane = tab->panes[i];
     std::optional<PaneMenuAction> menu_action;
     std::optional<PaneDropAction> drop_action;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2.0f, 2.0f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(250, 250, 251));
     ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(194, 198, 204));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, color_rgb(252, 252, 253));
@@ -1953,6 +2034,7 @@ void draw_pane_windows(AppSession *session, UiState *state) {
       drop_action = draw_pane_drop_target(state->active_tab_index, static_cast<int>(i));
     }
     ImGui::End();
+    ImGui::PopStyleVar();
     ImGui::PopStyleColor(5);
     if (menu_action.has_value() && apply_pane_menu_action(session, state, static_cast<int>(i), *menu_action)) {
       return;
@@ -1976,10 +2058,13 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
                                  ImGuiWindowFlags_NoScrollbar |
                                  ImGuiWindowFlags_NoScrollWithMouse;
   if (ImGui::Begin("##workspace_host", nullptr, flags)) {
+    const int selection_request = state->requested_tab_index;
+    std::optional<ImRect> rename_tab_rect;
     if (ImGui::BeginTabBar("##layout_tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
       enum class TabActionKind {
         None,
         New,
+        Rename,
         Duplicate,
         Close,
       };
@@ -1987,13 +2072,25 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
       int pending_tab_index = -1;
       for (size_t i = 0; i < session->layout.tabs.size(); ++i) {
         const WorkspaceTab &tab = session->layout.tabs[i];
-        const bool selected = static_cast<int>(i) == state->active_tab_index;
-        const bool opened = ImGui::BeginTabItem(tab.tab_name.empty() ? "tab" : tab.tab_name.c_str(),
-                                                nullptr,
-                                                selected ? ImGuiTabItemFlags_SetSelected : 0);
+        ImGuiTabItemFlags tab_flags = ImGuiTabItemFlags_None;
+        if (static_cast<int>(i) == selection_request) {
+          tab_flags |= ImGuiTabItemFlags_SetSelected;
+        }
+        const bool opened = ImGui::BeginTabItem(tab_item_label(tab, static_cast<int>(i)).c_str(), nullptr, tab_flags);
+        if (state->rename_tab_index == static_cast<int>(i)) {
+          rename_tab_rect = ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+        }
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+          pending_action = TabActionKind::Rename;
+          pending_tab_index = static_cast<int>(i);
+        }
         if (ImGui::BeginPopupContextItem()) {
           if (ImGui::MenuItem("New Tab")) {
             pending_action = TabActionKind::New;
+          }
+          if (ImGui::MenuItem("Rename Tab...")) {
+            pending_action = TabActionKind::Rename;
+            pending_tab_index = static_cast<int>(i);
           }
           if (ImGui::MenuItem("Duplicate Tab")) {
             pending_action = TabActionKind::Duplicate;
@@ -2007,30 +2104,50 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
         }
         if (opened) {
           state->active_tab_index = static_cast<int>(i);
+          session->layout.current_tab_index = state->active_tab_index;
           if (i < state->tabs.size()) {
             ensure_dockspace(tab, static_cast<int>(i), &state->tabs[i], ImGui::GetContentRegionAvail());
           }
-          ImGui::DockSpace(dockspace_id_for_tab(static_cast<int>(i)), ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+          ImGui::DockSpace(dockspace_id_for_tab(static_cast<int>(i)),
+                           ImVec2(0.0f, 0.0f),
+                           ImGuiDockNodeFlags_AutoHideTabBar |
+                             ImGuiDockNodeFlags_NoWindowMenuButton |
+                             ImGuiDockNodeFlags_NoCloseButton);
           ImGui::EndTabItem();
         }
       }
+      if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing)) {
+        pending_action = TabActionKind::New;
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("New Tab");
+      }
       ImGui::EndTabBar();
+
+      if (rename_tab_rect.has_value()) {
+        draw_inline_tab_editor(session, state, *rename_tab_rect);
+      }
 
       if (state->request_new_tab || pending_action == TabActionKind::New) {
         create_runtime_tab(&session->layout, state);
         state->request_new_tab = false;
+      } else if (pending_action == TabActionKind::Rename) {
+        begin_rename_tab(session->layout, state, pending_tab_index);
       } else if (state->request_duplicate_tab || pending_action == TabActionKind::Duplicate) {
         if (pending_tab_index >= 0) {
-          state->active_tab_index = pending_tab_index;
+          request_tab_selection(state, pending_tab_index);
         }
         duplicate_runtime_tab(&session->layout, state);
         state->request_duplicate_tab = false;
       } else if (state->request_close_tab || pending_action == TabActionKind::Close) {
         if (pending_tab_index >= 0) {
-          state->active_tab_index = pending_tab_index;
+          request_tab_selection(state, pending_tab_index);
         }
         close_runtime_tab(&session->layout, state);
         state->request_close_tab = false;
+      }
+      if (state->requested_tab_index == selection_request) {
+        state->requested_tab_index = -1;
       }
     }
   }
