@@ -105,6 +105,11 @@ struct SeriesAccumulator {
   std::unordered_map<std::string, std::vector<size_t>> list_scalar_slots;
 };
 
+struct LoadedRouteArtifacts {
+  std::vector<RouteSeries> series;
+  std::vector<LogEntry> logs;
+};
+
 struct LoadStats {
   using Clock = std::chrono::steady_clock;
   using TimePoint = Clock::time_point;
@@ -389,6 +394,158 @@ std::array<uint8_t, 3> parse_color(std::string_view color) {
     out[i] = static_cast<uint8_t>(parsed);
   }
   return out;
+}
+
+uint8_t android_priority_to_level(uint8_t priority) {
+  switch (priority) {
+    case 2:
+    case 3:
+      return 10;
+    case 4:
+      return 20;
+    case 5:
+      return 30;
+    case 6:
+      return 40;
+    case 7:
+    default:
+      return 50;
+  }
+}
+
+uint8_t alert_status_to_level(cereal::SelfdriveState::AlertStatus status) {
+  switch (status) {
+    case cereal::SelfdriveState::AlertStatus::NORMAL:
+      return 20;
+    case cereal::SelfdriveState::AlertStatus::USER_PROMPT:
+      return 30;
+    case cereal::SelfdriveState::AlertStatus::CRITICAL:
+      return 40;
+  }
+  return 20;
+}
+
+double android_wall_time_seconds(uint64_t timestamp) {
+  if (timestamp == 0) {
+    return 0.0;
+  }
+  if (timestamp > 1000000000000ULL) {
+    return static_cast<double>(timestamp) / 1.0e9;
+  }
+  if (timestamp > 1000000000ULL) {
+    return static_cast<double>(timestamp) / 1.0e6;
+  }
+  return static_cast<double>(timestamp);
+}
+
+std::string alert_message_text(const cereal::SelfdriveState::Reader &state) {
+  std::string text = state.getAlertText1().cStr();
+  const std::string text2 = state.getAlertText2().cStr();
+  if (!text2.empty()) {
+    text += " - " + text2;
+  }
+  return text;
+}
+
+bool same_log_entry(const LogEntry &a, const LogEntry &b) {
+  return a.mono_time == b.mono_time
+      && a.level == b.level
+      && a.source == b.source
+      && a.func == b.func
+      && a.message == b.message
+      && a.context == b.context
+      && a.origin == b.origin;
+}
+
+std::vector<LogEntry> extract_segment_logs(const std::vector<Event> &events) {
+  std::vector<LogEntry> logs;
+  logs.reserve(events.size() / 8);
+  std::string last_alert_key;
+
+  for (const Event &event_record : events) {
+    capnp::FlatArrayMessageReader event_reader(event_record.data);
+    const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
+    const double mono_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
+
+    switch (event_record.which) {
+      case cereal::Event::Which::LOG_MESSAGE:
+      case cereal::Event::Which::ERROR_LOG_MESSAGE: {
+        const std::string raw = event_record.which == cereal::Event::Which::LOG_MESSAGE
+          ? event.getLogMessage().cStr()
+          : event.getErrorLogMessage().cStr();
+        std::string parse_error;
+        const json11::Json parsed = json11::Json::parse(raw, parse_error);
+
+        LogEntry entry;
+        entry.mono_time = mono_time;
+        entry.boot_time = mono_time;
+        entry.origin = LogOrigin::Log;
+        entry.level = event_record.which == cereal::Event::Which::ERROR_LOG_MESSAGE ? 40 : 20;
+        entry.source = "log";
+        entry.message = raw;
+        if (parse_error.empty() && parsed.is_object()) {
+          entry.wall_time = parsed["created"].number_value();
+          if (parsed["levelnum"].is_number()) {
+            entry.level = static_cast<uint8_t>(parsed["levelnum"].int_value());
+          }
+          const std::string filename = parsed["filename"].string_value();
+          const int lineno = parsed["lineno"].is_number() ? parsed["lineno"].int_value() : 0;
+          entry.source = filename.empty() ? "log" : filename + (lineno > 0 ? ":" + std::to_string(lineno) : "");
+          entry.func = parsed["funcname"].string_value();
+          if (parsed["msg"].is_string()) {
+            entry.message = parsed["msg"].string_value();
+          }
+          if (!parsed["ctx"].is_null()) {
+            entry.context = parsed["ctx"].dump();
+          }
+        }
+        logs.push_back(std::move(entry));
+        break;
+      }
+      case cereal::Event::Which::ANDROID_LOG: {
+        const auto android = event.getAndroidLog();
+        LogEntry entry;
+        entry.mono_time = mono_time;
+        entry.boot_time = mono_time;
+        entry.wall_time = android_wall_time_seconds(android.getTs());
+        entry.level = android_priority_to_level(android.getPriority());
+        entry.source = android.hasTag() ? android.getTag().cStr() : "android";
+        entry.message = android.hasMessage() ? android.getMessage().cStr() : std::string();
+        entry.context = "pid=" + std::to_string(android.getPid()) + ", tid=" + std::to_string(android.getTid());
+        entry.origin = LogOrigin::Android;
+        logs.push_back(std::move(entry));
+        break;
+      }
+      case cereal::Event::Which::SELFDRIVE_STATE: {
+        const auto state = event.getSelfdriveState();
+        const std::string alert_type = state.getAlertType().cStr();
+        const std::string alert_text1 = state.getAlertText1().cStr();
+        if (alert_text1.empty() && alert_type.empty()) {
+          break;
+        }
+        const std::string current_key = alert_type + "\n" + alert_text1 + "\n" + std::string(state.getAlertText2().cStr());
+        if (current_key == last_alert_key) {
+          break;
+        }
+        last_alert_key = current_key;
+
+        LogEntry entry;
+        entry.mono_time = mono_time;
+        entry.boot_time = mono_time;
+        entry.level = alert_status_to_level(state.getAlertStatus());
+        entry.source = "alert";
+        entry.func = alert_type;
+        entry.message = alert_message_text(state);
+        entry.origin = LogOrigin::Alert;
+        logs.push_back(std::move(entry));
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return logs;
 }
 
 std::vector<double> normalize_sizes(const json11::Json &sizes_json, size_t child_count) {
@@ -922,7 +1079,7 @@ std::vector<RouteSeries> collect_series(SeriesAccumulator &&series) {
   return out;
 }
 
-RouteData build_route_data(std::vector<RouteSeries> &&series_list) {
+RouteData build_route_data(std::vector<RouteSeries> &&series_list, std::vector<LogEntry> &&logs) {
   RouteData route_data;
   route_data.series.reserve(series_list.size());
   route_data.paths.reserve(series_list.size());
@@ -941,6 +1098,33 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list) {
   std::sort(route_data.series.begin(), route_data.series.end(), [](const RouteSeries &a, const RouteSeries &b) {
     return a.path < b.path;
   });
+  std::sort(logs.begin(), logs.end(), [](const LogEntry &a, const LogEntry &b) {
+    return a.mono_time < b.mono_time;
+  });
+  logs.erase(std::unique(logs.begin(), logs.end(), [](const LogEntry &a, const LogEntry &b) {
+               return same_log_entry(a, b);
+             }),
+             logs.end());
+
+  std::vector<LogEntry> deduped_logs;
+  deduped_logs.reserve(logs.size());
+  for (LogEntry &entry : logs) {
+    if (!deduped_logs.empty()
+        && entry.origin == LogOrigin::Alert
+        && deduped_logs.back().origin == LogOrigin::Alert
+        && deduped_logs.back().func == entry.func
+        && deduped_logs.back().message == entry.message) {
+      continue;
+    }
+    deduped_logs.push_back(std::move(entry));
+  }
+  route_data.logs = std::move(deduped_logs);
+
+  if (!route_data.has_time_range && !route_data.logs.empty()) {
+    route_data.has_time_range = true;
+    route_data.x_min = route_data.logs.front().mono_time;
+    route_data.x_max = route_data.logs.back().mono_time;
+  }
 
   if (route_data.has_time_range) {
     const double time_offset = route_data.x_min;
@@ -948,6 +1132,10 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list) {
       for (double &tm : series.times) {
         tm -= time_offset;
       }
+    }
+    for (LogEntry &entry : route_data.logs) {
+      entry.boot_time = entry.mono_time;
+      entry.mono_time -= time_offset;
     }
     route_data.x_max -= time_offset;
     route_data.x_min = 0.0;
@@ -1091,12 +1279,13 @@ SeriesAccumulator extract_segment_series(const std::vector<Event> &events,
   return merged;
 }
 
-std::vector<RouteSeries> load_route_series_parallel(
+LoadedRouteArtifacts load_route_series_parallel(
     const std::map<int, SegmentLogs> &segments,
     const SchemaIndex &schema,
     LoadStats *stats) {
   struct SegmentResult {
     SeriesAccumulator series;
+    std::vector<LogEntry> logs;
   };
 
   const std::vector<std::pair<int, SegmentLogs>> segment_list(segments.begin(), segments.end());
@@ -1157,6 +1346,7 @@ std::vector<RouteSeries> load_route_series_parallel(
 
       const auto extract_start = LoadStats::Clock::now();
       results[index].series = extract_segment_series(reader.events, schema, worker_budget, segment_workers);
+      results[index].logs = extract_segment_logs(reader.events);
       segment_stats.extract_seconds = std::chrono::duration<double>(LoadStats::Clock::now() - extract_start).count();
       segment_stats.event_count = reader.events.size();
       segment_stats.series_count = populated_series_count(results[index].series);
@@ -1183,9 +1373,19 @@ std::vector<RouteSeries> load_route_series_parallel(
   for (size_t i = 0; i < results.size(); ++i) {
     merge_series_accumulator(&merged, &results[i].series);
   }
-  std::vector<RouteSeries> all_series = collect_series(std::move(merged));
+  std::vector<LogEntry> logs;
+  for (SegmentResult &result : results) {
+    if (!result.logs.empty()) {
+      logs.insert(logs.end(),
+                  std::make_move_iterator(result.logs.begin()),
+                  std::make_move_iterator(result.logs.end()));
+    }
+  }
+  LoadedRouteArtifacts artifacts;
+  artifacts.series = collect_series(std::move(merged));
+  artifacts.logs = std::move(logs);
   stats->merge_end = LoadStats::Clock::now();
-  return all_series;
+  return artifacts;
 }
 
 std::vector<std::string> collect_layout_roots(const SketchLayout &layout) {
@@ -1252,8 +1452,8 @@ RouteData load_route_data(const std::string &route_name,
   stats.publish(RouteLoadStage::Resolving, 0, {});
 
   const SchemaIndex &schema = SchemaIndex::instance();
-  std::vector<RouteSeries> series = load_route_series_parallel(segments, schema, &stats);
-  RouteData route_data = build_route_data(std::move(series));
+  LoadedRouteArtifacts artifacts = load_route_series_parallel(segments, schema, &stats);
+  RouteData route_data = build_route_data(std::move(artifacts.series), std::move(artifacts.logs));
   build_road_camera_index(segments, &route_data);
   stats.load_end = LoadStats::Clock::now();
   stats.publish(RouteLoadStage::Finished, segments.size(), {});

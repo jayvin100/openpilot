@@ -13,6 +13,7 @@ jot_sources = [
   "main.cc",
   "app.cc",
   "app_custom_series.cc",
+  "app_logs.cc",
   "app_runtime.cc",
   "bootstrap_icons.cc",
   "sketch_layout.cc",

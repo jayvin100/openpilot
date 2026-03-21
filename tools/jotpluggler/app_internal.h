@@ -63,6 +63,23 @@ struct CustomSeriesEditorState {
   bool preview_is_result = false;
 };
 
+enum class LogTimeMode : uint8_t {
+  Route,
+  Boot,
+  WallClock,
+};
+
+struct LogsUiState {
+  bool selected = false;
+  bool request_select = false;
+  int min_level = 20;
+  int expanded_index = -1;
+  std::string search;
+  std::string source_filter;
+  double last_auto_scroll_time = -1.0;
+  LogTimeMode time_mode = LogTimeMode::Route;
+};
+
 struct UiState {
   bool open_open_route = false;
   bool open_load_layout = false;
@@ -108,6 +125,7 @@ struct UiState {
   double playback_rate = 1.0;
   double playback_step = 0.1;
   CustomSeriesEditorState custom_series;
+  LogsUiState logs;
 };
 
 inline ImVec4 color_rgb(int r, int g, int b, float alpha = 1.0f) {

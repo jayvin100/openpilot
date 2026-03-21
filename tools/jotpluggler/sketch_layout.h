@@ -92,11 +92,30 @@ struct CameraFeedIndex {
   std::vector<CameraFrameIndexEntry> entries;
 };
 
+enum class LogOrigin : uint8_t {
+  Log,
+  Android,
+  Alert,
+};
+
+struct LogEntry {
+  double mono_time = 0.0;
+  double boot_time = 0.0;
+  double wall_time = 0.0;
+  uint8_t level = 20;
+  std::string source;
+  std::string func;
+  std::string message;
+  std::string context;
+  LogOrigin origin = LogOrigin::Log;
+};
+
 struct RouteData {
   std::vector<RouteSeries> series;
   std::vector<std::string> paths;
   std::vector<std::string> roots;
   CameraFeedIndex road_camera;
+  std::vector<LogEntry> logs;
   bool has_time_range = false;
   double x_min = 0.0;
   double x_max = 1.0;

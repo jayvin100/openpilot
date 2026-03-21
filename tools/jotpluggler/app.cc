@@ -1,5 +1,6 @@
 #include "tools/jotpluggler/app_custom_series.h"
 #include "tools/jotpluggler/app_internal.h"
+#include "tools/jotpluggler/app_logs.h"
 #include "tools/jotpluggler/app_runtime.h"
 #include "tools/jotpluggler/bootstrap_icons.h"
 #include "imgui_impl_glfw.h"
@@ -2507,6 +2508,7 @@ void draw_pane_windows(AppSession *session, UiState *state) {
 
 void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
   state->custom_series.selected = false;
+  state->logs.selected = false;
   ImGui::SetNextWindowPos(ImVec2(ui.content_x, ui.content_y));
   ImGui::SetNextWindowSize(ImVec2(ui.content_w, ui.content_h));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -2583,6 +2585,16 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
                              ImGuiDockNodeFlags_NoCloseButton);
           ImGui::EndTabItem();
         }
+      }
+      ImGuiTabItemFlags logs_flags = ImGuiTabItemFlags_None;
+      if (state->logs.request_select) {
+        logs_flags |= ImGuiTabItemFlags_SetSelected;
+      }
+      if (ImGui::BeginTabItem("Logs##workspace_logs", nullptr, logs_flags)) {
+        state->logs.request_select = false;
+        state->logs.selected = true;
+        draw_logs_tab(session, state);
+        ImGui::EndTabItem();
       }
       if (custom_series_tab_open) {
         ImGuiTabItemFlags custom_flags = ImGuiTabItemFlags_None;
@@ -2910,7 +2922,7 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   draw_sidebar(session, ui, state, show_camera_feed);
   draw_sidebar_resizer(ui, state);
   draw_workspace(session, ui, state);
-  if (!state->custom_series.selected) {
+  if (!state->custom_series.selected && !state->logs.selected) {
     draw_pane_windows(session, state);
   }
   draw_status_bar(*session, ui, state);
