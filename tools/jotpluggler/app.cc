@@ -49,6 +49,8 @@ namespace {
 constexpr const char *kUntitledPaneTitle = "...";
 
 constexpr float kSidebarWidth = 282.0f;
+constexpr float kSidebarMinWidth = 220.0f;
+constexpr float kSidebarMaxWidth = 520.0f;
 constexpr float kContentGap = 0.0f;
 constexpr float kContentRightPadding = 0.0f;
 constexpr float kStatusBarHeight = 40.0f;
@@ -141,6 +143,7 @@ struct UiState {
   std::string error_text;
   bool open_error_popup = false;
   std::string status_text = "Ready";
+  float sidebar_width = kSidebarWidth;
   double route_x_min = 0.0;
   double route_x_max = 1.0;
   double x_view_min = 0.0;
@@ -490,11 +493,11 @@ public:
     cv_.notify_one();
   }
 
-  void draw(float width) {
+  void draw(float width, bool loading) {
     const float preview_width = std::max(1.0f, width);
     const float preview_height = preview_width * preview_aspect();
     if (texture_ != 0) {
-      ImGui::Image(static_cast<ImTextureID>(static_cast<intptr_t>(texture_)), ImVec2(preview_width, preview_height));
+      ImGui::Image(static_cast<ImTextureID>(texture_), ImVec2(preview_width, preview_height));
     } else {
       const ImVec2 top_left = ImGui::GetCursorScreenPos();
       const ImVec2 size(preview_width, preview_height);
@@ -504,7 +507,7 @@ public:
       draw_list->AddRectFilled(top_left, ImVec2(top_left.x + size.x, top_left.y + size.y), IM_COL32(213, 217, 223, 255));
       draw_list->AddRect(top_left, ImVec2(top_left.x + size.x, top_left.y + size.y), IM_COL32(172, 178, 186, 255));
 
-      const char *label = has_video_source() ? "loading video" : "no video";
+      const char *label = (loading || has_video_source()) ? "loading" : "no video";
       const ImVec2 text_size = ImGui::CalcTextSize(label);
       const ImVec2 text_pos(top_left.x + (size.x - text_size.x) * 0.5f,
                             top_left.y + (size.y - text_size.y) * 0.5f);
@@ -1014,11 +1017,12 @@ void configure_style() {
   input_map.SelectMod = ImGuiMod_None;
 }
 
-UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset) {
+UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset, float sidebar_width) {
   UiMetrics ui;
   ui.width = size.x;
   ui.height = size.y;
   ui.top_offset = top_offset;
+  ui.sidebar_width = std::clamp(sidebar_width, kSidebarMinWidth, std::min(kSidebarMaxWidth, size.x * 0.6f));
   ui.content_x = ui.sidebar_width + kContentGap;
   ui.content_y = top_offset;
   ui.content_w = std::max(1.0f, size.x - ui.content_x - kContentRightPadding);
@@ -2067,6 +2071,34 @@ void draw_browser_node(AppSession *session,
   }
 }
 
+void draw_sidebar_resizer(const UiMetrics &ui, UiState *state) {
+  constexpr float kHandleWidth = 6.0f;
+  ImGui::SetNextWindowPos(ImVec2(ui.sidebar_width - kHandleWidth * 0.5f, ui.top_offset));
+  ImGui::SetNextWindowSize(ImVec2(kHandleWidth, std::max(1.0f, ui.height - ui.top_offset)));
+  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                                 ImGuiWindowFlags_NoMove |
+                                 ImGuiWindowFlags_NoResize |
+                                 ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoBackground;
+  if (ImGui::Begin("##sidebar_resizer", nullptr, flags)) {
+    ImGui::InvisibleButton("##sidebar_resizer_button", ImGui::GetContentRegionAvail());
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+    if (ImGui::IsItemActive()) {
+      const float max_width = std::min(kSidebarMaxWidth, ui.width * 0.6f);
+      state->sidebar_width = std::clamp(ImGui::GetIO().MousePos.x, kSidebarMinWidth, max_width);
+    }
+
+    ImDrawList *draw_list = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetWindowPos();
+    draw_list->AddLine(ImVec2(origin.x + kHandleWidth * 0.5f, origin.y),
+                       ImVec2(origin.x + kHandleWidth * 0.5f, origin.y + std::max(1.0f, ui.height - ui.top_offset)),
+                       IM_COL32(194, 198, 204, 255));
+  }
+  ImGui::End();
+}
+
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed) {
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.top_offset));
   ImGui::SetNextWindowSize(ImVec2(ui.sidebar_width, std::max(1.0f, ui.height - ui.top_offset)));
@@ -2077,12 +2109,12 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
                                  ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoSavedSettings;
   if (ImGui::Begin("##sidebar", nullptr, flags)) {
+    const RouteLoadSnapshot load = session->route_loader ? session->route_loader->snapshot() : RouteLoadSnapshot{};
     if (show_camera_feed && session->camera_feed) {
-      session->camera_feed->draw(ImGui::GetContentRegionAvail().x);
+      session->camera_feed->draw(ImGui::GetContentRegionAvail().x, load.active);
     }
 
     if (session->route_loader) {
-      const RouteLoadSnapshot load = session->route_loader->snapshot();
       if (load.active || load.total_segments > 0) {
         const float total = static_cast<float>(std::max<size_t>(1, load.total_segments));
         const float progress = load.total_segments == 0
@@ -3595,13 +3627,18 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
     step_tracker(state, 1.0);
   }
+  if (!ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+    state->playback_playing = !state->playback_playing;
+  }
   advance_playback(state);
   if (show_camera_feed && session->camera_feed && state->has_tracker_time) {
     session->camera_feed->update(state->tracker_time);
   }
   const float menu_height = draw_main_menu_bar(session, state);
-  const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height);
+  const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height, state->sidebar_width);
+  state->sidebar_width = ui.sidebar_width;
   draw_sidebar(session, ui, state, show_camera_feed);
+  draw_sidebar_resizer(ui, state);
   draw_workspace(session, ui, state);
   draw_pane_windows(session, state);
   draw_status_bar(*session, ui, state);
