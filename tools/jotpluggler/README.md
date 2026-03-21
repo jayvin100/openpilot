@@ -3,7 +3,7 @@
 `jotpluggler` is the product-side log plotting app.
 
 Current scope:
-- native C++ parsing of PlotJuggler layout XML
+- native C++ parsing of JotPlugger JSON layouts converted from PlotJuggler
 - native C++ route-wide extraction of direct numeric `/service/path` series
 - schema-indexed fast route loading with parallel segment workers
 - GLFW + Dear ImGui + ImPlot rendering
@@ -34,7 +34,7 @@ Open the app interactively:
 ./tools/jotpluggler/jotpluggler
 ```
 
-Open a specific PlotJuggler layout:
+Open a specific converted layout:
 
 ```bash
 ./tools/jotpluggler/jotpluggler --layout longitudinal --demo
@@ -55,6 +55,7 @@ Export a screenshot without opening a visible window:
 If you omit `--layout`, JotPlugger starts with a blank one-pane workspace.
 If you omit the route too, JotPlugger starts as an empty shell like PlotJuggler.
 `--demo` only provides the bundled demo route.
+Converted layouts live under [tools/jotpluggler/layouts](/home/batman/threepilot/tools/jotpluggler/layouts), and the app still accepts a sibling `.xml` path for compatibility when a matching `.json` exists.
 The app also accepts a positional `route` like the other log tools, plus `--data-dir`.
 Interactive `--show` mode now opens the window first and loads route data in the background.
 Use `--sync-load` when you want deterministic blocking startup, for example screenshot capture or validation.

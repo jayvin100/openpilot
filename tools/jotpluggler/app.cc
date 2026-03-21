@@ -841,7 +841,7 @@ std::optional<fs::path> jetbrains_mono_font_path() {
 
 std::string layout_name_from_arg(const std::string &layout_arg) {
   const fs::path raw(layout_arg);
-  if (raw.extension() == ".xml") {
+  if (raw.extension() == ".xml" || raw.extension() == ".json") {
     return raw.stem().string();
   }
   if (raw.filename() != raw) {
@@ -854,9 +854,15 @@ std::string layout_name_from_arg(const std::string &layout_arg) {
 fs::path resolve_layout_path(const std::string &layout_arg) {
   const fs::path direct(layout_arg);
   if (fs::exists(direct)) {
-    return fs::absolute(direct);
+    if (direct.extension() == ".json") {
+      return fs::absolute(direct);
+    }
+    const fs::path sibling_json = direct.parent_path() / (direct.stem().string() + ".json");
+    if (direct.extension() == ".xml" && fs::exists(sibling_json)) {
+      return fs::absolute(sibling_json);
+    }
   }
-  const fs::path candidate = repo_root() / "tools" / "plotjuggler" / "layouts" / (layout_name_from_arg(layout_arg) + ".xml");
+  const fs::path candidate = repo_root() / "tools" / "jotpluggler" / "layouts" / (layout_name_from_arg(layout_arg) + ".json");
   if (!fs::exists(candidate)) {
     throw std::runtime_error("Unknown layout: " + layout_arg);
   }
@@ -864,7 +870,7 @@ fs::path resolve_layout_path(const std::string &layout_arg) {
 }
 
 fs::path layouts_dir() {
-  return repo_root() / "tools" / "plotjuggler" / "layouts";
+  return repo_root() / "tools" / "jotpluggler" / "layouts";
 }
 
 std::string sanitize_layout_stem(std::string_view name) {
@@ -896,7 +902,7 @@ fs::path autosave_dir() {
 
 fs::path autosave_path_for_layout(const fs::path &layout_path) {
   const std::string stem = layout_path.empty() ? "untitled" : layout_path.stem().string();
-  return autosave_dir() / (sanitize_layout_stem(stem) + ".xml");
+  return autosave_dir() / (sanitize_layout_stem(stem) + ".json");
 }
 
 std::vector<std::string> available_layout_names() {
@@ -906,7 +912,7 @@ std::vector<std::string> available_layout_names() {
     return names;
   }
   for (const auto &entry : fs::directory_iterator(root)) {
-    if (!entry.is_regular_file() || entry.path().extension() != ".xml") {
+    if (!entry.is_regular_file() || entry.path().extension() != ".json") {
       continue;
     }
     names.push_back(entry.path().stem().string());
@@ -915,29 +921,13 @@ std::vector<std::string> available_layout_names() {
   return names;
 }
 
-std::string xml_escape(std::string_view text) {
-  std::string escaped;
-  escaped.reserve(text.size());
-  for (const char c : text) {
-    switch (c) {
-      case '&': escaped += "&amp;"; break;
-      case '<': escaped += "&lt;"; break;
-      case '>': escaped += "&gt;"; break;
-      case '"': escaped += "&quot;"; break;
-      case '\'': escaped += "&apos;"; break;
-      default: escaped.push_back(c); break;
-    }
-  }
-  return escaped;
-}
-
 std::string curve_color_hex(const std::array<uint8_t, 3> &color) {
   char buf[8] = {};
   std::snprintf(buf, sizeof(buf), "#%02x%02x%02x", color[0], color[1], color[2]);
   return buf;
 }
 
-std::string format_xml_double(double value) {
+std::string format_json_double(double value) {
   std::ostringstream out;
   out << std::fixed << std::setprecision(6) << value;
   return out.str();
@@ -1263,7 +1253,7 @@ void sync_route_buffers(UiState *state, const AppSession &session) {
 }
 
 fs::path default_layout_save_path(const AppSession &session) {
-  return session.layout_path.empty() ? layouts_dir() / "new-layout.xml" : session.layout_path;
+  return session.layout_path.empty() ? layouts_dir() / "new-layout.json" : session.layout_path;
 }
 
 void sync_layout_buffers(UiState *state, const AppSession &session) {
@@ -1548,120 +1538,163 @@ void write_indent(std::ostream &out, int spaces) {
   out << std::string(static_cast<size_t>(std::max(spaces, 0)), ' ');
 }
 
-void write_curve_xml(std::ostream &out, const Curve &curve, int indent) {
+void write_curve_json(std::ostream &out, const Curve &curve, int indent) {
   if (curve.runtime_only) {
     return;
   }
   write_indent(out, indent);
-  out << "<curve name=\"" << xml_escape(curve.name) << "\" color=\"" << curve_color_hex(curve.color) << "\"";
-  const bool has_transform = curve.derivative
-    || std::abs(curve.value_scale - 1.0) > 1.0e-9
-    || std::abs(curve.value_offset) > 1.0e-9;
-  if (!has_transform) {
-    out << "/>\n";
-    return;
-  }
-
-  out << ">\n";
+  out << "{"
+      << "\"name\": \"" << json_escape(curve.name) << "\", "
+      << "\"color\": \"" << curve_color_hex(curve.color) << "\"";
   if (curve.derivative) {
-    write_indent(out, indent + 1);
-    out << "<transform name=\"Derivative\"/>\n";
+    out << ", \"transform\": \"derivative\"";
+  } else if (std::abs(curve.value_scale - 1.0) > 1.0e-9 || std::abs(curve.value_offset) > 1.0e-9) {
+    out << ", \"transform\": \"scale\""
+        << ", \"scale\": " << format_json_double(curve.value_scale)
+        << ", \"offset\": " << format_json_double(curve.value_offset);
   }
-  if (std::abs(curve.value_scale - 1.0) > 1.0e-9 || std::abs(curve.value_offset) > 1.0e-9) {
-    write_indent(out, indent + 1);
-    out << "<transform name=\"Scale/Offset\">\n";
-    write_indent(out, indent + 2);
-    out << "<options value_scale=\"" << format_xml_double(curve.value_scale)
-        << "\" value_offset=\"" << format_xml_double(curve.value_offset) << "\"/>\n";
-    write_indent(out, indent + 1);
-    out << "</transform>\n";
-  }
-  write_indent(out, indent);
-  out << "</curve>\n";
+  out << "}";
 }
 
-void write_workspace_node_xml(std::ostream &out, const WorkspaceNode &node, const WorkspaceTab &tab, int indent) {
+void write_range_json(std::ostream &out, const PlotRange &range) {
+  out << "{"
+      << "\"left\": " << format_json_double(range.left)
+      << ", \"right\": " << format_json_double(range.right)
+      << ", \"top\": " << format_json_double(range.top)
+      << ", \"bottom\": " << format_json_double(range.bottom)
+      << "}";
+}
+
+void write_y_limits_json(std::ostream &out, const PlotRange &range) {
+  out << "{";
+  bool first = true;
+  if (range.has_y_limit_min) {
+    out << "\"min\": " << format_json_double(range.y_limit_min);
+    first = false;
+  }
+  if (range.has_y_limit_max) {
+    if (!first) {
+      out << ", ";
+    }
+    out << "\"max\": " << format_json_double(range.y_limit_max);
+  }
+  out << "}";
+}
+
+void write_workspace_node_json(std::ostream &out, const WorkspaceNode &node, const WorkspaceTab &tab, int indent) {
   if (node.is_pane) {
     if (node.pane_index < 0 || node.pane_index >= static_cast<int>(tab.panes.size())) {
       return;
     }
     const Pane &pane = tab.panes[static_cast<size_t>(node.pane_index)];
     write_indent(out, indent);
-    out << "<DockArea name=\"" << xml_escape(pane.title.empty() ? std::string(kUntitledPaneTitle) : pane.title) << "\">\n";
-    write_indent(out, indent + 1);
-    out << "<plot flip_y=\"false\" flip_x=\"false\" mode=\"TimeSeries\" style=\"Lines\">\n";
+    out << "{\n";
     write_indent(out, indent + 2);
-    out << "<range left=\"" << format_xml_double(pane.range.left)
-        << "\" top=\"" << format_xml_double(pane.range.top)
-        << "\" bottom=\"" << format_xml_double(pane.range.bottom)
-        << "\" right=\"" << format_xml_double(pane.range.right) << "\"/>\n";
+    out << "\"title\": \"" << json_escape(pane.title.empty() ? std::string(kUntitledPaneTitle) : pane.title) << "\"";
+    if (pane.range.valid) {
+      out << ",\n";
+      write_indent(out, indent + 2);
+      out << "\"range\": ";
+      write_range_json(out, pane.range);
+    }
+    if (pane.range.has_y_limit_min || pane.range.has_y_limit_max) {
+      out << ",\n";
+      write_indent(out, indent + 2);
+      out << "\"y_limits\": ";
+      write_y_limits_json(out, pane.range);
+    }
+    out << ",\n";
     write_indent(out, indent + 2);
-    out << "<limitY";
-    if (pane.range.has_y_limit_min) {
-      out << " min=\"" << format_xml_double(pane.range.y_limit_min) << "\"";
-    }
-    if (pane.range.has_y_limit_max) {
-      out << " max=\"" << format_xml_double(pane.range.y_limit_max) << "\"";
-    }
-    out << "/>\n";
+    out << "\"curves\": [";
+    bool first_curve = true;
     for (const Curve &curve : pane.curves) {
-      write_curve_xml(out, curve, indent + 2);
+      if (curve.runtime_only) {
+        continue;
+      }
+      if (first_curve) {
+        out << "\n";
+        first_curve = false;
+      } else {
+        out << ",\n";
+      }
+      write_curve_json(out, curve, indent + 4);
     }
-    write_indent(out, indent + 1);
-    out << "</plot>\n";
+    if (!first_curve) {
+      out << "\n";
+      write_indent(out, indent + 2);
+    }
+    out << "]\n";
     write_indent(out, indent);
-    out << "</DockArea>\n";
+    out << "}";
     return;
   }
 
   if (node.children.empty()) {
     return;
   }
-  const char orientation = node.orientation == SplitOrientation::Horizontal ? '|' : '-';
   write_indent(out, indent);
-  out << "<DockSplitter orientation=\"" << orientation << "\" sizes=\"";
+  out << "{\n";
+  write_indent(out, indent + 2);
+  out << "\"split\": \"" << (node.orientation == SplitOrientation::Horizontal ? "horizontal" : "vertical") << "\",\n";
+  write_indent(out, indent + 2);
+  out << "\"sizes\": [";
   for (size_t i = 0; i < node.children.size(); ++i) {
     if (i != 0) {
-      out << ';';
+      out << ", ";
     }
     const float size = i < node.sizes.size() ? node.sizes[i] : 1.0f / static_cast<float>(node.children.size());
-    out << format_xml_double(size);
+    out << format_json_double(size);
   }
-  out << "\" count=\"" << node.children.size() << "\">\n";
-  for (const WorkspaceNode &child : node.children) {
-    write_workspace_node_xml(out, child, tab, indent + 1);
+  out << "],\n";
+  write_indent(out, indent + 2);
+  out << "\"children\": [\n";
+  for (size_t i = 0; i < node.children.size(); ++i) {
+    write_workspace_node_json(out, node.children[i], tab, indent + 4);
+    if (i + 1 < node.children.size()) {
+      out << ",";
+    }
+    out << "\n";
   }
+  write_indent(out, indent + 2);
+  out << "]\n";
   write_indent(out, indent);
-  out << "</DockSplitter>\n";
+  out << "}";
 }
 
-void save_layout_xml(const SketchLayout &layout, const fs::path &path) {
+void save_layout_json(const SketchLayout &layout, const fs::path &path) {
   ensure_parent_dir(path);
   std::ofstream out(path);
   if (!out) {
     throw std::runtime_error("Failed to open layout for writing: " + path.string());
   }
 
-  out << "<?xml version='1.0' encoding='UTF-8'?>\n";
-  out << "<root>\n";
-  out << " <tabbed_widget name=\"Main Window\" parent=\"main_window\">\n";
-  for (const WorkspaceTab &tab : layout.tabs) {
-    out << "  <Tab tab_name=\"" << xml_escape(tab.tab_name) << "\" containers=\"1\">\n";
-    out << "   <Container>\n";
-    write_workspace_node_xml(out, tab.root, tab, 4);
-    out << "   </Container>\n";
-    out << "  </Tab>\n";
+  out << "{\n";
+  write_indent(out, 2);
+  out << "\"current_tab_index\": "
+      << std::clamp(layout.current_tab_index, 0, std::max(0, static_cast<int>(layout.tabs.size()) - 1))
+      << ",\n";
+  write_indent(out, 2);
+  out << "\"tabs\": [\n";
+  for (size_t i = 0; i < layout.tabs.size(); ++i) {
+    const WorkspaceTab &tab = layout.tabs[i];
+    write_indent(out, 4);
+    out << "{\n";
+    write_indent(out, 6);
+    out << "\"name\": \"" << json_escape(tab.tab_name) << "\",\n";
+    write_indent(out, 6);
+    out << "\"root\": ";
+    write_workspace_node_json(out, tab.root, tab, 6);
+    out << "\n";
+    write_indent(out, 4);
+    out << "}";
+    if (i + 1 < layout.tabs.size()) {
+      out << ",";
+    }
+    out << "\n";
   }
-  out << "  <currentTabIndex index=\"" << std::clamp(layout.current_tab_index, 0, std::max(0, static_cast<int>(layout.tabs.size()) - 1)) << "\"/>\n";
-  out << " </tabbed_widget>\n";
-  out << " <use_relative_time_offset enabled=\"1\"/>\n";
-  out << " <Plugins>\n";
-  out << "  <plugin ID=\"DataLoad Rlog\"/>\n";
-  out << "  <plugin ID=\"Cereal Subscriber\"/>\n";
-  out << " </Plugins>\n";
-  out << " <customMathEquations/>\n";
-  out << " <snippets/>\n";
-  out << "</root>\n";
+  write_indent(out, 2);
+  out << "]\n";
+  out << "}\n";
 }
 
 void clear_layout_autosave(const AppSession &session) {
@@ -1676,7 +1709,7 @@ bool autosave_layout(AppSession *session, UiState *state) {
       session->autosave_path = autosave_path_for_layout(session->layout_path);
     }
     session->layout.current_tab_index = state->active_tab_index;
-    save_layout_xml(session->layout, session->autosave_path);
+    save_layout_json(session->layout, session->autosave_path);
     state->layout_dirty = true;
     return true;
   } catch (const std::exception &err) {
@@ -4378,7 +4411,7 @@ bool save_layout(AppSession *session, UiState *state, const std::string &layout_
     session->layout.current_tab_index = state->active_tab_index;
     const fs::path previous_autosave = session->autosave_path;
     const fs::path output = fs::absolute(fs::path(layout_path));
-    save_layout_xml(session->layout, output);
+    save_layout_json(session->layout, output);
     session->layout_path = output;
     session->autosave_path = autosave_path_for_layout(output);
     if (!previous_autosave.empty() && previous_autosave != session->autosave_path && fs::exists(previous_autosave)) {
@@ -4484,7 +4517,7 @@ void draw_popups(AppSession *session, UiState *state) {
     ImGui::EndPopup();
   }
   if (ImGui::BeginPopupModal("Load Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Load a PlotJuggler XML layout.");
+    ImGui::TextUnformatted("Load a JotPlugger JSON layout.");
     ImGui::Separator();
     ImGui::InputText("Layout", state->load_layout_buffer.data(), state->load_layout_buffer.size());
     ImGui::Spacing();
@@ -4501,7 +4534,7 @@ void draw_popups(AppSession *session, UiState *state) {
     ImGui::EndPopup();
   }
   if (ImGui::BeginPopupModal("Save Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Save the current workspace as a PlotJuggler XML layout.");
+    ImGui::TextUnformatted("Save the current workspace as a JotPlugger JSON layout.");
     ImGui::Separator();
     ImGui::InputText("Layout", state->save_layout_buffer.data(), state->save_layout_buffer.size());
     ImGui::Spacing();

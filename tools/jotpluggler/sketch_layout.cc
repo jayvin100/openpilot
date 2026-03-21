@@ -1,8 +1,6 @@
 #include "tools/jotpluggler/sketch_layout.h"
 
 #include <capnp/dynamic.h>
-#include <libxml/parser.h>
-#include <libxml/tree.h>
 
 #include <algorithm>
 #include <cctype>
@@ -212,80 +210,6 @@ struct LoadStats {
   mutable std::mutex progress_mutex;
 };
 
-bool is_element(xmlNodePtr node, const char *name) {
-  return node != nullptr && node->type == XML_ELEMENT_NODE && xmlStrEqual(node->name, BAD_CAST name);
-}
-
-xmlNodePtr first_child(xmlNodePtr parent, const char *name) {
-  if (parent == nullptr) {
-    return nullptr;
-  }
-  for (xmlNodePtr child = parent->children; child != nullptr; child = child->next) {
-    if (is_element(child, name)) {
-      return child;
-    }
-  }
-  return nullptr;
-}
-
-xmlNodePtr first_descendant(xmlNodePtr node, const char *name) {
-  for (xmlNodePtr cur = node; cur != nullptr; cur = cur->next) {
-    if (is_element(cur, name)) {
-      return cur;
-    }
-    if (xmlNodePtr found = first_descendant(cur->children, name); found != nullptr) {
-      return found;
-    }
-  }
-  return nullptr;
-}
-
-std::vector<xmlNodePtr> split_children(xmlNodePtr node) {
-  std::vector<xmlNodePtr> out;
-  if (node == nullptr) {
-    return out;
-  }
-  for (xmlNodePtr child = node->children; child != nullptr; child = child->next) {
-    if (is_element(child, "DockSplitter") || is_element(child, "DockArea")) {
-      out.push_back(child);
-    }
-  }
-  return out;
-}
-
-std::string attr(xmlNodePtr node, const char *name, std::string default_value = "") {
-  if (node == nullptr) {
-    return default_value;
-  }
-  xmlChar *raw = xmlGetProp(node, BAD_CAST name);
-  if (raw == nullptr) {
-    return default_value;
-  }
-  std::string out(reinterpret_cast<const char *>(raw));
-  xmlFree(raw);
-  return out;
-}
-
-double attr_double(xmlNodePtr node, const char *name, double default_value) {
-  const std::string value = attr(node, name);
-  if (value.empty()) {
-    return default_value;
-  }
-  char *end = nullptr;
-  const double parsed = std::strtod(value.c_str(), &end);
-  return end != nullptr && *end == '\0' ? parsed : default_value;
-}
-
-int attr_int(xmlNodePtr node, const char *name, int default_value) {
-  const std::string value = attr(node, name);
-  if (value.empty()) {
-    return default_value;
-  }
-  char *end = nullptr;
-  const long parsed = std::strtol(value.c_str(), &end, 10);
-  return end != nullptr && *end == '\0' ? static_cast<int>(parsed) : default_value;
-}
-
 std::string curve_label(std::string_view series_name) {
   return std::string(series_name.empty() ? std::string_view{"plot"} : series_name);
 }
@@ -467,21 +391,14 @@ std::array<uint8_t, 3> parse_color(std::string_view color) {
   return out;
 }
 
-std::vector<double> normalize_sizes(std::string_view sizes_text, size_t child_count) {
+std::vector<double> normalize_sizes(const json11::Json &sizes_json, size_t child_count) {
   std::vector<double> parsed;
-  size_t start = 0;
-  while (start <= sizes_text.size()) {
-    size_t end = sizes_text.find(';', start);
-    const std::string part(sizes_text.substr(start, end == std::string_view::npos ? sizes_text.size() - start : end - start));
-    if (!part.empty()) {
-      char *parse_end = nullptr;
-      const double value = std::strtod(part.c_str(), &parse_end);
-      parsed.push_back(parse_end != nullptr && *parse_end == '\0' ? std::max(value, 0.0) : 0.0);
+  if (sizes_json.is_array()) {
+    for (const json11::Json &value : sizes_json.array_items()) {
+      if (value.is_number()) {
+        parsed.push_back(std::max(value.number_value(), 0.0));
+      }
     }
-    if (end == std::string_view::npos) {
-      break;
-    }
-    start = end + 1;
   }
 
   if (parsed.size() != child_count || child_count == 0) {
@@ -498,103 +415,92 @@ std::vector<double> normalize_sizes(std::string_view sizes_text, size_t child_co
   return parsed;
 }
 
-PlotRange parse_range(xmlNodePtr plot_node) {
+PlotRange parse_range(const json11::Json &pane_node) {
   PlotRange range;
-  if (xmlNodePtr range_node = first_child(plot_node, "range"); range_node != nullptr) {
+  const json11::Json &range_node = pane_node["range"];
+  if (range_node.is_object()) {
     range.valid = true;
-    range.left = attr_double(range_node, "left", 0.0);
-    range.right = attr_double(range_node, "right", 0.0);
-    range.bottom = attr_double(range_node, "bottom", 0.0);
-    range.top = attr_double(range_node, "top", 1.0);
+    range.left = range_node["left"].number_value();
+    range.right = range_node["right"].number_value();
+    range.bottom = range_node["bottom"].number_value();
+    range.top = range_node["top"].is_number() ? range_node["top"].number_value() : 1.0;
   }
-  if (xmlNodePtr limit_y_node = first_child(plot_node, "limitY"); limit_y_node != nullptr) {
-    if (!attr(limit_y_node, "min").empty()) {
+  const json11::Json &limit_y_node = pane_node["y_limits"];
+  if (limit_y_node.is_object()) {
+    if (limit_y_node["min"].is_number()) {
       range.has_y_limit_min = true;
-      range.y_limit_min = attr_double(limit_y_node, "min", 0.0);
+      range.y_limit_min = limit_y_node["min"].number_value();
     }
-    if (!attr(limit_y_node, "max").empty()) {
+    if (limit_y_node["max"].is_number()) {
       range.has_y_limit_max = true;
-      range.y_limit_max = attr_double(limit_y_node, "max", 1.0);
+      range.y_limit_max = limit_y_node["max"].number_value();
     }
   }
   return range;
 }
 
-Curve parse_curve(xmlNodePtr curve_node) {
+Curve parse_curve(const json11::Json &curve_node) {
   Curve curve;
-  curve.name = attr(curve_node, "name");
+  curve.name = curve_node["name"].string_value();
   curve.label = curve_label(curve.name);
-  curve.color = parse_color(attr(curve_node, "color"));
+  curve.color = parse_color(curve_node["color"].string_value());
 
-  for (xmlNodePtr child = curve_node->children; child != nullptr; child = child->next) {
-    if (!is_element(child, "transform")) {
-      continue;
-    }
-
-    const std::string transform_name = attr(child, "name");
-    if (transform_name == "Derivative") {
-      curve.derivative = true;
-    } else if (transform_name == "Scale/Offset") {
-      xmlNodePtr options_node = first_child(child, "options");
-      curve.value_scale = attr_double(options_node, "value_scale", 1.0);
-      curve.value_offset = attr_double(options_node, "value_offset", 0.0);
-    }
+  const std::string transform_name = curve_node["transform"].string_value();
+  if (transform_name == "derivative") {
+    curve.derivative = true;
+  } else if (transform_name == "scale") {
+    curve.value_scale = curve_node["scale"].is_number() ? curve_node["scale"].number_value() : 1.0;
+    curve.value_offset = curve_node["offset"].is_number() ? curve_node["offset"].number_value() : 0.0;
   }
   return curve;
 }
 
-std::string pane_title(xmlNodePtr dock_area_node, const std::vector<Curve> &curves) {
-  (void)curves;
-  const std::string raw = attr(dock_area_node, "name");
+std::string pane_title(const json11::Json &dock_area_node) {
+  const std::string raw = dock_area_node["title"].string_value();
   return raw.empty() ? "..." : raw;
 }
 
-Pane parse_dock_area(xmlNodePtr dock_area_node) {
+Pane parse_dock_area(const json11::Json &dock_area_node) {
   Pane pane;
-  xmlNodePtr plot_node = first_child(dock_area_node, "plot");
-  pane.range = parse_range(plot_node);
-  if (plot_node != nullptr) {
-    for (xmlNodePtr child = plot_node->children; child != nullptr; child = child->next) {
-      if (is_element(child, "curve")) {
-        pane.curves.push_back(parse_curve(child));
+  pane.range = parse_range(dock_area_node);
+  const json11::Json &curves_node = dock_area_node["curves"];
+  if (curves_node.is_array()) {
+    for (const json11::Json &curve_node : curves_node.array_items()) {
+      if (curve_node.is_object()) {
+        pane.curves.push_back(parse_curve(curve_node));
       }
     }
   }
-  pane.title = pane_title(dock_area_node, pane.curves);
+  pane.title = pane_title(dock_area_node);
   return pane;
 }
 
-WorkspaceNode parse_workspace_node(xmlNodePtr node, WorkspaceTab *tab) {
+WorkspaceNode parse_workspace_node(const json11::Json &node, WorkspaceTab *tab) {
   WorkspaceNode workspace_node;
-  if (node == nullptr) {
+  if (!node.is_object()) {
     return workspace_node;
   }
 
-  if (is_element(node, "DockArea")) {
+  if (node["curves"].is_array()) {
     workspace_node.is_pane = true;
     workspace_node.pane_index = static_cast<int>(tab->panes.size());
     tab->panes.push_back(parse_dock_area(node));
     return workspace_node;
   }
 
-  if (!is_element(node, "DockSplitter")) {
-    for (xmlNodePtr child = node->children; child != nullptr; child = child->next) {
-      if (is_element(child, "DockSplitter") || is_element(child, "DockArea")) {
-        return parse_workspace_node(child, tab);
-      }
-    }
+  const json11::Json &children_node = node["children"];
+  if (!children_node.is_array()) {
     return workspace_node;
   }
 
-  const std::vector<xmlNodePtr> children = split_children(node);
+  const std::vector<json11::Json> children = children_node.array_items();
   if (children.empty()) {
     return workspace_node;
   }
 
-  workspace_node.orientation = attr(node, "orientation", "|") == "|"
-    ? SplitOrientation::Horizontal
-    : SplitOrientation::Vertical;
-  const std::vector<double> sizes = normalize_sizes(attr(node, "sizes"), children.size());
+  const std::string split = node["split"].string_value();
+  workspace_node.orientation = split == "vertical" ? SplitOrientation::Vertical : SplitOrientation::Horizontal;
+  const std::vector<double> sizes = normalize_sizes(node["sizes"], children.size());
   workspace_node.sizes.reserve(sizes.size());
   workspace_node.children.reserve(children.size());
   for (size_t i = 0; i < children.size(); ++i) {
@@ -604,58 +510,39 @@ WorkspaceNode parse_workspace_node(xmlNodePtr node, WorkspaceTab *tab) {
   return workspace_node;
 }
 
-WorkspaceTab parse_tab(xmlNodePtr tab, const fs::path &layout_path) {
+WorkspaceTab parse_tab(const json11::Json &tab, const fs::path &layout_path) {
   WorkspaceTab workspace_tab;
-  workspace_tab.tab_name = attr(tab, "tab_name", "tab1");
-
-  xmlNodePtr container = first_child(tab, "Container");
-  if (container == nullptr) {
-    throw std::runtime_error("Layout tab has no Container: " + layout_path.string());
-  }
-
-  xmlNodePtr dock_root = nullptr;
-  for (xmlNodePtr child = container->children; child != nullptr; child = child->next) {
-    if (is_element(child, "DockSplitter") || is_element(child, "DockArea")) {
-      dock_root = child;
-      break;
-    }
-  }
-  if (dock_root == nullptr) {
+  workspace_tab.tab_name = tab["name"].string_value().empty() ? "tab1" : tab["name"].string_value();
+  const json11::Json &dock_root = tab["root"];
+  if (!dock_root.is_object()) {
     throw std::runtime_error("Layout tab has no dock content: " + layout_path.string());
   }
-
   workspace_tab.root = parse_workspace_node(dock_root, &workspace_tab);
   return workspace_tab;
 }
 
 SketchLayout parse_layout(const fs::path &layout_path) {
-  xmlDocPtr raw_doc = xmlReadFile(layout_path.c_str(), nullptr, XML_PARSE_NOBLANKS | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
-  if (raw_doc == nullptr) {
-    throw std::runtime_error("Failed to parse layout XML: " + layout_path.string());
+  const std::string text = util::read_file(layout_path.string());
+  if (text.empty()) {
+    throw std::runtime_error("Failed to read layout JSON: " + layout_path.string());
   }
 
-  std::unique_ptr<xmlDoc, decltype(&xmlFreeDoc)> doc(raw_doc, xmlFreeDoc);
-  xmlNodePtr root = xmlDocGetRootElement(doc.get());
-  if (root == nullptr) {
-    throw std::runtime_error("Layout XML has no root node: " + layout_path.string());
+  std::string parse_error;
+  const json11::Json root = json11::Json::parse(text, parse_error);
+  if (!parse_error.empty() || !root.is_object()) {
+    throw std::runtime_error("Failed to parse layout JSON: " + layout_path.string());
   }
-
-  xmlNodePtr tabbed_widget = first_descendant(root, "tabbed_widget");
-  if (tabbed_widget == nullptr) {
-    throw std::runtime_error("Layout has no tab widget: " + layout_path.string());
-  }
-
   SketchLayout layout;
-  for (xmlNodePtr tab = tabbed_widget->children; tab != nullptr; tab = tab->next) {
-    if (!is_element(tab, "Tab")) {
-      continue;
+  for (const json11::Json &tab : root["tabs"].array_items()) {
+    if (tab.is_object()) {
+      layout.tabs.push_back(parse_tab(tab, layout_path));
     }
-    layout.tabs.push_back(parse_tab(tab, layout_path));
   }
   if (layout.tabs.empty()) {
     throw std::runtime_error("Layout has no tabs: " + layout_path.string());
   }
-  layout.current_tab_index = std::clamp(attr_int(first_child(tabbed_widget, "currentTabIndex"), "index", 0),
+  const json11::Json &tab_index = root["current_tab_index"].is_number() ? root["current_tab_index"] : root["currentTabIndex"];
+  layout.current_tab_index = std::clamp(tab_index.is_number() ? tab_index.int_value() : 0,
                                         0,
                                         static_cast<int>(layout.tabs.size()) - 1);
   return layout;

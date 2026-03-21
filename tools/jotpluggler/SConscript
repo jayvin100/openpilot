@@ -1,21 +1,11 @@
 import os
-import subprocess
 
 import imgui
 
 Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal')
 
-if arch == "Darwin":
-  Return()
-
-try:
-  libxml_cflags = subprocess.check_output(["pkg-config", "--cflags-only-I", "libxml-2.0"], encoding="utf8").split()
-except (FileNotFoundError, subprocess.CalledProcessError):
-  Return()
-
 jot_env = env.Clone()
 jot_env["CPPPATH"] += [imgui.INCLUDE_DIR, imgui.SRC_DIR]
-jot_env["CPPPATH"] += [flag[2:] for flag in libxml_cflags if flag.startswith("-I")]
 jot_env["CXXFLAGS"] += ["-DGLFW_INCLUDE_NONE"]
 
 core_sources = {
@@ -49,7 +39,7 @@ for source in imgui_sources:
 
 glfw_static = File(f"{imgui.LIB_DIR}/libglfw3.a")
 libs = [common, messaging, visionipc, cereal, glfw_static, "GL", "capnp", "kj", "avformat", "avcodec", "swresample",
-        "avutil", "x264", "yuv", "z", "bz2", "zstd", "xml2", "m", "pthread"]
+        "avutil", "x264", "yuv", "z", "bz2", "zstd", "m", "pthread"]
 if arch != "Darwin":
   libs += ["dl"]
 
