@@ -1,49 +1,57 @@
 #include "ui/panes/detail_pane.h"
 
 #include "imgui.h"
+#include "ui/theme.h"
 
 namespace cabana {
 namespace panes {
 
 static void render_splash() {
   ImVec2 avail = ImGui::GetContentRegionAvail();
-  ImVec2 center(avail.x * 0.5f, avail.y * 0.4f);
+  float cx = avail.x * 0.5f;
+  float cy = avail.y * 0.38f;
 
-  // Big "CABANA" text
-  ImGui::PushFont(nullptr);  // default font
-  float text_w = ImGui::CalcTextSize("CABANA").x;
-  ImGui::SetCursorPos(ImVec2(center.x - text_w * 1.5f, center.y - 40));
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 0.6f));
+  // "CABANA" in large bold font
+  ImFont *splash = cabana::theme::font_splash();
+  if (splash) {
+    const char *text = "CABANA";
+    ImGui::PushFont(splash, 56.0f);
+    ImVec2 sz = ImGui::CalcTextSize(text);
+    ImGui::SetCursorPos(ImVec2(cx - sz.x * 0.5f, cy));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 0.50f));
+    ImGui::TextUnformatted(text);
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+  }
 
-  // Scale up the text by using a workaround: draw it manually
-  ImVec2 pos = ImGui::GetCursorScreenPos();
-  ImDrawList *dl = ImGui::GetWindowDrawList();
-  dl->AddText(nullptr, 48.0f, pos, IM_COL32(128, 128, 128, 150), "CABANA");
-  ImGui::Dummy(ImVec2(0, 60));
+  ImGui::Spacing();
 
   // Subtitle
-  float sub_w = ImGui::CalcTextSize("<-Select a message to view details").x;
-  ImGui::SetCursorPosX(center.x - sub_w * 0.5f);
-  ImGui::TextDisabled("<-Select a message to view details");
+  {
+    const char *sub = "<-Select a message to view details";
+    float sw = ImGui::CalcTextSize(sub).x;
+    ImGui::SetCursorPosX(cx - sw * 0.5f);
+    ImGui::TextDisabled("%s", sub);
+  }
 
   ImGui::Spacing();
   ImGui::Spacing();
+  ImGui::Spacing();
 
-  // Keyboard shortcuts
-  auto shortcut_row = [&](const char *label, const char *key) {
+  // Keyboard shortcut hints — right-aligned labels with button keys
+  auto shortcut = [&](const char *label, const char *key) {
     float lw = ImGui::CalcTextSize(label).x;
-    ImGui::SetCursorPosX(center.x - lw - 10);
+    float kw = ImGui::CalcTextSize(key).x + ImGui::GetStyle().FramePadding.x * 2;
+    float total = lw + 8 + kw;
+    ImGui::SetCursorPosX(cx - total * 0.5f);
     ImGui::TextDisabled("%s", label);
     ImGui::SameLine();
     ImGui::SmallButton(key);
   };
 
-  shortcut_row("Pause", "Space");
-  shortcut_row("Help", "F1");
-  shortcut_row("WhatsThis", "Shift+F1");
-
-  ImGui::PopStyleColor();
-  ImGui::PopFont();
+  shortcut("Pause", "Space");
+  shortcut("Help", "F1");
+  shortcut("WhatsThis", "Shift+F1");
 }
 
 void detail() {

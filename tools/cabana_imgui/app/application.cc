@@ -45,6 +45,7 @@ bool Application::init(int argc, char *argv[]) {
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
   cabana::theme::apply();
+  cabana::theme::load_fonts();
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 130");

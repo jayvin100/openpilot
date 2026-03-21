@@ -13,7 +13,7 @@ namespace cabana {
 namespace shell {
 
 static bool first_frame = true;
-static constexpr float STATUS_BAR_HEIGHT = 22.0f;
+static constexpr float STATUS_BAR_HEIGHT = 20.0f;
 
 static void setup_default_layout(ImGuiID dockspace_id) {
   ImGui::DockBuilderRemoveNode(dockspace_id);
