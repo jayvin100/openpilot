@@ -8,6 +8,14 @@ jot_env = env.Clone()
 jot_env["LIBPATH"] += [imgui.MESA_DIR]
 jot_env["CPPPATH"] += [imgui.INCLUDE_DIR]
 jot_env["CXXFLAGS"] += ["-DGLFW_INCLUDE_NONE"]
+repo_root = jot_env.Dir("../..").abspath
+jot_env["CXXFLAGS"] += ['-DJOTP_REPO_ROOT=\'"%s"\'' % repo_root]
+generated_dbc_dir = "tools/jotpluggler/generated_dbcs"
+generated_dbc_stamp = jot_env.Command(
+  f"{generated_dbc_dir}/.stamp",
+  ["materialize_generated_dbcs.py"],
+  f"python3 tools/jotpluggler/materialize_generated_dbcs.py --out {generated_dbc_dir}",
+)
 
 jot_sources = [
   "main.cc",
@@ -16,6 +24,7 @@ jot_sources = [
   "app_logs.cc",
   "app_runtime.cc",
   "bootstrap_icons.cc",
+  "dbc_core.cc",
   "sketch_layout.cc",
 ]
 
@@ -34,4 +43,5 @@ if arch == "Darwin":
 else:
   libs += ["GL", "dl"]
 
-jot_env.Program("jotpluggler", objects, LIBS=libs, FRAMEWORKS=frameworks)
+program = jot_env.Program("jotpluggler", objects, LIBS=libs, FRAMEWORKS=frameworks)
+jot_env.Depends(program, generated_dbc_stamp)

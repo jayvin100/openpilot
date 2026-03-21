@@ -226,6 +226,7 @@ void run_or_throw(const std::string &command, const std::string &action) {
 }
 
 bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg);
+bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir);
 void reset_shared_range(UiState *state, const AppSession &session);
 std::string curve_display_name(const Curve &curve);
 
@@ -445,12 +446,15 @@ enum class PaneDropZone {
 
 enum class PaneMenuActionKind {
   None,
+  OpenAxisLimits,
   OpenCustomSeries,
   SplitLeft,
   SplitRight,
   SplitTop,
   SplitBottom,
   ResetView,
+  ResetHorizontal,
+  ResetVertical,
   Clear,
   Close,
 };
@@ -1309,6 +1313,16 @@ std::string layout_combo_label(const AppSession &session, const UiState &state) 
   return state.layout_dirty ? base + " *" : base;
 }
 
+std::string dbc_combo_label(const AppSession &session) {
+  if (!session.dbc_override.empty()) {
+    return session.dbc_override;
+  }
+  if (!session.route_data.dbc_name.empty()) {
+    return "Auto: " + session.route_data.dbc_name;
+  }
+  return "Auto";
+}
+
 float draw_main_menu_bar(AppSession *session, UiState *state) {
   float height = ImGui::GetFrameHeight();
   if (ImGui::BeginMainMenuBar()) {
@@ -1570,6 +1584,49 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
         ImGui::Spacing();
       }
     }
+
+    ImGui::SeparatorText("Route");
+    if (!session->route_name.empty()) {
+      ImGui::TextWrapped("%s", session->route_name.c_str());
+    } else {
+      ImGui::TextDisabled("No route loaded");
+    }
+    if (!session->route_data.car_fingerprint.empty()) {
+      ImGui::TextWrapped("Car: %s", session->route_data.car_fingerprint.c_str());
+    }
+    const std::vector<std::string> dbc_names = available_dbc_names();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##dbc_combo", dbc_combo_label(*session).c_str())) {
+      const bool auto_selected = session->dbc_override.empty();
+      if (ImGui::Selectable("Auto", auto_selected)) {
+        session->dbc_override.clear();
+        if (!session->route_name.empty()) {
+          reload_session(session, state, session->route_name, session->data_dir);
+        } else {
+          state->status_text = "DBC auto-detect enabled";
+        }
+      }
+      if (auto_selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+      ImGui::Separator();
+      for (const std::string &dbc_name : dbc_names) {
+        const bool selected = session->dbc_override == dbc_name;
+        if (ImGui::Selectable(dbc_name.c_str(), selected) && !selected) {
+          session->dbc_override = dbc_name;
+          if (!session->route_name.empty()) {
+            reload_session(session, state, session->route_name, session->data_dir);
+          } else {
+            state->status_text = "DBC set to " + dbc_name;
+          }
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::Spacing();
 
     ImGui::SeparatorText("Layout");
     const std::vector<std::string> layouts = available_layout_names();
@@ -2304,6 +2361,136 @@ PlotBounds compute_plot_bounds(const Pane &pane,
   return bounds;
 }
 
+void persist_shared_range_to_tab(WorkspaceTab *tab, const UiState &state) {
+  if (tab == nullptr || !state.has_shared_range) {
+    return;
+  }
+  const double x_min = state.x_view_min;
+  const double x_max = state.x_view_max > state.x_view_min ? state.x_view_max : state.x_view_min + 1.0;
+  for (Pane &pane : tab->panes) {
+    pane.range.valid = true;
+    pane.range.left = x_min;
+    pane.range.right = x_max;
+  }
+}
+
+void clear_pane_vertical_limits(Pane *pane) {
+  if (pane == nullptr) {
+    return;
+  }
+  pane->range.has_y_limit_min = false;
+  pane->range.has_y_limit_max = false;
+}
+
+PlotBounds current_plot_bounds_for_pane(const AppSession &session, const Pane &pane, const UiState &state) {
+  std::vector<PreparedCurve> prepared_curves;
+  prepared_curves.reserve(pane.curves.size());
+  constexpr int kAxisEditorMaxPoints = 2048;
+  for (size_t curve_index = 0; curve_index < pane.curves.size(); ++curve_index) {
+    const Curve &curve = pane.curves[curve_index];
+    if (!curve.visible || !curve_has_samples(session, curve)) {
+      continue;
+    }
+    PreparedCurve prepared;
+    if (build_curve_series(session, curve, state, kAxisEditorMaxPoints, &prepared)) {
+      prepared.pane_curve_index = static_cast<int>(curve_index);
+      prepared_curves.push_back(std::move(prepared));
+    }
+  }
+  return compute_plot_bounds(pane, prepared_curves, state);
+}
+
+void open_axis_limits_editor(const AppSession &session, UiState *state, int pane_index) {
+  ensure_shared_range(state, session);
+  clamp_shared_range(state);
+  const WorkspaceTab *tab = active_tab(session.layout, *state);
+  if (tab == nullptr || pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
+    return;
+  }
+
+  const Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
+  const PlotBounds bounds = current_plot_bounds_for_pane(session, pane, *state);
+  AxisLimitsEditorState &editor = state->axis_limits;
+  editor.open = true;
+  editor.pane_index = pane_index;
+  editor.x_min = state->x_view_min;
+  editor.x_max = state->x_view_max;
+  editor.y_min_enabled = pane.range.has_y_limit_min;
+  editor.y_max_enabled = pane.range.has_y_limit_max;
+  editor.y_min = pane.range.has_y_limit_min ? pane.range.y_limit_min : bounds.y_min;
+  editor.y_max = pane.range.has_y_limit_max ? pane.range.y_limit_max : bounds.y_max;
+}
+
+bool apply_axis_limits_editor(AppSession *session, UiState *state) {
+  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  if (tab == nullptr) {
+    return false;
+  }
+
+  AxisLimitsEditorState &editor = state->axis_limits;
+  if (editor.pane_index < 0 || editor.pane_index >= static_cast<int>(tab->panes.size())) {
+    state->error_text = "The selected pane is no longer available.";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (!std::isfinite(editor.x_min) || !std::isfinite(editor.x_max)) {
+    state->error_text = "Axis limits must be finite numbers.";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (editor.x_max <= editor.x_min) {
+    state->error_text = "X max must be greater than X min.";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (editor.y_min_enabled && !std::isfinite(editor.y_min)) {
+    state->error_text = "Y min must be a finite number.";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (editor.y_max_enabled && !std::isfinite(editor.y_max)) {
+    state->error_text = "Y max must be a finite number.";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (editor.y_min_enabled && editor.y_max_enabled && editor.y_max <= editor.y_min) {
+    state->error_text = "Y max must be greater than Y min.";
+    state->open_error_popup = true;
+    return false;
+  }
+
+  state->has_shared_range = true;
+  state->x_view_min = editor.x_min;
+  state->x_view_max = editor.x_max;
+  state->follow_latest = false;
+  state->suppress_range_side_effects = true;
+  clamp_shared_range(state);
+  persist_shared_range_to_tab(tab, *state);
+
+  Pane &pane = tab->panes[static_cast<size_t>(editor.pane_index)];
+  pane.range.has_y_limit_min = editor.y_min_enabled;
+  pane.range.has_y_limit_max = editor.y_max_enabled;
+  if (editor.y_min_enabled) {
+    pane.range.y_limit_min = editor.y_min;
+  }
+  if (editor.y_max_enabled) {
+    pane.range.y_limit_max = editor.y_max;
+  }
+
+  const PlotBounds bounds = current_plot_bounds_for_pane(*session, pane, *state);
+  pane.range.valid = true;
+  pane.range.left = state->x_view_min;
+  pane.range.right = state->x_view_max;
+  pane.range.bottom = bounds.y_min;
+  pane.range.top = bounds.y_max;
+
+  const bool ok = mark_layout_dirty(session, state);
+  if (ok) {
+    state->status_text = "Axis limits updated";
+  }
+  return ok;
+}
+
 void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   std::vector<PreparedCurve> prepared_curves;
   prepared_curves.reserve(pane->curves.size());
@@ -2424,9 +2611,12 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
   const bool has_curves = pane_index >= 0
     && pane_index < static_cast<int>(tab.panes.size())
     && !tab.panes[static_cast<size_t>(pane_index)].curves.empty();
-  bootstrap_icons::menu_item("sliders", "Edit Axis Limits...", nullptr, false, false);
+  if (bootstrap_icons::menu_item("sliders", "Edit Axis Limits...")) {
+    action.kind = PaneMenuActionKind::OpenAxisLimits;
+  }
   bootstrap_icons::menu_item("palette", "Edit Curve Style...", nullptr, false, false);
-  if (bootstrap_icons::menu_item("plus-slash-minus", "Apply filter to data...", nullptr, false, has_curves)) {
+  if (action.kind == PaneMenuActionKind::None
+      && bootstrap_icons::menu_item("plus-slash-minus", "Apply filter to data...", nullptr, false, has_curves)) {
     action.kind = PaneMenuActionKind::OpenCustomSeries;
   }
   ImGui::Separator();
@@ -2440,9 +2630,10 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
   if (bootstrap_icons::menu_item("zoom-out", "Zoom Out")) {
     action.kind = PaneMenuActionKind::ResetView;
   } else if (bootstrap_icons::menu_item("arrow-left-right", "Zoom Out Horizontally")) {
-    action.kind = PaneMenuActionKind::ResetView;
+    action.kind = PaneMenuActionKind::ResetHorizontal;
+  } else if (bootstrap_icons::menu_item("arrow-down-up", "Zoom Out Vertically")) {
+    action.kind = PaneMenuActionKind::ResetVertical;
   }
-  bootstrap_icons::menu_item("arrow-down-up", "Zoom Out Vertically", nullptr, false, false);
   ImGui::Separator();
   if (bootstrap_icons::menu_item("trash", "Remove ALL curves")) {
     action.kind = PaneMenuActionKind::Clear;
@@ -2559,6 +2750,11 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
   bool dock_changed = false;
   bool layout_changed = false;
   switch (action.kind) {
+    case PaneMenuActionKind::OpenAxisLimits:
+      tab_state->active_pane_index = pane_index;
+      open_axis_limits_editor(*session, state, pane_index);
+      state->status_text = "Axis limits editor opened";
+      return true;
     case PaneMenuActionKind::OpenCustomSeries:
       tab_state->active_pane_index = pane_index;
       open_custom_series_editor(state, preferred_custom_series_source(tab->panes[static_cast<size_t>(pane_index)]));
@@ -2596,7 +2792,23 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
       reset_shared_range(state, *session);
       state->follow_latest = false;
       state->suppress_range_side_effects = true;
+      persist_shared_range_to_tab(tab, *state);
+      clear_pane_vertical_limits(&tab->panes[static_cast<size_t>(pane_index)]);
+      layout_changed = true;
       state->status_text = "Plot view reset";
+      break;
+    case PaneMenuActionKind::ResetHorizontal:
+      reset_shared_range(state, *session);
+      state->follow_latest = false;
+      state->suppress_range_side_effects = true;
+      persist_shared_range_to_tab(tab, *state);
+      layout_changed = true;
+      state->status_text = "Horizontal zoom reset";
+      break;
+    case PaneMenuActionKind::ResetVertical:
+      clear_pane_vertical_limits(&tab->panes[static_cast<size_t>(pane_index)]);
+      layout_changed = true;
+      state->status_text = "Vertical zoom reset";
       break;
     case PaneMenuActionKind::Clear:
       clear_pane(tab, pane_index);
@@ -2973,331 +3185,9 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
   ImGui::PopStyleColor(2);
 }
 
-bool reset_layout(AppSession *session, UiState *state) {
-  try {
-    if (session->layout_path.empty()) {
-      session->layout = make_empty_layout();
-      session->autosave_path.clear();
-      state->layout_dirty = false;
-      state->tabs.clear();
-      cancel_rename_tab(state);
-      sync_ui_state(state, session->layout);
-      sync_layout_buffers(state, *session);
-      reset_shared_range(state, *session);
-      state->status_text = "Reset layout";
-      return true;
-    }
-    clear_layout_autosave(*session);
-    session->layout = load_sketch_layout(session->layout_path);
-    state->layout_dirty = false;
-    session->autosave_path = autosave_path_for_layout(session->layout_path);
-    state->tabs.clear();
-    cancel_rename_tab(state);
-    sync_ui_state(state, session->layout);
-    sync_layout_buffers(state, *session);
-    reset_shared_range(state, *session);
-    state->status_text = "Reset layout";
-    return true;
-  } catch (const std::exception &err) {
-    state->error_text = err.what();
-    state->open_error_popup = true;
-    state->status_text = "Failed to reset layout";
-    return false;
-  }
-}
+#include "tools/jotpluggler/app_layout_flow.inc"
 
-bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg) {
-  try {
-    const fs::path layout_path = resolve_layout_path(layout_arg);
-    session->autosave_path = autosave_path_for_layout(layout_path);
-    const bool load_draft = fs::exists(session->autosave_path);
-    session->layout = load_sketch_layout(load_draft ? session->autosave_path : layout_path);
-    session->layout_path = layout_path;
-    state->layout_dirty = load_draft;
-    cancel_rename_tab(state);
-    state->tabs.clear();
-    sync_ui_state(state, session->layout);
-    sync_layout_buffers(state, *session);
-    mark_all_docks_dirty(state);
-    reset_shared_range(state, *session);
-    state->status_text = std::string(load_draft ? "Loaded layout draft " : "Loaded layout ")
-      + layout_path.filename().string();
-    return true;
-  } catch (const std::exception &err) {
-    state->error_text = err.what();
-    state->open_error_popup = true;
-    state->status_text = "Failed to load layout";
-    return false;
-  }
-}
-
-bool save_layout(AppSession *session, UiState *state, const std::string &layout_path) {
-  try {
-    if (layout_path.empty()) {
-      throw std::runtime_error("Layout path is empty");
-    }
-    session->layout.current_tab_index = state->active_tab_index;
-    const fs::path previous_autosave = session->autosave_path;
-    const fs::path output = fs::absolute(fs::path(layout_path));
-    save_layout_json(session->layout, output);
-    session->layout_path = output;
-    session->autosave_path = autosave_path_for_layout(output);
-    if (!previous_autosave.empty() && previous_autosave != session->autosave_path && fs::exists(previous_autosave)) {
-      fs::remove(previous_autosave);
-    }
-    clear_layout_autosave(*session);
-    state->layout_dirty = false;
-    sync_layout_buffers(state, *session);
-    state->status_text = "Saved layout " + output.filename().string();
-    return true;
-  } catch (const std::exception &err) {
-    state->error_text = err.what();
-    state->open_error_popup = true;
-    state->status_text = "Failed to save layout";
-    return false;
-  }
-}
-
-void rebuild_session_route_data(AppSession *session, UiState *state,
-                                const RouteLoadProgressCallback &progress = {}) {
-  apply_route_data(session, state, load_route_data(session->route_name, session->data_dir, progress));
-}
-
-void start_async_route_load(AppSession *session, UiState *state) {
-  if (!session->route_loader) {
-    return;
-  }
-  apply_route_data(session, state, RouteData{});
-  session->route_loader->start(session->route_name, session->data_dir);
-  state->status_text = session->route_name.empty() ? "Ready" : "Loading route " + session->route_name;
-}
-
-void poll_async_route_load(AppSession *session, UiState *state) {
-  if (!session->route_loader) {
-    return;
-  }
-  RouteData loaded_route;
-  std::string error_text;
-  if (!session->route_loader->consume(&loaded_route, &error_text)) {
-    return;
-  }
-  if (!error_text.empty()) {
-    state->error_text = error_text;
-    state->open_error_popup = true;
-    state->status_text = "Failed to load route";
-    return;
-  }
-  apply_route_data(session, state, std::move(loaded_route));
-  state->status_text = session->route_name.empty() ? "Ready" : "Loaded route " + session->route_name;
-}
-
-bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir) {
-  try {
-    session->route_name = route_name;
-    session->data_dir = data_dir;
-    if (session->async_route_loading) {
-      start_async_route_load(session, state);
-    } else {
-      rebuild_session_route_data(session, state);
-      state->status_text = "Loaded route " + route_name;
-    }
-    sync_route_buffers(state, *session);
-    return true;
-  } catch (const std::exception &err) {
-    state->error_text = err.what();
-    state->open_error_popup = true;
-    state->status_text = "Failed to load route";
-    return false;
-  }
-}
-
-void draw_popups(AppSession *session, UiState *state) {
-  if (state->open_open_route) {
-    ImGui::OpenPopup("Open Route");
-    state->open_open_route = false;
-  }
-  if (state->open_load_layout) {
-    sync_layout_buffers(state, *session);
-    ImGui::OpenPopup("Load Layout");
-    state->open_load_layout = false;
-  }
-  if (state->open_save_layout) {
-    sync_layout_buffers(state, *session);
-    ImGui::OpenPopup("Save Layout");
-    state->open_save_layout = false;
-  }
-
-  if (ImGui::BeginPopupModal("Open Route", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Load a route into the current layout.");
-    ImGui::Separator();
-    ImGui::InputText("Route", state->route_buffer.data(), state->route_buffer.size());
-    ImGui::InputText("Data Dir", state->data_dir_buffer.data(), state->data_dir_buffer.size());
-    ImGui::Spacing();
-    if (ImGui::Button("Load", ImVec2(120.0f, 0.0f))) {
-      reload_session(session, state, string_from_buffer(state->route_buffer), string_from_buffer(state->data_dir_buffer));
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-      sync_route_buffers(state, *session);
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-  if (ImGui::BeginPopupModal("Load Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Load a JotPlugger JSON layout.");
-    ImGui::Separator();
-    ImGui::InputText("Layout", state->load_layout_buffer.data(), state->load_layout_buffer.size());
-    ImGui::Spacing();
-    if (ImGui::Button("Load", ImVec2(120.0f, 0.0f))) {
-      if (reload_layout(session, state, string_from_buffer(state->load_layout_buffer))) {
-        ImGui::CloseCurrentPopup();
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-      sync_layout_buffers(state, *session);
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-  if (ImGui::BeginPopupModal("Save Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Save the current workspace as a JotPlugger JSON layout.");
-    ImGui::Separator();
-    ImGui::InputText("Layout", state->save_layout_buffer.data(), state->save_layout_buffer.size());
-    ImGui::Spacing();
-    if (ImGui::Button("Save", ImVec2(120.0f, 0.0f))) {
-      if (save_layout(session, state, string_from_buffer(state->save_layout_buffer))) {
-        ImGui::CloseCurrentPopup();
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-      sync_layout_buffers(state, *session);
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-  if (state->open_error_popup) {
-    ImGui::OpenPopup("Error");
-    state->open_error_popup = false;
-  }
-  if (ImGui::BeginPopupModal("Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextWrapped("%s", state->error_text.c_str());
-    ImGui::Spacing();
-    if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-}
-
-void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
-  ensure_shared_range(state, *session);
-  if (state->follow_latest) {
-    update_follow_range(state);
-    state->suppress_range_side_effects = true;
-  } else {
-    clamp_shared_range(state);
-  }
-  if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
-    step_tracker(state, -1.0);
-  }
-  if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
-    step_tracker(state, 1.0);
-  }
-  if (!ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
-    state->playback_playing = !state->playback_playing;
-  }
-  advance_playback(state);
-  if (show_camera_feed && session->camera_feed && state->has_tracker_time) {
-    session->camera_feed->update(state->tracker_time);
-  }
-  const float menu_height = draw_main_menu_bar(session, state);
-  const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height, state->sidebar_width);
-  state->sidebar_width = ui.sidebar_width;
-  draw_sidebar(session, ui, state, show_camera_feed);
-  draw_sidebar_resizer(ui, state);
-  draw_workspace(session, ui, state);
-  if (!state->custom_series.selected && !state->logs.selected) {
-    draw_pane_windows(session, state);
-  }
-  draw_status_bar(*session, ui, state);
-  draw_popups(session, state);
-}
-
-void save_framebuffer_png(const fs::path &output_path, int width, int height) {
-  ensure_parent_dir(output_path);
-  if (width <= 0 || height <= 0) {
-    throw std::runtime_error("Invalid framebuffer size");
-  }
-
-  std::vector<uint8_t> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 4U, 0);
-  glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-
-  const fs::path ppm_path = output_path.parent_path() / (output_path.stem().string() + ".ppm");
-  {
-    std::ofstream out(ppm_path, std::ios::binary);
-    if (!out) {
-      throw std::runtime_error("Failed to open " + ppm_path.string());
-    }
-    out << "P6\n" << width << " " << height << "\n255\n";
-    for (int y = height - 1; y >= 0; --y) {
-      for (int x = 0; x < width; ++x) {
-        const size_t index = static_cast<size_t>((y * width + x) * 4);
-        out.write(reinterpret_cast<const char *>(&pixels[index]), 3);
-      }
-    }
-  }
-
-  const std::string command = "convert " + shell_quote(ppm_path.string()) + " " + shell_quote(output_path.string());
-  run_or_throw(command, "image conversion");
-  fs::remove(ppm_path);
-}
-
-void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const fs::path *capture_path) {
-  glfwPollEvents();
-
-  int framebuffer_width = 0;
-  int framebuffer_height = 0;
-  glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
-
-  ImGui_ImplOpenGL3_NewFrame();
-  ImGui_ImplGlfw_NewFrame();
-  ImGui::NewFrame();
-
-  if (state->request_save_layout) {
-    if (session->layout_path.empty()) {
-      state->open_save_layout = true;
-    } else {
-      save_layout(session, state, session->layout_path.string());
-    }
-    state->request_save_layout = false;
-  }
-  if (state->request_reset_layout) {
-    reset_layout(session, state);
-    state->request_reset_layout = false;
-  }
-  poll_async_route_load(session, state);
-
-  render_layout(session, state, capture_path == nullptr);
-  ImGui::Render();
-  if (state->request_close) {
-    glfwSetWindowShouldClose(window, GLFW_TRUE);
-    state->request_close = false;
-  }
-
-  glViewport(0, 0, framebuffer_width, framebuffer_height);
-  glClearColor(227.0f / 255.0f, 229.0f / 255.0f, 233.0f / 255.0f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
-  ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-  if (capture_path != nullptr) {
-    save_framebuffer_png(*capture_path, framebuffer_width, framebuffer_height);
-  }
-  glfwSwapBuffers(window);
-  state->suppress_range_side_effects = false;
-}
+#include "tools/jotpluggler/app_render_flow.inc"
 
 int run_app(const Options &options) {
   const fs::path layout_path = options.layout.empty() ? fs::path() : resolve_layout_path(options.layout);
@@ -3306,6 +3196,7 @@ int run_app(const Options &options) {
     .autosave_path = layout_path.empty() ? fs::path() : autosave_path_for_layout(layout_path),
     .route_name = options.route_name,
     .data_dir = options.data_dir,
+    .dbc_override = {},
     .layout = options.layout.empty() ? make_empty_layout() : load_sketch_layout(layout_path),
   };
   UiState ui_state;

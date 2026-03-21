@@ -63,6 +63,7 @@ Multi-tab PlotJuggler layouts now render as real app tabs, and the sidebar expos
 Plots use route-backed direct curve rendering with a shared `t=0` time base and a playback/timeline bar aligned to the plot region.
 Curves without direct sampled data are shown as unsupported instead of being faked.
 `Custom Series` uses Python and numpy through a subprocess helper.
+CAN DBC selection lives in the sidebar `Route` section: JotPlugger auto-detects a DBC from `carParams.carFingerprint` when it can, and you can override it manually to expose decoded `/can/...` and `/sendcan/...` signals in the timeseries browser.
 
 Useful loader knobs:
 - `JOTP_LOAD_WORKERS=<n>` overrides the automatic worker count for route loading.

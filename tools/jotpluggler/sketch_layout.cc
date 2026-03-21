@@ -1,4 +1,5 @@
 #include "tools/jotpluggler/sketch_layout.h"
+#include "tools/jotpluggler/dbc_core.h"
 
 #include <capnp/dynamic.h>
 
@@ -17,6 +18,7 @@
 #include <numeric>
 #include <optional>
 #include <regex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -110,6 +112,10 @@ struct LoadedRouteArtifacts {
   std::vector<RouteSeries> series;
   std::vector<LogEntry> logs;
   std::unordered_map<std::string, EnumInfo> enum_info;
+};
+
+struct RouteMetadata {
+  std::string car_fingerprint;
 };
 
 struct LoadStats {
@@ -377,6 +383,84 @@ std::map<int, SegmentLogs> resolve_route_segments(const std::string &route_name,
   return segments;
 }
 
+std::string basedir() {
+  if (const char *env_basedir = std::getenv("BASEDIR"); env_basedir != nullptr && std::strlen(env_basedir) > 0) {
+    return env_basedir;
+  }
+#ifdef JOTP_REPO_ROOT
+  return JOTP_REPO_ROOT;
+#else
+  return fs::current_path().string();
+#endif
+}
+
+const std::unordered_map<std::string, std::string> &car_fingerprint_to_dbc_map() {
+  static const std::unordered_map<std::string, std::string> map = []() {
+    std::unordered_map<std::string, std::string> out;
+    const fs::path json_path = fs::path(basedir()) / "tools" / "cabana" / "dbc" / "car_fingerprint_to_dbc.json";
+    const std::string raw = util::read_file(json_path.string());
+    if (raw.empty()) {
+      return out;
+    }
+    std::string parse_error;
+    const json11::Json parsed = json11::Json::parse(raw, parse_error);
+    if (!parse_error.empty() || !parsed.is_object()) {
+      return out;
+    }
+    for (const auto &[fingerprint, dbc] : parsed.object_items()) {
+      if (dbc.is_string() && !dbc.string_value().empty()) {
+        out.emplace(fingerprint, dbc.string_value());
+      }
+    }
+    return out;
+  }();
+  return map;
+}
+
+std::string detect_dbc_for_fingerprint(std::string_view car_fingerprint) {
+  if (car_fingerprint.empty()) {
+    return {};
+  }
+  const auto &map = car_fingerprint_to_dbc_map();
+  auto it = map.find(std::string(car_fingerprint));
+  return it == map.end() ? std::string() : it->second;
+}
+
+std::vector<std::string> available_dbc_names_impl() {
+  std::set<std::string> names;
+  for (const fs::path &dbc_dir : {
+         fs::path(basedir()) / "opendbc" / "dbc",
+         fs::path(basedir()) / "tools" / "jotpluggler" / "generated_dbcs",
+       }) {
+    if (fs::exists(dbc_dir) && fs::is_directory(dbc_dir)) {
+      for (const auto &entry : fs::directory_iterator(dbc_dir)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".dbc") {
+          continue;
+        }
+        names.insert(entry.path().stem().string());
+      }
+    }
+  }
+  for (const auto &[_, dbc_name] : car_fingerprint_to_dbc_map()) {
+    if (!dbc_name.empty()) {
+      names.insert(dbc_name);
+    }
+  }
+  return std::vector<std::string>(names.begin(), names.end());
+}
+
+fs::path resolve_dbc_path(const std::string &dbc_name) {
+  for (const fs::path &candidate : {
+         fs::path(basedir()) / "opendbc" / "dbc" / (dbc_name + ".dbc"),
+         fs::path(basedir()) / "tools" / "jotpluggler" / "generated_dbcs" / (dbc_name + ".dbc"),
+       }) {
+    if (fs::exists(candidate)) {
+      return candidate;
+    }
+  }
+  throw std::runtime_error("DBC not found: " + dbc_name);
+}
+
 std::array<uint8_t, 3> parse_color(std::string_view color) {
   if (!color.empty() && color.front() == '#') {
     color.remove_prefix(1);
@@ -631,6 +715,41 @@ std::vector<LogEntry> extract_segment_logs(const std::vector<Event> &events) {
   }
 
   return logs;
+}
+
+RouteMetadata extract_segment_metadata(const std::vector<Event> &events) {
+  RouteMetadata metadata;
+  for (const Event &event_record : events) {
+    if (event_record.which != cereal::Event::Which::CAR_PARAMS) {
+      continue;
+    }
+    capnp::FlatArrayMessageReader event_reader(event_record.data);
+    const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
+    metadata.car_fingerprint = event.getCarParams().getCarFingerprint().cStr();
+    if (!metadata.car_fingerprint.empty()) {
+      break;
+    }
+  }
+  return metadata;
+}
+
+RouteMetadata detect_route_metadata(const std::map<int, SegmentLogs> &segments) {
+  for (const auto &[segment_number, segment] : segments) {
+    (void)segment_number;
+    const std::string &log_path = !segment.qlog.empty() ? segment.qlog : segment.rlog;
+    if (log_path.empty()) {
+      continue;
+    }
+    LogReader reader;
+    if (!reader.load(log_path, nullptr, true)) {
+      continue;
+    }
+    RouteMetadata metadata = extract_segment_metadata(reader.events);
+    if (!metadata.car_fingerprint.empty()) {
+      return metadata;
+    }
+  }
+  return {};
 }
 
 std::vector<double> normalize_sizes(const json11::Json &sizes_json, size_t child_count) {
@@ -1089,6 +1208,8 @@ void append_events_fast_range(const std::vector<Event> &events,
                               size_t begin,
                               size_t end,
                               const SchemaIndex &schema,
+                              const dbc_core::Database *can_dbc,
+                              bool skip_raw_can,
                               SeriesAccumulator *series) {
   for (size_t i = begin; i < end; ++i) {
     const Event &event_record = events[i];
@@ -1100,6 +1221,48 @@ void append_events_fast_range(const std::vector<Event> &events,
       continue;
     }
     const ResolvedService &service = *schema.by_which[which];
+    if (skip_raw_can && (service.service_name == "can" || service.service_name == "sendcan")) {
+      capnp::FlatArrayMessageReader event_reader(event_record.data);
+      const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
+      const double tm = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
+      auto decode_message = [&](uint8_t bus, uint32_t address, const auto &dat_reader) {
+        if (can_dbc == nullptr) {
+          return;
+        }
+        const dbc_core::Message *message = can_dbc->message(address);
+        if (message == nullptr) {
+          return;
+        }
+        const auto bytes = dat_reader.begin();
+        const uint8_t *data = bytes;
+        const size_t data_size = dat_reader.size();
+        const std::string base_path = "/" + service.service_name + "/" + std::to_string(bus) + "/" + message->name;
+        for (const dbc_core::Signal &signal : message->signals) {
+          std::optional<double> value = dbc_core::signal_value(signal, *message, data, data_size);
+          if (!value.has_value()) {
+            continue;
+          }
+          const std::string path = base_path + "/" + signal.name;
+          append_dynamic_scalar_point(path, tm, *value, series);
+          if (series->enum_info.find(path) == series->enum_info.end()) {
+            std::vector<std::string> enum_names = can_dbc->enum_names(signal);
+            if (!enum_names.empty()) {
+              series->enum_info.emplace(path, EnumInfo{.names = std::move(enum_names)});
+            }
+          }
+        }
+      };
+      if (service.service_name == "can") {
+        for (const auto &msg : event.getCan()) {
+          decode_message(static_cast<uint8_t>(msg.getSrc()), msg.getAddress(), msg.getDat());
+        }
+      } else {
+        for (const auto &msg : event.getSendcan()) {
+          decode_message(static_cast<uint8_t>(msg.getSrc()), msg.getAddress(), msg.getDat());
+        }
+      }
+      continue;
+    }
 
     capnp::FlatArrayMessageReader event_reader(event_record.data);
     const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
@@ -1204,7 +1367,9 @@ std::vector<RouteSeries> collect_series(SeriesAccumulator &&series) {
 
 RouteData build_route_data(std::vector<RouteSeries> &&series_list,
                            std::vector<LogEntry> &&logs,
-                           std::unordered_map<std::string, EnumInfo> &&enum_info) {
+                           std::unordered_map<std::string, EnumInfo> &&enum_info,
+                           std::string car_fingerprint,
+                           std::string dbc_name) {
   RouteData route_data;
   route_data.series.reserve(series_list.size());
   route_data.paths.reserve(series_list.size());
@@ -1267,6 +1432,8 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list,
   }
 
   route_data.enum_info = std::move(enum_info);
+  route_data.car_fingerprint = std::move(car_fingerprint);
+  route_data.dbc_name = std::move(dbc_name);
   route_data.roots = collect_route_roots(route_data.paths);
   return route_data;
 }
@@ -1368,12 +1535,14 @@ size_t extract_chunk_count(size_t event_count, size_t worker_budget, size_t segm
 
 SeriesAccumulator extract_segment_series(const std::vector<Event> &events,
                                          const SchemaIndex &schema,
+                                         const dbc_core::Database *can_dbc,
+                                         bool skip_raw_can,
                                          size_t worker_budget,
                                          size_t segment_workers) {
   const size_t chunk_count = extract_chunk_count(events.size(), worker_budget, segment_workers);
   if (chunk_count <= 1 || events.empty()) {
     SeriesAccumulator series = make_series_accumulator(schema);
-    append_events_fast_range(events, 0, events.size(), schema, &series);
+    append_events_fast_range(events, 0, events.size(), schema, can_dbc, skip_raw_can, &series);
     return series;
   }
 
@@ -1390,10 +1559,10 @@ SeriesAccumulator extract_segment_series(const std::vector<Event> &events,
     workers.emplace_back([&, chunk]() {
       const size_t begin = chunk * events_per_chunk;
       const size_t end = std::min(events.size(), begin + events_per_chunk);
-      append_events_fast_range(events, begin, end, schema, &chunk_results[chunk]);
+      append_events_fast_range(events, begin, end, schema, can_dbc, skip_raw_can, &chunk_results[chunk]);
     });
   }
-  append_events_fast_range(events, 0, std::min(events.size(), events_per_chunk), schema, &chunk_results[0]);
+  append_events_fast_range(events, 0, std::min(events.size(), events_per_chunk), schema, can_dbc, skip_raw_can, &chunk_results[0]);
   for (std::thread &worker : workers) {
     worker.join();
   }
@@ -1408,6 +1577,8 @@ SeriesAccumulator extract_segment_series(const std::vector<Event> &events,
 LoadedRouteArtifacts load_route_series_parallel(
     const std::map<int, SegmentLogs> &segments,
     const SchemaIndex &schema,
+    const dbc_core::Database *can_dbc,
+    bool skip_raw_can,
     LoadStats *stats) {
   struct SegmentResult {
     SeriesAccumulator series;
@@ -1471,7 +1642,7 @@ LoadedRouteArtifacts load_route_series_parallel(
       stats->publish(RouteLoadStage::DownloadingSegment, index, std::to_string(segment_number));
 
       const auto extract_start = LoadStats::Clock::now();
-      results[index].series = extract_segment_series(reader.events, schema, worker_budget, segment_workers);
+      results[index].series = extract_segment_series(reader.events, schema, can_dbc, skip_raw_can, worker_budget, segment_workers);
       results[index].logs = extract_segment_logs(reader.events);
       segment_stats.extract_seconds = std::chrono::duration<double>(LoadStats::Clock::now() - extract_start).count();
       segment_stats.event_count = reader.events.size();
@@ -1563,6 +1734,7 @@ SketchLayout load_sketch_layout(const fs::path &layout_path) {
 
 RouteData load_route_data(const std::string &route_name,
                           const std::string &data_dir,
+                          const std::string &dbc_name,
                           const RouteLoadProgressCallback &progress) {
   if (route_name.empty()) {
     return RouteData{};
@@ -1578,16 +1750,29 @@ RouteData load_route_data(const std::string &route_name,
   stats.segments.resize(segments.size());
   stats.publish(RouteLoadStage::Resolving, 0, {});
 
+  const RouteMetadata metadata = detect_route_metadata(segments);
+  const std::string resolved_dbc = !dbc_name.empty() ? dbc_name : detect_dbc_for_fingerprint(metadata.car_fingerprint);
+  const std::optional<dbc_core::Database> can_dbc = resolved_dbc.empty()
+    ? std::nullopt
+    : std::optional<dbc_core::Database>(std::in_place, resolve_dbc_path(resolved_dbc));
+
   const SchemaIndex &schema = SchemaIndex::instance();
-  LoadedRouteArtifacts artifacts = load_route_series_parallel(segments, schema, &stats);
+  LoadedRouteArtifacts artifacts = load_route_series_parallel(segments, schema, can_dbc ? &*can_dbc : nullptr, !resolved_dbc.empty(), &stats);
   RouteData route_data = build_route_data(std::move(artifacts.series),
                                           std::move(artifacts.logs),
-                                          std::move(artifacts.enum_info));
+                                          std::move(artifacts.enum_info),
+                                          metadata.car_fingerprint,
+                                          resolved_dbc);
   build_road_camera_index(segments, &route_data);
   stats.load_end = LoadStats::Clock::now();
   stats.publish(RouteLoadStage::Finished, segments.size(), {});
   stats.print_summary(route_data.series.size());
   return route_data;
+}
+
+std::vector<std::string> available_dbc_names() {
+  static const std::vector<std::string> names = available_dbc_names_impl();
+  return names;
 }
 
 }  // namespace jotpluggler

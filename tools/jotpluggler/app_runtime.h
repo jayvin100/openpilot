@@ -64,7 +64,7 @@ public:
   AsyncRouteLoader(const AsyncRouteLoader &) = delete;
   AsyncRouteLoader &operator=(const AsyncRouteLoader &) = delete;
 
-  void start(const std::string &route_name, const std::string &data_dir);
+  void start(const std::string &route_name, const std::string &data_dir, const std::string &dbc_name);
   RouteLoadSnapshot snapshot() const;
   bool consume(RouteData *route_data, std::string *error_text);
 

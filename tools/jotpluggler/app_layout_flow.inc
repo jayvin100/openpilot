@@ -1,0 +1,270 @@
+bool reset_layout(AppSession *session, UiState *state) {
+  try {
+    if (session->layout_path.empty()) {
+      session->layout = make_empty_layout();
+      session->autosave_path.clear();
+      state->layout_dirty = false;
+      state->tabs.clear();
+      cancel_rename_tab(state);
+      sync_ui_state(state, session->layout);
+      sync_layout_buffers(state, *session);
+      reset_shared_range(state, *session);
+      state->status_text = "Reset layout";
+      return true;
+    }
+    clear_layout_autosave(*session);
+    session->layout = load_sketch_layout(session->layout_path);
+    state->layout_dirty = false;
+    session->autosave_path = autosave_path_for_layout(session->layout_path);
+    state->tabs.clear();
+    cancel_rename_tab(state);
+    sync_ui_state(state, session->layout);
+    sync_layout_buffers(state, *session);
+    reset_shared_range(state, *session);
+    state->status_text = "Reset layout";
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    state->status_text = "Failed to reset layout";
+    return false;
+  }
+}
+
+bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg) {
+  try {
+    const fs::path layout_path = resolve_layout_path(layout_arg);
+    session->autosave_path = autosave_path_for_layout(layout_path);
+    const bool load_draft = fs::exists(session->autosave_path);
+    session->layout = load_sketch_layout(load_draft ? session->autosave_path : layout_path);
+    session->layout_path = layout_path;
+    state->layout_dirty = load_draft;
+    cancel_rename_tab(state);
+    state->tabs.clear();
+    sync_ui_state(state, session->layout);
+    sync_layout_buffers(state, *session);
+    mark_all_docks_dirty(state);
+    reset_shared_range(state, *session);
+    state->status_text = std::string(load_draft ? "Loaded layout draft " : "Loaded layout ")
+      + layout_path.filename().string();
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    state->status_text = "Failed to load layout";
+    return false;
+  }
+}
+
+bool save_layout(AppSession *session, UiState *state, const std::string &layout_path) {
+  try {
+    if (layout_path.empty()) {
+      throw std::runtime_error("Layout path is empty");
+    }
+    session->layout.current_tab_index = state->active_tab_index;
+    const fs::path previous_autosave = session->autosave_path;
+    const fs::path output = fs::absolute(fs::path(layout_path));
+    save_layout_json(session->layout, output);
+    session->layout_path = output;
+    session->autosave_path = autosave_path_for_layout(output);
+    if (!previous_autosave.empty() && previous_autosave != session->autosave_path && fs::exists(previous_autosave)) {
+      fs::remove(previous_autosave);
+    }
+    clear_layout_autosave(*session);
+    state->layout_dirty = false;
+    sync_layout_buffers(state, *session);
+    state->status_text = "Saved layout " + output.filename().string();
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    state->status_text = "Failed to save layout";
+    return false;
+  }
+}
+
+void rebuild_session_route_data(AppSession *session, UiState *state,
+                                const RouteLoadProgressCallback &progress = {}) {
+  apply_route_data(session, state, load_route_data(session->route_name, session->data_dir, session->dbc_override, progress));
+}
+
+void start_async_route_load(AppSession *session, UiState *state) {
+  if (!session->route_loader) {
+    return;
+  }
+  apply_route_data(session, state, RouteData{});
+  session->route_loader->start(session->route_name, session->data_dir, session->dbc_override);
+  state->status_text = session->route_name.empty() ? "Ready" : "Loading route " + session->route_name;
+}
+
+void poll_async_route_load(AppSession *session, UiState *state) {
+  if (!session->route_loader) {
+    return;
+  }
+  RouteData loaded_route;
+  std::string error_text;
+  if (!session->route_loader->consume(&loaded_route, &error_text)) {
+    return;
+  }
+  if (!error_text.empty()) {
+    state->error_text = error_text;
+    state->open_error_popup = true;
+    state->status_text = "Failed to load route";
+    return;
+  }
+  apply_route_data(session, state, std::move(loaded_route));
+  state->status_text = session->route_name.empty() ? "Ready" : "Loaded route " + session->route_name;
+}
+
+bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir) {
+  try {
+    session->route_name = route_name;
+    session->data_dir = data_dir;
+    if (session->async_route_loading) {
+      start_async_route_load(session, state);
+    } else {
+      rebuild_session_route_data(session, state);
+      state->status_text = "Loaded route " + route_name;
+    }
+    sync_route_buffers(state, *session);
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    state->status_text = "Failed to load route";
+    return false;
+  }
+}
+
+void draw_popups(AppSession *session, UiState *state) {
+  if (state->open_open_route) {
+    ImGui::OpenPopup("Open Route");
+    state->open_open_route = false;
+  }
+  if (state->open_load_layout) {
+    sync_layout_buffers(state, *session);
+    ImGui::OpenPopup("Load Layout");
+    state->open_load_layout = false;
+  }
+  if (state->open_save_layout) {
+    sync_layout_buffers(state, *session);
+    ImGui::OpenPopup("Save Layout");
+    state->open_save_layout = false;
+  }
+  if (state->axis_limits.open) {
+    ImGui::OpenPopup("Edit Axis Limits");
+    state->axis_limits.open = false;
+  }
+
+  if (ImGui::BeginPopupModal("Open Route", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Load a route into the current layout.");
+    ImGui::Separator();
+    ImGui::InputText("Route", state->route_buffer.data(), state->route_buffer.size());
+    ImGui::InputText("Data Dir", state->data_dir_buffer.data(), state->data_dir_buffer.size());
+    ImGui::Spacing();
+    if (ImGui::Button("Load", ImVec2(120.0f, 0.0f))) {
+      reload_session(session, state, std::string(state->route_buffer.data()), std::string(state->data_dir_buffer.data()));
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+      sync_route_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+  if (ImGui::BeginPopupModal("Load Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Load a JotPlugger JSON layout.");
+    ImGui::Separator();
+    ImGui::InputText("Layout", state->load_layout_buffer.data(), state->load_layout_buffer.size());
+    ImGui::Spacing();
+    if (ImGui::Button("Load", ImVec2(120.0f, 0.0f))) {
+      if (reload_layout(session, state, std::string(state->load_layout_buffer.data()))) {
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+      sync_layout_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+  if (ImGui::BeginPopupModal("Save Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Save the current workspace as a JotPlugger JSON layout.");
+    ImGui::Separator();
+    ImGui::InputText("Layout", state->save_layout_buffer.data(), state->save_layout_buffer.size());
+    ImGui::Spacing();
+    if (ImGui::Button("Save", ImVec2(120.0f, 0.0f))) {
+      if (save_layout(session, state, std::string(state->save_layout_buffer.data()))) {
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+      sync_layout_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+  if (ImGui::BeginPopupModal("Edit Axis Limits", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    const WorkspaceTab *tab = active_tab(session->layout, *state);
+    const bool valid_pane = tab != nullptr
+      && state->axis_limits.pane_index >= 0
+      && state->axis_limits.pane_index < static_cast<int>(tab->panes.size());
+    if (!valid_pane) {
+      ImGui::TextWrapped("The selected pane is no longer available.");
+      ImGui::Spacing();
+      if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+        state->axis_limits.pane_index = -1;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    } else {
+      ImGui::TextUnformatted("X range applies to the active tab. Y limits apply to the selected pane.");
+      ImGui::Separator();
+      ImGui::TextUnformatted("Horizontal");
+      ImGui::SetNextItemWidth(180.0f);
+      ImGui::InputDouble("X Min", &state->axis_limits.x_min, 0.0, 0.0, "%.3f");
+      ImGui::SetNextItemWidth(180.0f);
+      ImGui::InputDouble("X Max", &state->axis_limits.x_max, 0.0, 0.0, "%.3f");
+      ImGui::Spacing();
+      ImGui::TextUnformatted("Vertical");
+      ImGui::Checkbox("Use Y Min", &state->axis_limits.y_min_enabled);
+      ImGui::BeginDisabled(!state->axis_limits.y_min_enabled);
+      ImGui::SetNextItemWidth(180.0f);
+      ImGui::InputDouble("Y Min", &state->axis_limits.y_min, 0.0, 0.0, "%.6g");
+      ImGui::EndDisabled();
+      ImGui::Checkbox("Use Y Max", &state->axis_limits.y_max_enabled);
+      ImGui::BeginDisabled(!state->axis_limits.y_max_enabled);
+      ImGui::SetNextItemWidth(180.0f);
+      ImGui::InputDouble("Y Max", &state->axis_limits.y_max, 0.0, 0.0, "%.6g");
+      ImGui::EndDisabled();
+      ImGui::Spacing();
+      if (ImGui::Button("Apply", ImVec2(120.0f, 0.0f))) {
+        if (apply_axis_limits_editor(session, state)) {
+          state->axis_limits.pane_index = -1;
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+        state->axis_limits.pane_index = -1;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+  }
+  if (state->open_error_popup) {
+    ImGui::OpenPopup("Error");
+    state->open_error_popup = false;
+  }
+  if (ImGui::BeginPopupModal("Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextWrapped("%s", state->error_text.c_str());
+    ImGui::Spacing();
+    if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+}

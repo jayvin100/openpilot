@@ -34,6 +34,7 @@ struct AppSession {
   std::filesystem::path autosave_path;
   std::string route_name;
   std::string data_dir;
+  std::string dbc_override;
   SketchLayout layout;
   RouteData route_data;
   std::unordered_map<std::string, const RouteSeries *> series_by_path;
@@ -87,6 +88,17 @@ struct LogsUiState {
   LogTimeMode time_mode = LogTimeMode::Route;
 };
 
+struct AxisLimitsEditorState {
+  bool open = false;
+  int pane_index = -1;
+  double x_min = 0.0;
+  double x_max = 1.0;
+  bool y_min_enabled = false;
+  bool y_max_enabled = false;
+  double y_min = 0.0;
+  double y_max = 1.0;
+};
+
 struct UiState {
   bool open_open_route = false;
   bool open_load_layout = false;
@@ -131,6 +143,7 @@ struct UiState {
   double tracker_time = 0.0;
   double playback_rate = 1.0;
   double playback_step = 0.1;
+  AxisLimitsEditorState axis_limits;
   CustomSeriesEditorState custom_series;
   LogsUiState logs;
 };

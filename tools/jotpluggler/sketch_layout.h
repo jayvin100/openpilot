@@ -123,6 +123,8 @@ struct RouteData {
   CameraFeedIndex road_camera;
   std::vector<LogEntry> logs;
   std::unordered_map<std::string, EnumInfo> enum_info;
+  std::string car_fingerprint;
+  std::string dbc_name;
   bool has_time_range = false;
   double x_min = 0.0;
   double x_max = 1.0;
@@ -158,8 +160,10 @@ struct RouteLoadProgress {
 using RouteLoadProgressCallback = std::function<void(const RouteLoadProgress &)>;
 
 SketchLayout load_sketch_layout(const std::filesystem::path &layout_path);
+std::vector<std::string> available_dbc_names();
 RouteData load_route_data(const std::string &route_name,
                           const std::string &data_dir = {},
+                          const std::string &dbc_name = {},
                           const RouteLoadProgressCallback &progress = {});
 
 }  // namespace jotpluggler
