@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -26,10 +27,18 @@ public:
 
 class LogReader {
 public:
+  enum class ProgressStage {
+    Downloading,
+    Parsing,
+  };
+
+  using ProgressCallback = std::function<void(ProgressStage stage, uint64_t current, uint64_t total)>;
+
   LogReader(const std::vector<bool> &filters = {}) { filters_ = filters; }
   bool load(const std::string &url, std::atomic<bool> *abort = nullptr,
-            bool local_cache = false);
-  bool load(const char *data, size_t size, std::atomic<bool> *abort = nullptr);
+            bool local_cache = false, const ProgressCallback &progress = {});
+  bool load(const char *data, size_t size, std::atomic<bool> *abort = nullptr,
+            const ProgressCallback &progress = {});
   std::vector<Event> events;
 
 private:

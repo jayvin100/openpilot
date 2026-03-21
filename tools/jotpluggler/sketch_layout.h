@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -72,8 +74,27 @@ struct SketchLayout {
   std::vector<std::string> roots;
 };
 
+enum class RouteLoadStage {
+  Resolving,
+  DownloadingSegment,
+  ParsingSegment,
+  Finished,
+};
+
+struct RouteLoadProgress {
+  RouteLoadStage stage = RouteLoadStage::Resolving;
+  size_t segment_index = 0;
+  size_t segment_count = 0;
+  uint64_t current = 0;
+  uint64_t total = 0;
+  std::string segment_name;
+};
+
+using RouteLoadProgressCallback = std::function<void(const RouteLoadProgress &)>;
+
 SketchLayout load_sketch_layout(const std::filesystem::path &layout_path);
 RouteData load_route_data(const std::string &route_name,
-                          const std::string &data_dir = {});
+                          const std::string &data_dir = {},
+                          const RouteLoadProgressCallback &progress = {});
 
 }  // namespace jotpluggler

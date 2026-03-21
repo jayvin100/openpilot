@@ -671,25 +671,62 @@ SketchLayout load_sketch_layout(const fs::path &layout_path) {
 }
 
 RouteData load_route_data(const std::string &route_name,
-                          const std::string &data_dir) {
+                          const std::string &data_dir,
+                          const RouteLoadProgressCallback &progress) {
   RouteData route_data;
   if (route_name.empty()) {
     return route_data;
   }
 
+  const auto segments = resolve_route_segments(route_name, data_dir);
+  if (progress) {
+    RouteLoadProgress update;
+    update.stage = RouteLoadStage::Resolving;
+    update.segment_count = segments.size();
+    progress(update);
+  }
+
   std::unordered_map<std::string, RouteSeries> series_by_path;
-  for (const auto &[segment_number, segment] : resolve_route_segments(route_name, data_dir)) {
-    (void)segment_number;
+  size_t segment_index = 0;
+  for (const auto &[segment_number, segment] : segments) {
     const std::string &log_path = !segment.rlog.empty() ? segment.rlog : segment.qlog;
     if (log_path.empty()) {
+      ++segment_index;
       continue;
     }
 
     LogReader reader;
-    if (!reader.load(log_path, nullptr, true)) {
+    const std::string segment_name = std::to_string(segment_number);
+    auto reader_progress = [&](LogReader::ProgressStage stage, uint64_t current, uint64_t total) {
+      if (!progress) {
+        return;
+      }
+      RouteLoadProgress update;
+      update.stage = stage == LogReader::ProgressStage::Downloading
+        ? RouteLoadStage::DownloadingSegment
+        : RouteLoadStage::ParsingSegment;
+      update.segment_index = segment_index;
+      update.segment_count = segments.size();
+      update.current = current;
+      update.total = total;
+      update.segment_name = segment_name;
+      progress(update);
+    };
+    if (!reader.load(log_path, nullptr, true, reader_progress)) {
       throw std::runtime_error("Failed to load log segment: " + log_path);
     }
     append_events_to_series(reader.events, &series_by_path);
+    ++segment_index;
+  }
+
+  if (progress) {
+    RouteLoadProgress update;
+    update.stage = RouteLoadStage::Finished;
+    update.segment_index = segments.size();
+    update.segment_count = segments.size();
+    update.current = 1;
+    update.total = 1;
+    progress(update);
   }
 
   route_data.series.reserve(series_by_path.size());

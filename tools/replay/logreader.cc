@@ -3,11 +3,23 @@
 #include <algorithm>
 #include <utility>
 #include "tools/replay/filereader.h"
+#include "tools/replay/py_downloader.h"
 #include "tools/replay/util.h"
 #include "common/util.h"
 
-bool LogReader::load(const std::string &url, std::atomic<bool> *abort, bool local_cache) {
+bool LogReader::load(const std::string &url, std::atomic<bool> *abort, bool local_cache,
+                     const ProgressCallback &progress) {
+  if (progress) {
+    installDownloadProgressHandler([progress](uint64_t cur, uint64_t total, bool success) {
+      if (success) {
+        progress(ProgressStage::Downloading, cur, total);
+      }
+    });
+  }
   std::string data = FileReader(local_cache).read(url, abort);
+  if (progress) {
+    installDownloadProgressHandler(nullptr);
+  }
   if (!data.empty()) {
     if (url.find(".bz2") != std::string::npos || util::starts_with(data, "BZh9")) {
       data = decompressBZ2(data, abort);
@@ -16,16 +28,23 @@ bool LogReader::load(const std::string &url, std::atomic<bool> *abort, bool loca
     }
   }
 
-  bool success = !data.empty() && load(data.data(), data.size(), abort);
+  bool success = !data.empty() && load(data.data(), data.size(), abort, progress);
   if (filters_.empty())
     raw_ = std::move(data);
   return success;
 }
 
-bool LogReader::load(const char *data, size_t size, std::atomic<bool> *abort) {
+bool LogReader::load(const char *data, size_t size, std::atomic<bool> *abort,
+                     const ProgressCallback &progress) {
   try {
     events.reserve(65000);
     kj::ArrayPtr<const capnp::word> words((const capnp::word *)data, size / sizeof(capnp::word));
+    const uint64_t total_bytes = size;
+    const uint64_t report_step = std::max<uint64_t>(1, total_bytes / 200);
+    uint64_t last_reported = 0;
+    if (progress) {
+      progress(ProgressStage::Parsing, 0, total_bytes);
+    }
     while (words.size() > 0 && !(abort && *abort)) {
       capnp::FlatArrayMessageReader reader(words);
       auto event = reader.getRoot<cereal::Event>();
@@ -56,9 +75,22 @@ bool LogReader::load(const char *data, size_t size, std::atomic<bool> *abort) {
           events.emplace_back(which, sof ? sof : mono_time, event_data, idx.getSegmentNum());
         }
       }
+
+      if (progress) {
+        const uint64_t current_bytes =
+          total_bytes - static_cast<uint64_t>(words.size() * sizeof(capnp::word));
+        if (current_bytes >= total_bytes || current_bytes - last_reported >= report_step) {
+          progress(ProgressStage::Parsing, current_bytes, total_bytes);
+          last_reported = current_bytes;
+        }
+      }
     }
   } catch (const kj::Exception &e) {
     rWarning("Failed to parse log : %s.\nRetrieved %zu events from corrupt log", e.getDescription().cStr(), events.size());
+  }
+
+  if (progress) {
+    progress(ProgressStage::Parsing, size, size);
   }
 
   if (requires_migration) {

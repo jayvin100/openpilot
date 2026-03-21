@@ -13,9 +13,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
-#include <cstdlib>
 #include <cfloat>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -208,6 +209,95 @@ public:
 
   ImGuiRuntime(const ImGuiRuntime &) = delete;
   ImGuiRuntime &operator=(const ImGuiRuntime &) = delete;
+};
+
+class TerminalRouteProgress {
+public:
+  explicit TerminalRouteProgress(bool enabled) : enabled_(enabled) {}
+
+  void update(const RouteLoadProgress &progress) {
+    if (!enabled_) {
+      return;
+    }
+
+    if (progress.segment_index != active_segment_) {
+      active_segment_ = progress.segment_index;
+      saw_download_ = false;
+    }
+
+    double overall = 0.0;
+    std::string detail = "Resolving route";
+    if (progress.stage == RouteLoadStage::Finished) {
+      overall = 1.0;
+      detail = "Ready";
+    } else if (progress.segment_count > 0) {
+      double segment_fraction = 0.0;
+      if (progress.total > 0) {
+        segment_fraction = std::clamp(progress.current / static_cast<double>(progress.total), 0.0, 1.0);
+      }
+
+      double within_segment = 0.0;
+      if (progress.stage == RouteLoadStage::DownloadingSegment) {
+        saw_download_ = true;
+        within_segment = 0.35 * segment_fraction;
+        detail = "Downloading segment " + std::to_string(progress.segment_index + 1) + "/" + std::to_string(progress.segment_count);
+      } else if (progress.stage == RouteLoadStage::ParsingSegment) {
+        within_segment = saw_download_ ? 0.35 + 0.65 * segment_fraction : segment_fraction;
+        detail = "Parsing segment " + std::to_string(progress.segment_index + 1) + "/" + std::to_string(progress.segment_count);
+      }
+      overall = std::clamp((progress.segment_index + within_segment) / static_cast<double>(progress.segment_count), 0.0, 1.0);
+    }
+
+    render(overall, detail);
+  }
+
+  void finish() {
+    if (!enabled_ || !rendered_) {
+      return;
+    }
+    render(1.0, "Ready");
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+    rendered_ = false;
+  }
+
+  ~TerminalRouteProgress() {
+    finish();
+  }
+
+private:
+  void render(double progress, const std::string &detail) {
+    const int percent = std::clamp(static_cast<int>(std::round(progress * 100.0)), 0, 100);
+    if (percent == last_percent_ && detail == last_detail_) {
+      return;
+    }
+
+    constexpr int kWidth = 20;
+    const int filled = std::clamp(static_cast<int>(std::round(progress * kWidth)), 0, kWidth);
+    const std::string bar = std::string(static_cast<size_t>(filled), '=') + std::string(static_cast<size_t>(kWidth - filled), ' ');
+    std::ostringstream line;
+    line << "\r[" << bar << "] " << percent << "% " << detail;
+
+    const std::string text = line.str();
+    std::fprintf(stderr, "%s", text.c_str());
+    if (text.size() < last_line_width_) {
+      std::fprintf(stderr, "%s", std::string(last_line_width_ - text.size(), ' ').c_str());
+    }
+    std::fflush(stderr);
+
+    rendered_ = true;
+    last_percent_ = percent;
+    last_detail_ = detail;
+    last_line_width_ = text.size();
+  }
+
+  bool enabled_ = false;
+  bool rendered_ = false;
+  bool saw_download_ = false;
+  size_t active_segment_ = 0;
+  int last_percent_ = -1;
+  size_t last_line_width_ = 0;
+  std::string last_detail_;
 };
 
 std::string shell_quote(const std::string &value) {
@@ -1558,8 +1648,9 @@ void draw_workspace(const AppSession &session, const UiMetrics &ui, UiState *sta
   ImGui::PopStyleColor(2);
 }
 
-void rebuild_session_route_data(AppSession *session, UiState *state) {
-  session->route_data = load_route_data(session->route_name, session->data_dir);
+void rebuild_session_route_data(AppSession *session, UiState *state,
+                                const RouteLoadProgressCallback &progress = {}) {
+  session->route_data = load_route_data(session->route_name, session->data_dir, progress);
   rebuild_route_index(session);
   session->browser_nodes = build_browser_tree(session->route_data.paths);
   if (!state->selected_browser_path.empty() && find_route_series(*session, state->selected_browser_path) == nullptr) {
@@ -1739,7 +1830,11 @@ int run_app(const Options &options) {
   };
   UiState ui_state;
   sync_ui_state(&ui_state, session.layout);
-  rebuild_session_route_data(&session, &ui_state);
+  TerminalRouteProgress route_progress(::isatty(STDERR_FILENO) != 0);
+  rebuild_session_route_data(&session, &ui_state, [&](const RouteLoadProgress &update) {
+    route_progress.update(update);
+  });
+  route_progress.finish();
   sync_route_buffers(&ui_state, session);
 
   GlfwRuntime glfw_runtime(options);
