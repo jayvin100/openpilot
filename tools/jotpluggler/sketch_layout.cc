@@ -563,9 +563,6 @@ std::string json_value_for_log(const json11::Json &value) {
   if (value.is_bool()) {
     return value.bool_value() ? "true" : "false";
   }
-  if (value.is_number()) {
-    return value.dump();
-  }
   return value.dump();
 }
 
@@ -748,8 +745,7 @@ RouteMetadata extract_segment_metadata(const std::vector<Event> &events) {
 }
 
 RouteMetadata detect_route_metadata(const std::map<int, SegmentLogs> &segments) {
-  for (const auto &[segment_number, segment] : segments) {
-    (void)segment_number;
+  for (const auto &[_, segment] : segments) {
     const std::string &log_path = !segment.qlog.empty() ? segment.qlog : segment.rlog;
     if (log_path.empty()) {
       continue;
@@ -1932,7 +1928,7 @@ RouteData load_route_data(const std::string &route_name,
   return route_data;
 }
 
-std::vector<std::string> available_dbc_names() {
+const std::vector<std::string> &available_dbc_names() {
   static const std::vector<std::string> names = available_dbc_names_impl();
   return names;
 }

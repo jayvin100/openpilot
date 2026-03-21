@@ -21,6 +21,8 @@
 #include <unistd.h>
 #include <vector>
 
+#include "third_party/json11/json11.hpp"
+
 namespace jotpluggler {
 namespace fs = std::filesystem;
 
@@ -39,86 +41,6 @@ struct CustomSeriesTemplate {
   int required_additional_sources;
   const char *requirement_text;
 };
-
-int input_text_resize_callback(ImGuiInputTextCallbackData *data) {
-  if (data->EventFlag != ImGuiInputTextFlags_CallbackResize || data->UserData == nullptr) {
-    return 0;
-  }
-  auto *text = static_cast<std::string *>(data->UserData);
-  text->resize(static_cast<size_t>(data->BufTextLen));
-  data->Buf = text->data();
-  return 0;
-}
-
-bool input_text_string(const char *label,
-                       std::string *text,
-                       ImGuiInputTextFlags flags = 0) {
-  flags |= ImGuiInputTextFlags_CallbackResize;
-  if (text->capacity() == 0) {
-    text->reserve(256);
-  }
-  return ImGui::InputText(label,
-                          text->data(),
-                          text->capacity() + 1,
-                          flags,
-                          input_text_resize_callback,
-                          text);
-}
-
-bool input_text_multiline_string(const char *label,
-                                 std::string *text,
-                                 const ImVec2 &size = ImVec2(0.0f, 0.0f),
-                                 ImGuiInputTextFlags flags = 0) {
-  flags |= ImGuiInputTextFlags_CallbackResize;
-  if (text->capacity() == 0) {
-    text->reserve(1024);
-  }
-  return ImGui::InputTextMultiline(label,
-                                   text->data(),
-                                   text->capacity() + 1,
-                                   size,
-                                   flags,
-                                   input_text_resize_callback,
-                                   text);
-}
-
-std::string trim_copy(std::string_view text) {
-  size_t begin = 0;
-  size_t end = text.size();
-  while (begin < end && std::isspace(static_cast<unsigned char>(text[begin]))) {
-    ++begin;
-  }
-  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
-    --end;
-  }
-  return std::string(text.substr(begin, end - begin));
-}
-
-std::string json_escape(std::string_view text) {
-  std::string escaped;
-  escaped.reserve(text.size() + 8);
-  for (const char c : text) {
-    switch (c) {
-      case '\\': escaped += "\\\\"; break;
-      case '"': escaped += "\\\""; break;
-      case '\b': escaped += "\\b"; break;
-      case '\f': escaped += "\\f"; break;
-      case '\n': escaped += "\\n"; break;
-      case '\r': escaped += "\\r"; break;
-      case '\t': escaped += "\\t"; break;
-      default:
-        if (static_cast<unsigned char>(c) < 0x20) {
-          char buf[7] = {};
-          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
-          escaped += buf;
-        } else {
-          escaped.push_back(c);
-        }
-        break;
-    }
-  }
-  return escaped;
-}
 
 struct ProcessResult {
   int exit_code = 0;
@@ -146,18 +68,18 @@ ProcessResult run_process(const std::vector<std::string> &args) {
   return result;
 }
 
-fs::path executable_dir() {
+fs::path math_eval_script_path() {
+#ifdef JOTP_REPO_ROOT
+  return fs::path(JOTP_REPO_ROOT) / "tools" / "jotpluggler" / "math_eval.py";
+#else
   std::array<char, 4096> buf = {};
   const ssize_t length = ::readlink("/proc/self/exe", buf.data(), buf.size() - 1);
   if (length <= 0) {
     throw std::runtime_error("Failed to resolve executable path");
   }
   buf[static_cast<size_t>(length)] = '\0';
-  return fs::path(buf.data()).parent_path();
-}
-
-fs::path math_eval_script_path() {
-  return executable_dir() / "math_eval.py";
+  return fs::path(buf.data()).parent_path() / "math_eval.py";
+#endif
 }
 
 void write_binary_vector(const fs::path &path, const std::vector<double> &values) {
@@ -318,30 +240,9 @@ PythonEvalResult evaluate_custom_python_series(const AppSession &session,
     write_text_file(globals_path, spec.globals_code);
     write_text_file(code_path, spec.function_code);
 
-    std::ofstream manifest(manifest_path);
-    if (!manifest) {
-      throw std::runtime_error("Failed to open manifest for writing");
-    }
-    manifest << "{\n";
-    manifest << "  \"paths\": [";
-    for (size_t i = 0; i < session.route_data.paths.size(); ++i) {
-      if (i != 0) {
-        manifest << ", ";
-      }
-      manifest << "\"" << json_escape(session.route_data.paths[i]) << "\"";
-    }
-    manifest << "],\n";
-    manifest << "  \"linked_source\": \"" << json_escape(spec.linked_source) << "\",\n";
-    manifest << "  \"additional_sources\": [";
-    for (size_t i = 0; i < spec.additional_sources.size(); ++i) {
-      if (i != 0) {
-        manifest << ", ";
-      }
-      manifest << "\"" << json_escape(spec.additional_sources[i]) << "\"";
-    }
-    manifest << "],\n";
-    manifest << "  \"series\": [\n";
-
+    json11::Json::array paths_json(session.route_data.paths.begin(), session.route_data.paths.end());
+    json11::Json::array additional_json(spec.additional_sources.begin(), spec.additional_sources.end());
+    json11::Json::array series_json;
     size_t series_index = 0;
     for (const std::string &path : referenced_paths) {
       const RouteSeries *series = app_find_route_series(session, path);
@@ -353,17 +254,16 @@ PythonEvalResult evaluate_custom_python_series(const AppSession &session,
       const fs::path value_path = temp_dir / (prefix + ".v.bin");
       write_binary_vector(time_path, series->times);
       write_binary_vector(value_path, series->values);
-      manifest << "    {\"path\": \"" << json_escape(path)
-               << "\", \"t\": \"" << json_escape(time_path.string())
-               << "\", \"v\": \"" << json_escape(value_path.string()) << "\"}";
-      if (series_index < referenced_paths.size()) {
-        manifest << ",";
-      }
-      manifest << "\n";
+      series_json.push_back(json11::Json::object{
+        {"path", path}, {"t", time_path.string()}, {"v", value_path.string()}});
     }
-    manifest << "  ]\n";
-    manifest << "}\n";
-    manifest.close();
+    const json11::Json manifest_json = json11::Json::object{
+      {"paths", std::move(paths_json)},
+      {"linked_source", spec.linked_source},
+      {"additional_sources", std::move(additional_json)},
+      {"series", std::move(series_json)},
+    };
+    write_text_file(manifest_path, manifest_json.dump());
 
     const ProcessResult process = run_process({
       "python3",
@@ -860,8 +760,7 @@ void draw_custom_series_editor(AppSession *session, UiState *state) {
               ImGui::EndChild();
             }
             if (ImGui::Button("Use Selected Example", ImVec2(0.0f, 0.0f))) {
-              const CustomSeriesTemplate &selected = templates[static_cast<size_t>(std::clamp(editor.selected_template, 0,
-                static_cast<int>(templates.size()) - 1))];
+              const CustomSeriesTemplate &selected = selected_custom_series_template(editor);
               editor.globals_code = selected.globals_code;
               editor.function_code = selected.function_code;
               editor.preview_is_result = false;
@@ -869,8 +768,7 @@ void draw_custom_series_editor(AppSession *session, UiState *state) {
             ImGui::Spacing();
             ImGui::TextDisabled("Preview");
             ImGui::BeginChild("##custom_series_template_preview", ImVec2(0.0f, 0.0f), true);
-            const CustomSeriesTemplate &selected = templates[static_cast<size_t>(std::clamp(editor.selected_template, 0,
-              static_cast<int>(templates.size()) - 1))];
+            const CustomSeriesTemplate &selected = selected_custom_series_template(editor);
             ImGui::TextUnformatted(selected.preview_text);
             ImGui::EndChild();
           }

@@ -1,4 +1,5 @@
 #include "tools/jotpluggler/app_runtime.h"
+#include "tools/jotpluggler/app_internal.h"
 
 #include "cereal/services.h"
 #include "imgui.h"
@@ -39,10 +40,6 @@
 namespace jotpluggler {
 
 namespace {
-
-bool is_local_stream_address(std::string_view address) {
-  return address.empty() || address == "127.0.0.1" || address == "localhost";
-}
 
 std::string normalize_stream_address(std::string address) {
   return is_local_stream_address(address) ? "127.0.0.1" : address;

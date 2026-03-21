@@ -31,48 +31,13 @@ constexpr std::array<LevelOption, 5> kLevelOptions = {{
 }};
 constexpr uint32_t kAllLevelMask = (1u << kLevelOptions.size()) - 1u;
 
-int input_text_resize_callback(ImGuiInputTextCallbackData *data) {
-  if (data->EventFlag != ImGuiInputTextFlags_CallbackResize || data->UserData == nullptr) {
-    return 0;
-  }
-  auto *text = static_cast<std::string *>(data->UserData);
-  text->resize(static_cast<size_t>(data->BufTextLen));
-  data->Buf = text->data();
-  return 0;
-}
-
-bool input_text_with_hint_string(const char *label,
-                                 const char *hint,
-                                 std::string *text,
-                                 ImGuiInputTextFlags flags = 0) {
-  flags |= ImGuiInputTextFlags_CallbackResize;
-  if (text->capacity() == 0) {
-    text->reserve(256);
-  }
-  return ImGui::InputTextWithHint(label,
-                                  hint,
-                                  text->data(),
-                                  text->capacity() + 1,
-                                  flags,
-                                  input_text_resize_callback,
-                                  text);
-}
-
-std::string lowercase_copy(std::string_view value) {
-  std::string out(value);
-  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return out;
-}
-
 bool log_matches_search(const LogEntry &entry, std::string_view query) {
   if (query.empty()) {
     return true;
   }
-  const std::string needle = lowercase_copy(query);
+  const std::string needle = lowercase(query);
   const auto contains = [&](std::string_view haystack) {
-    return lowercase_copy(haystack).find(needle) != std::string::npos;
+    return lowercase(haystack).find(needle) != std::string::npos;
   };
   return contains(entry.message) || contains(entry.source) || contains(entry.func);
 }

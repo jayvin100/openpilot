@@ -226,17 +226,7 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
       }
       ImGui::Separator();
       if (ImGui::MenuItem("New Layout")) {
-        session->layout = make_empty_layout();
-        session->layout_path.clear();
-        session->autosave_path.clear();
-        state->layout_dirty = false;
-        state->status_text = "New untitled layout";
-        state->tabs.clear();
-        cancel_rename_tab(state);
-        sync_ui_state(state, session->layout);
-        sync_layout_buffers(state, *session);
-        mark_all_docks_dirty(state);
-        reset_shared_range(state, *session);
+        start_new_layout(session, state);
       }
       if (ImGui::MenuItem("Load Layout...")) {
         state->open_load_layout = true;

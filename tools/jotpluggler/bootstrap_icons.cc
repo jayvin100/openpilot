@@ -5,7 +5,6 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
-#include <unistd.h>
 
 namespace jotpluggler::bootstrap_icons {
 namespace {
@@ -35,20 +34,18 @@ constexpr std::array<IconEntry, 15> kIcons = {{
   {"zoom-out",              "\xef\x98\xad"},  // U+F62D
 }};
 
-fs::path repo_root() {
-  std::array<char, 4096> buf = {};
-  const ssize_t count = readlink("/proc/self/exe", buf.data(), buf.size() - 1);
-  if (count <= 0) {
-    return {};
-  }
-  return fs::path(std::string(buf.data(), static_cast<size_t>(count)))
-      .parent_path().parent_path().parent_path();
+fs::path font_dir() {
+#ifdef JOTP_REPO_ROOT
+  return fs::path(JOTP_REPO_ROOT) / "third_party" / "bootstrap";
+#else
+  return fs::current_path() / "third_party" / "bootstrap";
+#endif
 }
 
 }  // namespace
 
 void load_font(float size) {
-  const fs::path ttf = repo_root() / "third_party" / "bootstrap" / "bootstrap-icons.ttf";
+  const fs::path ttf = font_dir() / "bootstrap-icons.ttf";
   if (!fs::exists(ttf)) {
     return;
   }

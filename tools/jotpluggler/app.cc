@@ -53,10 +53,7 @@ constexpr const char *kUntitledPaneTitle = "...";
 constexpr float kSidebarWidth = 320.0f;
 constexpr float kSidebarMinWidth = 220.0f;
 constexpr float kSidebarMaxWidth = 520.0f;
-constexpr float kContentGap = 0.0f;
-constexpr float kContentRightPadding = 0.0f;
 constexpr float kStatusBarHeight = 38.0f;
-constexpr float kBrowserValueWidth = 88.0f;
 constexpr double kMinHorizontalZoomSeconds = 2.0;
 constexpr double kPlotYPadFraction = 0.4;
 ImFont *g_ui_font = nullptr;
@@ -81,26 +78,30 @@ struct PlotBounds {
   double y_max = 1.0;
 };
 
-fs::path repo_root() {
-  std::array<char, 4096> buf = {};
-  const ssize_t count = readlink("/proc/self/exe", buf.data(), buf.size() - 1);
-  if (count <= 0) {
-    throw std::runtime_error("Unable to resolve executable path");
-  }
-  return fs::path(std::string(buf.data(), static_cast<size_t>(count))).parent_path().parent_path().parent_path();
+const fs::path &repo_root() {
+  static const fs::path root = []() -> fs::path {
+#ifdef JOTP_REPO_ROOT
+    return JOTP_REPO_ROOT;
+#else
+    std::array<char, 4096> buf = {};
+    const ssize_t count = readlink("/proc/self/exe", buf.data(), buf.size() - 1);
+    if (count <= 0) {
+      throw std::runtime_error("Unable to resolve executable path");
+    }
+    return fs::path(std::string(buf.data(), static_cast<size_t>(count))).parent_path().parent_path().parent_path();
+#endif
+  }();
+  return root;
 }
 
 std::optional<fs::path> jetbrains_mono_font_path() {
   const char *home = std::getenv("HOME");
-  std::vector<fs::path> candidates = {
-    fs::path("/home/batman/.local/share/fonts/fonts/ttf/JetBrainsMono-Regular.ttf"),
-    fs::path("/home/batman/.local/share/fonts/fonts/variable/JetBrainsMono[wght].ttf"),
-    fs::path("/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf"),
-  };
+  std::vector<fs::path> candidates;
   if (home != nullptr) {
-    candidates.insert(candidates.begin(), fs::path(home) / ".local/share/fonts/fonts/ttf/JetBrainsMono-Regular.ttf");
-    candidates.insert(candidates.begin() + 1, fs::path(home) / ".local/share/fonts/fonts/variable/JetBrainsMono[wght].ttf");
+    candidates.push_back(fs::path(home) / ".local/share/fonts/fonts/ttf/JetBrainsMono-Regular.ttf");
+    candidates.push_back(fs::path(home) / ".local/share/fonts/fonts/variable/JetBrainsMono[wght].ttf");
   }
+  candidates.push_back(fs::path("/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf"));
   for (const fs::path &candidate : candidates) {
     if (fs::exists(candidate)) {
       return candidate;
@@ -188,7 +189,7 @@ fs::path autosave_path_for_layout(const fs::path &layout_path) {
   return autosave_dir() / (sanitize_layout_stem(stem) + ".json");
 }
 
-std::vector<std::string> available_layout_names() {
+std::vector<std::string> scan_layout_names() {
   std::vector<std::string> names;
   const fs::path root = layouts_dir();
   if (!fs::exists(root) || !fs::is_directory(root)) {
@@ -204,11 +205,15 @@ std::vector<std::string> available_layout_names() {
   return names;
 }
 
-void ensure_parent_dir(const fs::path &path) {
-  const fs::path parent = path.parent_path();
-  if (!parent.empty()) {
-    fs::create_directories(parent);
+bool g_layout_names_dirty = true;
+
+const std::vector<std::string> &available_layout_names() {
+  static std::vector<std::string> cached;
+  if (g_layout_names_dirty) {
+    cached = scan_layout_names();
+    g_layout_names_dirty = false;
   }
+  return cached;
 }
 
 void run_or_throw(const std::string &command, const std::string &action) {
@@ -270,21 +275,17 @@ void configure_style() {
   g_mono_font = nullptr;
   const std::optional<fs::path> ui_font_path = inter_font_path();
   const std::optional<fs::path> mono_font_path = jetbrains_mono_font_path();
+  ImFontConfig font_cfg;
+  font_cfg.OversampleH = 2;
+  font_cfg.OversampleV = 2;
+  font_cfg.RasterizerDensity = 1.0f;
   if (ui_font_path.has_value()) {
-    ImFontConfig font_cfg;
-    font_cfg.OversampleH = 2;
-    font_cfg.OversampleV = 2;
-    font_cfg.RasterizerDensity = 1.0f;
     if (ImFont *font = io.Fonts->AddFontFromFileTTF(ui_font_path->c_str(), 16.0f, &font_cfg); font != nullptr) {
       g_ui_font = font;
       io.FontDefault = font;
     }
   }
   if (g_ui_font == nullptr && mono_font_path.has_value()) {
-    ImFontConfig font_cfg;
-    font_cfg.OversampleH = 2;
-    font_cfg.OversampleV = 2;
-    font_cfg.RasterizerDensity = 1.0f;
     if (ImFont *font = io.Fonts->AddFontFromFileTTF(mono_font_path->c_str(), 15.75f, &font_cfg); font != nullptr) {
       g_mono_font = font;
       io.FontDefault = font;
@@ -292,10 +293,6 @@ void configure_style() {
   }
   bootstrap_icons::load_font(16.0f);
   if (g_mono_font == nullptr && mono_font_path.has_value()) {
-    ImFontConfig font_cfg;
-    font_cfg.OversampleH = 2;
-    font_cfg.OversampleV = 2;
-    font_cfg.RasterizerDensity = 1.0f;
     g_mono_font = io.Fonts->AddFontFromFileTTF(mono_font_path->c_str(), 15.75f, &font_cfg);
   }
 
@@ -384,9 +381,9 @@ UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset, float sidebar
   ui.height = size.y;
   ui.top_offset = top_offset;
   ui.sidebar_width = std::clamp(sidebar_width, kSidebarMinWidth, std::min(kSidebarMaxWidth, size.x * 0.6f));
-  ui.content_x = ui.sidebar_width + kContentGap;
+  ui.content_x = ui.sidebar_width;
   ui.content_y = top_offset;
-  ui.content_w = std::max(1.0f, size.x - ui.content_x - kContentRightPadding);
+  ui.content_w = std::max(1.0f, size.x - ui.content_x);
   ui.content_h = std::max(1.0f, size.y - ui.content_y - kStatusBarHeight);
   ui.status_bar_y = std::max(0.0f, size.y - kStatusBarHeight);
   return ui;
@@ -438,9 +435,7 @@ void sync_route_buffers(UiState *state, const AppSession &session) {
 
 void sync_stream_buffers(UiState *state, const AppSession &session) {
   copy_to_buffer(session.stream_address, &state->stream_address_buffer);
-  state->stream_remote = !session.stream_address.empty()
-    && session.stream_address != "127.0.0.1"
-    && session.stream_address != "localhost";
+  state->stream_remote = !is_local_stream_address(session.stream_address);
   state->stream_buffer_seconds = session.stream_buffer_seconds;
 }
 
@@ -478,12 +473,16 @@ TabUiState *active_tab_state(UiState *state) {
 }
 
 std::string pane_window_name(int tab_runtime_id, int pane_index, const Pane &pane) {
-  std::string title = pane.title.empty() ? kUntitledPaneTitle : pane.title;
-  return title + "##tab" + std::to_string(tab_runtime_id) + "_pane" + std::to_string(pane_index);
+  const char *title = pane.title.empty() ? kUntitledPaneTitle : pane.title.c_str();
+  char buf[256];
+  std::snprintf(buf, sizeof(buf), "%s##tab%d_pane%d", title, tab_runtime_id, pane_index);
+  return buf;
 }
 
 std::string tab_item_label(const WorkspaceTab &tab, int tab_runtime_id) {
-  return tab.tab_name + "##workspace_tab_" + std::to_string(tab_runtime_id);
+  char buf[256];
+  std::snprintf(buf, sizeof(buf), "%s##workspace_tab_%d", tab.tab_name.c_str(), tab_runtime_id);
+  return buf;
 }
 
 void request_tab_selection(UiState *state, int tab_index) {
@@ -507,7 +506,9 @@ void cancel_rename_tab(UiState *state) {
 }
 
 ImGuiID dockspace_id_for_tab(int tab_runtime_id) {
-  return ImHashStr(("jotpluggler_dockspace_" + std::to_string(tab_runtime_id)).c_str());
+  char buf[48];
+  std::snprintf(buf, sizeof(buf), "jotpluggler_dockspace_%d", tab_runtime_id);
+  return ImHashStr(buf);
 }
 
 enum class PaneDropZone {
@@ -899,7 +900,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
                               + (show_load_progress ? (ImGui::GetFrameHeightWithSpacing() + 12.0f) : 0.0f);
     const float browser_height = std::max(1.0f, ImGui::GetContentRegionAvail().y - footer_height);
     if (ImGui::BeginChild("##timeseries_browser", ImVec2(0.0f, browser_height), true)) {
-      const std::string filter = string_from_buffer(state->browser_filter);
+      const std::string filter = lowercase(string_from_buffer(state->browser_filter));
       std::vector<std::string> visible_paths;
       for (const BrowserNode &node : session->browser_nodes) {
         collect_visible_leaf_paths(node, filter, &visible_paths);
@@ -1254,43 +1255,11 @@ struct PaneEnumContext {
   std::vector<const EnumInfo *> enums;
 };
 
-bool is_digital_series(const std::vector<double> &values) {
-  if (values.size() < 2) {
-    return false;
-  }
-  std::vector<int> unique_levels;
-  unique_levels.reserve(std::min<size_t>(values.size(), 8));
-  for (double value : values) {
-    const double rounded = std::round(value);
-    if (std::abs(value - rounded) > 1.0e-6) {
-      return false;
-    }
-    const int level = static_cast<int>(rounded);
-    if (std::find(unique_levels.begin(), unique_levels.end(), level) == unique_levels.end()) {
-      unique_levels.push_back(level);
-      if (unique_levels.size() > 8) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-void decimate_samples(const std::vector<double> &xs_in,
-                      const std::vector<double> &ys_in,
-                      int max_points,
-                      std::vector<double> *xs_out,
-                      std::vector<double> *ys_out) {
-  xs_out->clear();
-  ys_out->clear();
-  if (xs_in.empty() || xs_in.size() != ys_in.size()) {
-    return;
-  }
-  if (max_points <= 0 || static_cast<int>(xs_in.size()) <= max_points) {
-    *xs_out = xs_in;
-    *ys_out = ys_in;
-    return;
-  }
+void decimate_samples_impl(const std::vector<double> &xs_in,
+                           const std::vector<double> &ys_in,
+                           int max_points,
+                           std::vector<double> *xs_out,
+                           std::vector<double> *ys_out) {
 
   const size_t bucket_count = std::max<size_t>(1, static_cast<size_t>(max_points / 4));
   const size_t bucket_size = std::max<size_t>(
@@ -1328,6 +1297,42 @@ void decimate_samples(const std::vector<double> &xs_in,
       append_index(index);
     }
   }
+}
+
+void decimate_samples(const std::vector<double> &xs_in,
+                      const std::vector<double> &ys_in,
+                      int max_points,
+                      std::vector<double> *xs_out,
+                      std::vector<double> *ys_out) {
+  xs_out->clear();
+  ys_out->clear();
+  if (xs_in.empty() || xs_in.size() != ys_in.size()) {
+    return;
+  }
+  if (max_points <= 0 || static_cast<int>(xs_in.size()) <= max_points) {
+    *xs_out = xs_in;
+    *ys_out = ys_in;
+    return;
+  }
+  decimate_samples_impl(xs_in, ys_in, max_points, xs_out, ys_out);
+}
+
+void decimate_samples(std::vector<double> &&xs_in,
+                      std::vector<double> &&ys_in,
+                      int max_points,
+                      std::vector<double> *xs_out,
+                      std::vector<double> *ys_out) {
+  xs_out->clear();
+  ys_out->clear();
+  if (xs_in.empty() || xs_in.size() != ys_in.size()) {
+    return;
+  }
+  if (max_points <= 0 || static_cast<int>(xs_in.size()) <= max_points) {
+    *xs_out = std::move(xs_in);
+    *ys_out = std::move(ys_in);
+    return;
+  }
+  decimate_samples_impl(xs_in, ys_in, max_points, xs_out, ys_out);
 }
 
 std::optional<double> sample_xy_value_at_time(const std::vector<double> &xs,
@@ -1400,11 +1405,10 @@ int format_enum_axis_tick(double value, char *buf, int size, void *user_data) {
   return std::snprintf(buf, size, "%.6g", value);
 }
 
-std::string curve_legend_label(const PreparedCurve &curve, bool has_cursor_time, double cursor_time) {
+std::string curve_legend_label(const PreparedCurve &curve, bool has_cursor_time) {
   if (!has_cursor_time) {
     return curve.label;
   }
-  (void)cursor_time;
   if (!curve.legend_value.has_value()) {
     return curve.label;
   }
@@ -1476,8 +1480,6 @@ bool build_curve_series(const AppSession &session,
     value = value * curve.value_scale + curve.value_offset;
   }
 
-  const bool stairs = !curve.derivative && is_digital_series(transformed_ys);
-
   prepared->label = curve_display_name(curve);
   prepared->color = curve.color;
   prepared->line_weight = curve.derivative ? 1.8f : 2.25f;
@@ -1510,17 +1512,16 @@ bool build_curve_series(const AppSession &session,
     display_series.values = transformed_ys;
     prepared->display_info = compute_browser_display_info(session, display_series);
   }
+  const bool stairs = !curve.derivative && prepared->display_info.integer_like;
   if (state.has_tracker_time) {
     prepared->legend_value = sample_xy_value_at_time(transformed_xs, transformed_ys, stairs, state.tracker_time);
   }
-  decimate_samples(transformed_xs, transformed_ys, max_points, &prepared->xs, &prepared->ys);
+  decimate_samples(std::move(transformed_xs), std::move(transformed_ys), max_points, &prepared->xs, &prepared->ys);
   prepared->stairs = stairs;
   return prepared->xs.size() > 1 && prepared->xs.size() == prepared->ys.size();
 }
 
-bool draw_close_icon_button(const char *id, bool draw_icon, ImVec2 size = ImVec2(16.0f, 16.0f));
-
-bool draw_close_icon_button(const char *id, bool draw_icon, ImVec2 size) {
+bool draw_close_icon_button(const char *id, bool draw_icon, ImVec2 size = ImVec2(16.0f, 16.0f)) {
   const bool clicked = ImGui::InvisibleButton(id, size);
   const bool hovered = ImGui::IsItemHovered();
   const bool held = ImGui::IsItemActive();
@@ -1792,7 +1793,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
 
     for (size_t i = 0; i < prepared_curves.size(); ++i) {
       const PreparedCurve &curve = prepared_curves[i];
-      std::string series_id = curve_legend_label(curve, has_cursor_time, cursor_time) + "##curve" + std::to_string(i);
+      std::string series_id = curve_legend_label(curve, has_cursor_time) + "##curve" + std::to_string(i);
       ImPlotSpec spec;
       spec.LineColor = color_rgb(curve.color);
       spec.LineWeight = curve.line_weight;
@@ -1991,33 +1992,18 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
       state->status_text = "Custom series editor opened";
       return true;
     case PaneMenuActionKind::SplitLeft:
-      if (split_pane(tab, pane_index, PaneDropZone::Left)) {
-        tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
-        dock_changed = true;
-        layout_changed = true;
-      }
-      break;
     case PaneMenuActionKind::SplitRight:
-      if (split_pane(tab, pane_index, PaneDropZone::Right)) {
-        tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
-        dock_changed = true;
-        layout_changed = true;
-      }
-      break;
     case PaneMenuActionKind::SplitTop:
-      if (split_pane(tab, pane_index, PaneDropZone::Top)) {
+    case PaneMenuActionKind::SplitBottom: {
+      constexpr PaneDropZone kZones[] = {PaneDropZone::Left, PaneDropZone::Right, PaneDropZone::Top, PaneDropZone::Bottom};
+      const auto zone = kZones[static_cast<int>(action.kind) - static_cast<int>(PaneMenuActionKind::SplitLeft)];
+      if (split_pane(tab, pane_index, zone)) {
         tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
         dock_changed = true;
         layout_changed = true;
       }
       break;
-    case PaneMenuActionKind::SplitBottom:
-      if (split_pane(tab, pane_index, PaneDropZone::Bottom)) {
-        tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
-        dock_changed = true;
-        layout_changed = true;
-      }
-      break;
+    }
     case PaneMenuActionKind::ResetView:
       reset_shared_range(state, *session);
       state->follow_latest = false;
@@ -2482,7 +2468,6 @@ int run_app(const Options &options) {
 
   const bool should_capture = !options.output_path.empty();
   const fs::path output_path = should_capture ? fs::path(options.output_path) : fs::path();
-  int exit_code = 0;
   if (options.show) {
     bool captured = false;
     while (!glfwWindowShouldClose(glfw_runtime.window())) {
@@ -2503,7 +2488,7 @@ int run_app(const Options &options) {
     session.stream_poller->stop();
   }
   session.camera_feed.reset();
-  return exit_code;
+  return 0;
 }
 
 }  // namespace
@@ -2542,6 +2527,13 @@ void app_pop_mono_font() {
 
 bool app_add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path) {
   return add_curve_to_active_pane_impl(session, state, path);
+}
+
+std::optional<double> app_sample_xy_value_at_time(const std::vector<double> &xs,
+                                                   const std::vector<double> &ys,
+                                                   bool stairs,
+                                                   double tm) {
+  return sample_xy_value_at_time(xs, ys, stairs, tm);
 }
 
 void app_decimate_samples(const std::vector<double> &xs_in,

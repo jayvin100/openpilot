@@ -55,7 +55,7 @@ Export a screenshot without opening a visible window:
 If you omit `--layout`, JotPlugger starts with a blank one-pane workspace.
 If you omit the route too, JotPlugger starts as an empty shell like PlotJuggler.
 `--demo` only provides the bundled demo route.
-Converted layouts live under [tools/jotpluggler/layouts](/home/batman/threepilot/tools/jotpluggler/layouts), and the app still accepts a sibling `.xml` path for compatibility when a matching `.json` exists.
+Converted layouts live under [tools/jotpluggler/layouts](tools/jotpluggler/layouts), and the app still accepts a sibling `.xml` path for compatibility when a matching `.json` exists.
 The app also accepts a positional `route` like the other log tools, plus `--data-dir`.
 Interactive `--show` mode now opens the window first and loads route data in the background.
 Use `--sync-load` when you want deterministic blocking startup, for example screenshot capture or validation.
@@ -70,4 +70,4 @@ Useful loader knobs:
 
 ## Validation
 
-The screenshot validator is intentionally separate and disposable. It now lives under [tools/jotpluggler_validator](/home/batman/threepilot/tools/jotpluggler_validator).
+The screenshot validator is intentionally separate and disposable. It now lives under [tools/jotpluggler_validator](tools/jotpluggler_validator).

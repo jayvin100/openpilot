@@ -23,12 +23,6 @@ std::string curve_color_hex(const std::array<uint8_t, 3> &color) {
   return hex.str();
 }
 
-void ensure_parent_dir(const fs::path &path) {
-  if (path.has_parent_path()) {
-    fs::create_directories(path.parent_path());
-  }
-}
-
 json11::Json curve_to_json(const Curve &curve) {
   json11::Json::object obj = {
     {"name", curve.name},

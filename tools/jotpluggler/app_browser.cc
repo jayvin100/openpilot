@@ -10,22 +10,18 @@
 #include <cmath>
 #include <cstdio>
 #include <string_view>
+#include <unordered_set>
 
 namespace jotpluggler {
 namespace {
 
 constexpr float kBrowserValueWidth = 88.0f;
 
-std::string lowercase(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
-}
-
-bool path_matches_filter(const std::string &path, const std::string &filter) {
-  if (filter.empty()) {
+bool path_matches_filter(const std::string &path, const std::string &lower_filter) {
+  if (lower_filter.empty()) {
     return true;
   }
-  return lowercase(path).find(lowercase(filter)) != std::string::npos;
+  return lowercase(path).find(lower_filter) != std::string::npos;
 }
 
 void insert_browser_path(std::vector<BrowserNode> *nodes, const std::string &path) {
@@ -176,8 +172,9 @@ void select_browser_range(UiState *state, const std::vector<std::string> &visibl
 }
 
 void prune_browser_selection(UiState *state, const std::vector<std::string> &visible_paths) {
+  const std::unordered_set<std::string> visible_set(visible_paths.begin(), visible_paths.end());
   auto is_visible = [&](const std::string &path) {
-    return std::find(visible_paths.begin(), visible_paths.end(), path) != visible_paths.end();
+    return visible_set.count(path) > 0;
   };
 
   state->selected_browser_paths.erase(
@@ -276,38 +273,7 @@ std::string format_display_value_impl(double display_value,
 }
 
 std::optional<double> sample_route_series_value(const RouteSeries &series, double tm, bool stairs) {
-  if (series.times.empty() || series.times.size() != series.values.size()) {
-    return std::nullopt;
-  }
-  if (tm <= series.times.front()) {
-    return series.values.front();
-  }
-  if (tm >= series.times.back()) {
-    return series.values.back();
-  }
-
-  const auto upper = std::lower_bound(series.times.begin(), series.times.end(), tm);
-  if (upper == series.times.begin()) {
-    return series.values.front();
-  }
-  if (upper == series.times.end()) {
-    return series.values.back();
-  }
-
-  const size_t upper_index = static_cast<size_t>(std::distance(series.times.begin(), upper));
-  const size_t lower_index = upper_index - 1;
-  const double x0 = series.times[lower_index];
-  const double x1 = series.times[upper_index];
-  const double y0 = series.values[lower_index];
-  const double y1 = series.values[upper_index];
-  if (stairs || std::abs(tm - x1) >= 1.0e-9) {
-    return y0;
-  }
-  if (x1 <= x0) {
-    return y0;
-  }
-  const double alpha = (tm - x0) / (x1 - x0);
-  return y0 + (y1 - y0) * alpha;
+  return app_sample_xy_value_at_time(series.times, series.values, stairs, tm);
 }
 
 std::string browser_series_value_text(const AppSession &session, const UiState &state, std::string_view path) {
@@ -413,7 +379,7 @@ void rebuild_browser_nodes(AppSession *session, UiState *state) {
 void rebuild_route_index(AppSession *session) {
   session->series_by_path.clear();
   session->browser_display_by_path.clear();
-  for (const RouteSeries &series : session->route_data.series) {
+  for (RouteSeries &series : session->route_data.series) {
     session->series_by_path.emplace(series.path, &series);
     session->browser_display_by_path.emplace(series.path, compute_browser_display_info_impl(*session, series));
   }

@@ -193,7 +193,7 @@ private:
 };
 
 SketchLayout load_sketch_layout(const std::filesystem::path &layout_path);
-std::vector<std::string> available_dbc_names();
+const std::vector<std::string> &available_dbc_names();
 std::vector<std::string> collect_route_roots_for_paths(const std::vector<std::string> &paths);
 RouteData load_route_data(const std::string &route_name,
                           const std::string &data_dir = {},

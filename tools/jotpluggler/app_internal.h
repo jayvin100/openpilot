@@ -5,7 +5,9 @@
 
 #include "imgui.h"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -48,7 +50,7 @@ struct AppSession {
   SessionDataMode data_mode = SessionDataMode::Route;
   SketchLayout layout;
   RouteData route_data;
-  std::unordered_map<std::string, const RouteSeries *> series_by_path;
+  std::unordered_map<std::string, RouteSeries *> series_by_path;
   std::unordered_map<std::string, BrowserSeriesDisplayInfo> browser_display_by_path;
   std::vector<BrowserNode> browser_nodes;
   std::unique_ptr<AsyncRouteLoader> route_loader;
@@ -178,6 +180,75 @@ inline ImVec4 color_rgb(const std::array<uint8_t, 3> &color, float alpha = 1.0f)
   return color_rgb(color[0], color[1], color[2], alpha);
 }
 
+inline std::string trim_copy(std::string_view text) {
+  size_t begin = 0;
+  size_t end = text.size();
+  while (begin < end && std::isspace(static_cast<unsigned char>(text[begin]))) {
+    ++begin;
+  }
+  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
+    --end;
+  }
+  return std::string(text.substr(begin, end - begin));
+}
+
+inline std::string lowercase(std::string_view value) {
+  std::string out(value);
+  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return out;
+}
+
+inline int imgui_resize_callback(ImGuiInputTextCallbackData *data) {
+  if (data->EventFlag != ImGuiInputTextFlags_CallbackResize || data->UserData == nullptr) {
+    return 0;
+  }
+  auto *text = static_cast<std::string *>(data->UserData);
+  text->resize(static_cast<size_t>(data->BufTextLen));
+  data->Buf = text->data();
+  return 0;
+}
+
+inline bool input_text_string(const char *label,
+                              std::string *text,
+                              ImGuiInputTextFlags flags = 0) {
+  flags |= ImGuiInputTextFlags_CallbackResize;
+  if (text->capacity() == 0) text->reserve(256);
+  return ImGui::InputText(label, text->data(), text->capacity() + 1,
+                          flags, imgui_resize_callback, text);
+}
+
+inline bool input_text_with_hint_string(const char *label,
+                                        const char *hint,
+                                        std::string *text,
+                                        ImGuiInputTextFlags flags = 0) {
+  flags |= ImGuiInputTextFlags_CallbackResize;
+  if (text->capacity() == 0) text->reserve(256);
+  return ImGui::InputTextWithHint(label, hint, text->data(), text->capacity() + 1,
+                                  flags, imgui_resize_callback, text);
+}
+
+inline bool input_text_multiline_string(const char *label,
+                                        std::string *text,
+                                        const ImVec2 &size = ImVec2(0.0f, 0.0f),
+                                        ImGuiInputTextFlags flags = 0) {
+  flags |= ImGuiInputTextFlags_CallbackResize;
+  if (text->capacity() == 0) text->reserve(1024);
+  return ImGui::InputTextMultiline(label, text->data(), text->capacity() + 1,
+                                   size, flags, imgui_resize_callback, text);
+}
+
+inline bool is_local_stream_address(std::string_view address) {
+  return address.empty() || address == "127.0.0.1" || address == "localhost";
+}
+
+inline void ensure_parent_dir(const std::filesystem::path &path) {
+  if (path.has_parent_path()) {
+    std::filesystem::create_directories(path.parent_path());
+  }
+}
+
 inline std::string shell_quote(std::string_view value) {
   std::string quoted;
   quoted.reserve(value.size() + 8);
@@ -209,6 +280,10 @@ void app_decimate_samples(const std::vector<double> &xs_in,
                           int max_points,
                           std::vector<double> *xs_out,
                           std::vector<double> *ys_out);
+std::optional<double> app_sample_xy_value_at_time(const std::vector<double> &xs,
+                                                   const std::vector<double> &ys,
+                                                   bool stairs,
+                                                   double tm);
 void save_layout_json(const SketchLayout &layout, const std::filesystem::path &path);
 
 }  // namespace jotpluggler

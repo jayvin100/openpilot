@@ -1,29 +1,34 @@
-std::optional<double> earliest_stream_batch_time(const StreamExtractBatch &batch) {
-  std::optional<double> earliest;
+template <typename Cmp, typename SeriesAccessor, typename LogAccessor>
+std::optional<double> stream_batch_extreme_time(const StreamExtractBatch &batch,
+                                                Cmp cmp,
+                                                SeriesAccessor series_time,
+                                                LogAccessor log_time_fn) {
+  std::optional<double> result;
   for (const RouteSeries &series : batch.series) {
     if (!series.times.empty()) {
-      earliest = earliest.has_value() ? std::min(*earliest, series.times.front()) : series.times.front();
+      const double t = series_time(series);
+      result = result.has_value() ? cmp(*result, t) : t;
     }
   }
   if (!batch.logs.empty()) {
-    const double log_time = batch.logs.front().mono_time;
-    earliest = earliest.has_value() ? std::min(*earliest, log_time) : log_time;
+    const double t = log_time_fn(batch);
+    result = result.has_value() ? cmp(*result, t) : t;
   }
-  return earliest;
+  return result;
+}
+
+std::optional<double> earliest_stream_batch_time(const StreamExtractBatch &batch) {
+  return stream_batch_extreme_time(batch,
+    [](double a, double b) { return std::min(a, b); },
+    [](const RouteSeries &s) { return s.times.front(); },
+    [](const StreamExtractBatch &b) { return b.logs.front().mono_time; });
 }
 
 std::optional<double> latest_stream_batch_time(const StreamExtractBatch &batch) {
-  std::optional<double> latest;
-  for (const RouteSeries &series : batch.series) {
-    if (!series.times.empty()) {
-      latest = latest.has_value() ? std::max(*latest, series.times.back()) : series.times.back();
-    }
-  }
-  if (!batch.logs.empty()) {
-    const double log_time = batch.logs.back().mono_time;
-    latest = latest.has_value() ? std::max(*latest, log_time) : log_time;
-  }
-  return latest;
+  return stream_batch_extreme_time(batch,
+    [](double a, double b) { return std::max(a, b); },
+    [](const RouteSeries &s) { return s.times.back(); },
+    [](const StreamExtractBatch &b) { return b.logs.back().mono_time; });
 }
 
 bool layout_has_custom_curves(const SketchLayout &layout) {
@@ -58,15 +63,15 @@ void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch 
   bool new_paths = false;
   std::vector<RouteSeries> new_series;
   for (RouteSeries &incoming : batch.series) {
-    const RouteSeries *existing_const = app_find_route_series(*session, incoming.path);
-    if (existing_const == nullptr) {
+    auto existing_it = session->series_by_path.find(incoming.path);
+    if (existing_it == session->series_by_path.end()) {
       new_series.push_back(std::move(incoming));
       new_paths = true;
       continue;
     }
-    RouteSeries &series = *const_cast<RouteSeries *>(existing_const);
-    series.times.insert(series.times.end(), incoming.times.begin(), incoming.times.end());
-    series.values.insert(series.values.end(), incoming.values.begin(), incoming.values.end());
+    RouteSeries &existing = *existing_it->second;
+    existing.times.insert(existing.times.end(), incoming.times.begin(), incoming.times.end());
+    existing.values.insert(existing.values.end(), incoming.values.begin(), incoming.values.end());
   }
   for (RouteSeries &series : new_series) {
     session->route_data.paths.push_back(series.path);
@@ -93,10 +98,18 @@ void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch 
   }
 
   if (new_paths) {
-    std::sort(session->route_data.paths.begin(), session->route_data.paths.end());
-    std::sort(session->route_data.series.begin(), session->route_data.series.end(), [](const RouteSeries &a, const RouteSeries &b) {
-      return a.path < b.path;
-    });
+    const size_t old_path_count = session->route_data.paths.size() - new_series.size();
+    std::sort(session->route_data.paths.begin() + static_cast<ptrdiff_t>(old_path_count), session->route_data.paths.end());
+    std::inplace_merge(session->route_data.paths.begin(),
+                       session->route_data.paths.begin() + static_cast<ptrdiff_t>(old_path_count),
+                       session->route_data.paths.end());
+    const size_t old_series_count = session->route_data.series.size() - new_series.size();
+    auto series_cmp = [](const RouteSeries &a, const RouteSeries &b) { return a.path < b.path; };
+    std::sort(session->route_data.series.begin() + static_cast<ptrdiff_t>(old_series_count),
+              session->route_data.series.end(), series_cmp);
+    std::inplace_merge(session->route_data.series.begin(),
+                       session->route_data.series.begin() + static_cast<ptrdiff_t>(old_series_count),
+                       session->route_data.series.end(), series_cmp);
     session->route_data.roots = collect_route_roots_for_paths(session->route_data.paths);
     rebuild_route_index(session);
     rebuild_browser_nodes(session, state);
