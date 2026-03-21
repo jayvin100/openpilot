@@ -118,40 +118,8 @@ int attr_int(xmlNodePtr node, const char *name, int default_value) {
   return end != nullptr && *end == '\0' ? static_cast<int>(parsed) : default_value;
 }
 
-std::string curve_leaf(std::string_view series_name) {
-  if (series_name.empty()) {
-    return "plot";
-  }
-  size_t last = series_name.find_last_of('/');
-  if (last == std::string_view::npos) {
-    return std::string(series_name);
-  }
-  return std::string(series_name.substr(last + 1));
-}
-
 std::string curve_label(std::string_view series_name) {
-  if (series_name.empty() || series_name.front() != '/') {
-    return std::string(series_name);
-  }
-
-  std::vector<std::string_view> parts;
-  size_t start = 1;
-  while (start < series_name.size()) {
-    size_t end = series_name.find('/', start);
-    parts.push_back(series_name.substr(start, end == std::string_view::npos ? series_name.size() - start : end - start));
-    if (end == std::string_view::npos) {
-      break;
-    }
-    start = end + 1;
-  }
-
-  if (parts.size() >= 2) {
-    const std::string_view parent = parts[parts.size() - 2];
-    if (parent.find("canState") == 0 || std::all_of(parent.begin(), parent.end(), ::isdigit)) {
-      return std::string(parent) + "/" + std::string(parts.back());
-    }
-  }
-  return curve_leaf(series_name);
+  return std::string(series_name.empty() ? std::string_view{"plot"} : series_name);
 }
 
 bool parse_segment_number(std::string_view value, int *out) {
@@ -369,6 +337,16 @@ PlotRange parse_range(xmlNodePtr plot_node) {
     range.bottom = attr_double(range_node, "bottom", 0.0);
     range.top = attr_double(range_node, "top", 1.0);
   }
+  if (xmlNodePtr limit_y_node = first_child(plot_node, "limitY"); limit_y_node != nullptr) {
+    if (!attr(limit_y_node, "min").empty()) {
+      range.has_y_limit_min = true;
+      range.y_limit_min = attr_double(limit_y_node, "min", 0.0);
+    }
+    if (!attr(limit_y_node, "max").empty()) {
+      range.has_y_limit_max = true;
+      range.y_limit_max = attr_double(limit_y_node, "max", 1.0);
+    }
+  }
   return range;
 }
 
@@ -443,7 +421,7 @@ WorkspaceNode parse_workspace_node(xmlNodePtr node, WorkspaceTab *tab) {
     return workspace_node;
   }
 
-  workspace_node.orientation = attr(node, "orientation", "-") == "-"
+  workspace_node.orientation = attr(node, "orientation", "|") == "|"
     ? SplitOrientation::Horizontal
     : SplitOrientation::Vertical;
   const std::vector<double> sizes = normalize_sizes(attr(node, "sizes"), children.size());

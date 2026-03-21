@@ -22,6 +22,7 @@ jot_env["CXXFLAGS"] += ["-DGLFW_INCLUDE_NONE"]
 core_sources = {
   "jot_main": "main.cc",
   "jot_app": "app.cc",
+  "jot_bootstrap_icons": "bootstrap_icons.cc",
   "jot_sketch_layout": "sketch_layout.cc",
   "jot_logreader": "../replay/logreader.cc",
   "jot_replay_util": "../replay/util.cc",

@@ -15,6 +15,10 @@ struct PlotRange {
   double right = 0.0;
   double bottom = 0.0;
   double top = 1.0;
+  bool has_y_limit_min = false;
+  bool has_y_limit_max = false;
+  double y_limit_min = 0.0;
+  double y_limit_max = 1.0;
 };
 
 struct Curve {
