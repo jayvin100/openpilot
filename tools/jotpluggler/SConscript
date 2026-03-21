@@ -6,7 +6,8 @@ Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal')
 Import('replay_lib')
 
 jot_env = env.Clone()
-jot_env["CPPPATH"] += [imgui.INCLUDE_DIR, imgui.SRC_DIR]
+jot_env["LIBPATH"] += [imgui.MESA_DIR]
+jot_env["CPPPATH"] += [imgui.INCLUDE_DIR]
 jot_env["CXXFLAGS"] += ["-DGLFW_INCLUDE_NONE"]
 
 jot_sources = [
@@ -15,25 +16,16 @@ jot_sources = [
   "bootstrap_icons.cc",
   "sketch_layout.cc",
 ]
-imgui_sources = [
-  f"{imgui.SRC_DIR}/imgui.cpp",
-  f"{imgui.SRC_DIR}/imgui_draw.cpp",
-  f"{imgui.SRC_DIR}/imgui_widgets.cpp",
-  f"{imgui.SRC_DIR}/imgui_tables.cpp",
-  f"{imgui.SRC_DIR}/imgui_impl_opengl3.cpp",
-  f"{imgui.SRC_DIR}/implot.cpp",
-  f"{imgui.SRC_DIR}/implot_items.cpp",
-  f"{imgui.SRC_DIR}/imgui_impl_glfw.cpp",
-]
 
 objects = []
-for source in jot_sources + imgui_sources:
+for source in jot_sources:
   basename = os.path.splitext(os.path.basename(source))[0]
   objects.append(jot_env.Object(target=f"jot_{basename}", source=source))
 
+imgui_static = File(f"{imgui.LIB_DIR}/libimgui.a")
 glfw_static = File(f"{imgui.LIB_DIR}/libglfw3.a")
 frameworks = []
-libs = [replay_lib, common, messaging, visionipc, cereal, glfw_static,
+libs = [replay_lib, common, messaging, visionipc, cereal, imgui_static, glfw_static,
         "avformat", "avcodec", "swresample", "avutil", "x264", "yuv", "z", "bz2", "zstd", "m", "pthread"]
 if arch == "Darwin":
   frameworks = ["OpenGL", "Cocoa", "IOKit", "CoreFoundation", "CoreVideo"]
