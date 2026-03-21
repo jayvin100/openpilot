@@ -49,6 +49,7 @@ if HARDWARE.get_device_type() == "tizi":
   sound_list.update({
     AudibleAlert.engage: ("engage_tizi.wav", 1, MAX_VOLUME),
     AudibleAlert.disengage: ("disengage_tizi.wav", 1, MAX_VOLUME),
+    AudibleAlert.promptDistracted: ("prompt_distracted_tizi.wav", None, MAX_VOLUME),
   })
 
 def check_selfdrive_timeout_alert(sm):
