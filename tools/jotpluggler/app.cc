@@ -1743,8 +1743,13 @@ struct PreparedCurve {
   std::array<uint8_t, 3> color = {160, 170, 180};
   float line_weight = 2.0f;
   bool stairs = false;
+  const EnumInfo *enum_info = nullptr;
   std::vector<double> xs;
   std::vector<double> ys;
+};
+
+struct PaneEnumContext {
+  std::vector<const EnumInfo *> enums;
 };
 
 bool is_digital_series(const std::vector<double> &values) {
@@ -1830,6 +1835,53 @@ std::optional<double> sample_curve_value_at_time(const PreparedCurve &curve, dou
   return y0 + (y1 - y0) * alpha;
 }
 
+bool try_format_enum_value(const EnumInfo *info, double value, std::string *formatted) {
+  if (info == nullptr) {
+    return false;
+  }
+  const int idx = static_cast<int>(std::llround(value));
+  if (idx < 0 || std::abs(value - static_cast<double>(idx)) > 0.01) {
+    return false;
+  }
+  if (static_cast<size_t>(idx) >= info->names.size() || info->names[static_cast<size_t>(idx)].empty()) {
+    return false;
+  }
+  *formatted = info->names[static_cast<size_t>(idx)];
+  return true;
+}
+
+int format_enum_axis_tick(double value, char *buf, int size, void *user_data) {
+  const auto *ctx = static_cast<const PaneEnumContext *>(user_data);
+  const int idx = static_cast<int>(std::llround(value));
+  if (ctx != nullptr && idx >= 0 && std::abs(value - static_cast<double>(idx)) < 0.01) {
+    std::vector<std::string_view> names;
+    names.reserve(ctx->enums.size());
+    for (const EnumInfo *info : ctx->enums) {
+      if (info == nullptr || static_cast<size_t>(idx) >= info->names.size()) {
+        continue;
+      }
+      const std::string &name = info->names[static_cast<size_t>(idx)];
+      if (name.empty()) {
+        continue;
+      }
+      if (std::find(names.begin(), names.end(), std::string_view(name)) == names.end()) {
+        names.emplace_back(name);
+      }
+    }
+    if (!names.empty()) {
+      std::string joined;
+      for (size_t i = 0; i < names.size(); ++i) {
+        if (i != 0) {
+          joined += ", ";
+        }
+        joined += names[i];
+      }
+      return std::snprintf(buf, size, "%d (%s)", idx, joined.c_str());
+    }
+  }
+  return std::snprintf(buf, size, "%.6g", value);
+}
+
 void draw_cursor_overlay(const std::vector<PreparedCurve> &prepared_curves, double cursor_time) {
   std::vector<std::string> lines;
   lines.reserve(1 + std::min(prepared_curves.size(), kCursorOverlayValueCount));
@@ -1847,7 +1899,12 @@ void draw_cursor_overlay(const std::vector<PreparedCurve> &prepared_curves, doub
       continue;
     }
     char value_line[256] = {};
-    std::snprintf(value_line, sizeof(value_line), "%s %.6g", curve.label.c_str(), *value);
+    std::string enum_name;
+    if (try_format_enum_value(curve.enum_info, *value, &enum_name)) {
+      std::snprintf(value_line, sizeof(value_line), "%s %s", curve.label.c_str(), enum_name.c_str());
+    } else {
+      std::snprintf(value_line, sizeof(value_line), "%s %.6g", curve.label.c_str(), *value);
+    }
     lines.emplace_back(value_line);
   }
 
@@ -1943,6 +2000,17 @@ bool build_curve_series(const AppSession &session,
   prepared->label = curve_display_name(curve);
   prepared->color = curve.color;
   prepared->line_weight = curve.derivative ? 1.8f : 2.25f;
+  if (!curve.derivative
+      && curve.value_scale == 1.0
+      && curve.value_offset == 0.0
+      && !curve_has_local_samples(curve)
+      && !curve.name.empty()
+      && curve.name.front() == '/') {
+    auto it = session.route_data.enum_info.find(curve.name);
+    if (it != session.route_data.enum_info.end()) {
+      prepared->enum_info = &it->second;
+    }
+  }
   decimate_samples(transformed_xs, transformed_ys, max_points, &prepared->xs, &prepared->ys);
   prepared->stairs = !curve.derivative && is_digital_series(prepared->ys);
   return prepared->xs.size() > 1 && prepared->xs.size() == prepared->ys.size();
@@ -2034,6 +2102,12 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   }
 
   const PlotBounds bounds = compute_plot_bounds(*pane, prepared_curves, *state);
+  PaneEnumContext enum_context;
+  for (const PreparedCurve &curve : prepared_curves) {
+    if (curve.enum_info != nullptr) {
+      enum_context.enums.push_back(curve.enum_info);
+    }
+  }
   const int supported_count = static_cast<int>(prepared_curves.size());
   const ImVec2 plot_size = ImGui::GetContentRegionAvail();
   const bool has_cursor_time = state->has_tracker_time;
@@ -2063,7 +2137,11 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   if (ImPlot::BeginPlot("##plot", plot_size, plot_flags)) {
     ImPlot::SetupAxes(nullptr, nullptr, x_axis_flags, y_axis_flags);
     ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f");
-    ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
+    if (!enum_context.enums.empty()) {
+      ImPlot::SetupAxisFormat(ImAxis_Y1, format_enum_axis_tick, &enum_context);
+    } else {
+      ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
+    }
     ImPlot::SetupAxisLinks(ImAxis_X1, &state->x_view_min, &state->x_view_max);
     if (state->route_x_max > state->route_x_min) {
       ImPlot::SetupAxisLimitsConstraints(ImAxis_X1, state->route_x_min, state->route_x_max);
@@ -2133,10 +2211,10 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
     action.kind = PaneMenuActionKind::OpenCustomSeries;
   }
   ImGui::Separator();
-  if (action.kind == PaneMenuActionKind::None && bootstrap_icons::menu_item("distribute-vertical", "Split Left / Right")) {
+  if (action.kind == PaneMenuActionKind::None && bootstrap_icons::menu_item("distribute-horizontal", "Split Left / Right")) {
     action.kind = PaneMenuActionKind::SplitLeft;
   } else if (action.kind == PaneMenuActionKind::None
-             && bootstrap_icons::menu_item("distribute-horizontal", "Split Top / Bottom")) {
+             && bootstrap_icons::menu_item("distribute-vertical", "Split Top / Bottom")) {
     action.kind = PaneMenuActionKind::SplitTop;
   }
   ImGui::Separator();

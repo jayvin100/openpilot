@@ -103,11 +103,13 @@ struct SeriesAccumulator {
   std::vector<RouteSeries> dynamic_series;
   std::unordered_map<std::string, size_t> dynamic_slots;
   std::unordered_map<std::string, std::vector<size_t>> list_scalar_slots;
+  std::unordered_map<std::string, EnumInfo> enum_info;
 };
 
 struct LoadedRouteArtifacts {
   std::vector<RouteSeries> series;
   std::vector<LogEntry> logs;
+  std::unordered_map<std::string, EnumInfo> enum_info;
 };
 
 struct LoadStats {
@@ -926,6 +928,27 @@ std::optional<double> scalar_value_to_double(const capnp::DynamicValue::Reader &
   return std::nullopt;
 }
 
+void capture_enum_info(const std::string &path,
+                       const capnp::DynamicValue::Reader &value,
+                       SeriesAccumulator *series) {
+  if (series->enum_info.find(path) != series->enum_info.end()) {
+    return;
+  }
+
+  const auto dynamic_enum = value.as<capnp::DynamicEnum>();
+  EnumInfo info;
+  for (auto enumerant : dynamic_enum.getSchema().getEnumerants()) {
+    const uint16_t ordinal = enumerant.getOrdinal();
+    if (ordinal >= info.names.size()) {
+      info.names.resize(static_cast<size_t>(ordinal) + 1);
+    }
+    info.names[ordinal] = enumerant.getProto().getName().cStr();
+  }
+  if (!info.names.empty()) {
+    series->enum_info.emplace(path, std::move(info));
+  }
+}
+
 void append_scalar_point(RouteSeries *series,
                          const std::string &path,
                          double tm,
@@ -980,15 +1003,22 @@ void append_dynamic_scalar_point(const std::string &path, double tm, double valu
 
 void append_scalar_value(const ResolvedNode &node,
                          const std::string *path_override,
+                         const capnp::DynamicValue::Reader &raw_value,
                          double tm,
                          double value,
                          SeriesAccumulator *series) {
   if (path_override == nullptr && node.fixed_slot >= 0) {
+    if (node.scalar_kind == ScalarKind::Enum) {
+      capture_enum_info(node.path, raw_value, series);
+    }
     append_fixed_scalar_point(&series->fixed_series[static_cast<size_t>(node.fixed_slot)], tm, value);
     return;
   }
 
   const std::string &path = path_override != nullptr ? *path_override : node.path;
+  if (node.scalar_kind == ScalarKind::Enum) {
+    capture_enum_info(path, raw_value, series);
+  }
   append_dynamic_scalar_point(path, tm, value, series);
 }
 
@@ -1000,7 +1030,7 @@ void append_fast_node(const ResolvedNode &node,
   switch (node.kind) {
     case ResolvedNodeKind::Scalar: {
       if (std::optional<double> scalar = scalar_value_to_double(value, node.scalar_kind); scalar.has_value()) {
-        append_scalar_value(node, path_override, tm, *scalar, series);
+        append_scalar_value(node, path_override, value, tm, *scalar, series);
       }
       return;
     }
@@ -1035,6 +1065,9 @@ void append_fast_node(const ResolvedNode &node,
         for (uint i = 0; i < list.size(); ++i) {
           if (std::optional<double> scalar = scalar_value_to_double(list[i], node.element->scalar_kind); scalar.has_value()) {
             RouteSeries *item_series = ensure_list_scalar_series(base_path, i, series);
+            if (node.element->scalar_kind == ScalarKind::Enum && !item_series->path.empty()) {
+              capture_enum_info(item_series->path, list[i], series);
+            }
             append_fixed_scalar_point(item_series, tm, *scalar);
           }
         }
@@ -1102,6 +1135,9 @@ void merge_series_accumulator(SeriesAccumulator *dst, SeriesAccumulator *src) {
     RouteSeries &dst_series = dst->dynamic_series[ensure_dynamic_slot(series.path, dst)];
     merge_route_series(&dst_series, &series);
   }
+  for (auto &[path, info] : src->enum_info) {
+    dst->enum_info.try_emplace(path, std::move(info));
+  }
 }
 
 size_t populated_series_count(const SeriesAccumulator &series) {
@@ -1162,7 +1198,9 @@ std::vector<RouteSeries> collect_series(SeriesAccumulator &&series) {
   return out;
 }
 
-RouteData build_route_data(std::vector<RouteSeries> &&series_list, std::vector<LogEntry> &&logs) {
+RouteData build_route_data(std::vector<RouteSeries> &&series_list,
+                           std::vector<LogEntry> &&logs,
+                           std::unordered_map<std::string, EnumInfo> &&enum_info) {
   RouteData route_data;
   route_data.series.reserve(series_list.size());
   route_data.paths.reserve(series_list.size());
@@ -1224,6 +1262,7 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list, std::vector<L
     route_data.x_min = 0.0;
   }
 
+  route_data.enum_info = std::move(enum_info);
   route_data.roots = collect_route_roots(route_data.paths);
   return route_data;
 }
@@ -1467,6 +1506,7 @@ LoadedRouteArtifacts load_route_series_parallel(
   LoadedRouteArtifacts artifacts;
   artifacts.series = collect_series(std::move(merged));
   artifacts.logs = std::move(logs);
+  artifacts.enum_info = std::move(merged.enum_info);
   stats->merge_end = LoadStats::Clock::now();
   return artifacts;
 }
@@ -1536,7 +1576,9 @@ RouteData load_route_data(const std::string &route_name,
 
   const SchemaIndex &schema = SchemaIndex::instance();
   LoadedRouteArtifacts artifacts = load_route_series_parallel(segments, schema, &stats);
-  RouteData route_data = build_route_data(std::move(artifacts.series), std::move(artifacts.logs));
+  RouteData route_data = build_route_data(std::move(artifacts.series),
+                                          std::move(artifacts.logs),
+                                          std::move(artifacts.enum_info));
   build_road_camera_index(segments, &route_data);
   stats.load_end = LoadStats::Clock::now();
   stats.publish(RouteLoadStage::Finished, segments.size(), {});

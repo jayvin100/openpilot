@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace jotpluggler {
@@ -110,12 +111,17 @@ struct LogEntry {
   LogOrigin origin = LogOrigin::Log;
 };
 
+struct EnumInfo {
+  std::vector<std::string> names;
+};
+
 struct RouteData {
   std::vector<RouteSeries> series;
   std::vector<std::string> paths;
   std::vector<std::string> roots;
   CameraFeedIndex road_camera;
   std::vector<LogEntry> logs;
+  std::unordered_map<std::string, EnumInfo> enum_info;
   bool has_time_range = false;
   double x_min = 0.0;
   double x_max = 1.0;
