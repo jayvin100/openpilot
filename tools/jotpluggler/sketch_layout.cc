@@ -438,6 +438,70 @@ double android_wall_time_seconds(uint64_t timestamp) {
   return static_cast<double>(timestamp);
 }
 
+std::optional<uint64_t> json_u64_value(const json11::Json &value) {
+  if (value.is_number()) {
+    const double number = value.number_value();
+    if (number >= 0.0) {
+      return static_cast<uint64_t>(number);
+    }
+  }
+  if (value.is_string()) {
+    try {
+      return static_cast<uint64_t>(std::stoull(value.string_value()));
+    } catch (...) {
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<int> json_int_value(const json11::Json &value) {
+  if (value.is_number()) {
+    return value.int_value();
+  }
+  if (value.is_string()) {
+    try {
+      return std::stoi(value.string_value());
+    } catch (...) {
+    }
+  }
+  return std::nullopt;
+}
+
+std::string json_value_for_log(const json11::Json &value) {
+  if (value.is_string()) {
+    return value.string_value();
+  }
+  if (value.is_bool()) {
+    return value.bool_value() ? "true" : "false";
+  }
+  if (value.is_number()) {
+    return value.dump();
+  }
+  return value.dump();
+}
+
+std::string format_journal_context(const json11::Json &parsed, int pid, int tid) {
+  std::vector<std::string> lines;
+  if (pid != 0 || tid != 0) {
+    lines.push_back("pid=" + std::to_string(pid) + ", tid=" + std::to_string(tid));
+  }
+
+  const std::array<const char *, 5> preferred_keys = {
+    "_HOSTNAME",
+    "_TRANSPORT",
+    "PRIORITY",
+    "SYSLOG_FACILITY",
+    "__MONOTONIC_TIMESTAMP",
+  };
+  for (const char *key : preferred_keys) {
+    const json11::Json &value = parsed[key];
+    if (!value.is_null()) {
+      lines.push_back(std::string(key) + "=" + json_value_for_log(value));
+    }
+  }
+  return join(lines, "\n");
+}
+
 std::string alert_message_text(const cereal::SelfdriveState::Reader &state) {
   std::string text = state.getAlertText1().cStr();
   const std::string text2 = state.getAlertText2().cStr();
@@ -512,6 +576,25 @@ std::vector<LogEntry> extract_segment_logs(const std::vector<Event> &events) {
         entry.source = android.hasTag() ? android.getTag().cStr() : "android";
         entry.message = android.hasMessage() ? android.getMessage().cStr() : std::string();
         entry.context = "pid=" + std::to_string(android.getPid()) + ", tid=" + std::to_string(android.getTid());
+        if (!entry.message.empty()) {
+          std::string parse_error;
+          const json11::Json parsed = json11::Json::parse(entry.message, parse_error);
+          if (parse_error.empty() && parsed.is_object()) {
+            if (parsed["MESSAGE"].is_string()) {
+              entry.message = parsed["MESSAGE"].string_value();
+            }
+            if (parsed["SYSLOG_IDENTIFIER"].is_string() && !parsed["SYSLOG_IDENTIFIER"].string_value().empty()) {
+              entry.source = parsed["SYSLOG_IDENTIFIER"].string_value();
+            }
+            if (const std::optional<int> priority = json_int_value(parsed["PRIORITY"]); priority.has_value()) {
+              entry.level = android_priority_to_level(priority.value());
+            }
+            if (const std::optional<uint64_t> wall_ts = json_u64_value(parsed["__REALTIME_TIMESTAMP"]); wall_ts.has_value()) {
+              entry.wall_time = android_wall_time_seconds(wall_ts.value());
+            }
+            entry.context = format_journal_context(parsed, android.getPid(), android.getTid());
+          }
+        }
         entry.origin = LogOrigin::Android;
         logs.push_back(std::move(entry));
         break;

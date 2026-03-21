@@ -1,4 +1,5 @@
 #include "tools/jotpluggler/app_logs.h"
+#include "tools/jotpluggler/app_runtime.h"
 
 #include "imgui.h"
 
@@ -28,6 +29,7 @@ constexpr std::array<LevelOption, 5> kLevelOptions = {{
   {"ERROR", 40},
   {"CRITICAL", 50},
 }};
+constexpr uint32_t kAllLevelMask = (1u << kLevelOptions.size()) - 1u;
 
 int input_text_resize_callback(ImGuiInputTextCallbackData *data) {
   if (data->EventFlag != ImGuiInputTextFlags_CallbackResize || data->UserData == nullptr) {
@@ -94,11 +96,26 @@ std::vector<int> filter_log_indices(const RouteData &route_data, const LogsUiSta
   indices.reserve(route_data.logs.size());
   for (size_t i = 0; i < route_data.logs.size(); ++i) {
     const LogEntry &entry = route_data.logs[i];
-    if (entry.level < logs_state.min_level) {
+    int level_index = 0;
+    if (entry.level >= 50) {
+      level_index = 4;
+    } else if (entry.level >= 40) {
+      level_index = 3;
+    } else if (entry.level >= 30) {
+      level_index = 2;
+    } else if (entry.level >= 20) {
+      level_index = 1;
+    }
+    if ((logs_state.enabled_levels_mask & (1u << level_index)) == 0) {
       continue;
     }
-    if (!logs_state.source_filter.empty() && entry.source != logs_state.source_filter) {
-      continue;
+    if (!logs_state.all_sources) {
+      const auto it = std::find(logs_state.selected_sources.begin(),
+                                logs_state.selected_sources.end(),
+                                entry.source);
+      if (it == logs_state.selected_sources.end()) {
+        continue;
+      }
     }
     if (!log_matches_search(entry, logs_state.search)) {
       continue;
@@ -182,6 +199,54 @@ const char *time_mode_label(LogTimeMode mode) {
   return "Route";
 }
 
+std::string level_filter_label(uint32_t mask) {
+  if (mask == kAllLevelMask) {
+    return "All levels";
+  }
+  if (mask == 0b11110) {
+    return "INFO+";
+  }
+  if (mask == 0b11100) {
+    return "WARNING+";
+  }
+  if (mask == 0b11000) {
+    return "ERROR+";
+  }
+  if (mask == 0b10000) {
+    return "CRITICAL";
+  }
+
+  int enabled_count = 0;
+  const char *last_label = "None";
+  for (size_t i = 0; i < kLevelOptions.size(); ++i) {
+    if ((mask & (1u << i)) == 0) {
+      continue;
+    }
+    ++enabled_count;
+    last_label = kLevelOptions[i].label;
+  }
+  if (enabled_count == 0) {
+    return "None";
+  }
+  if (enabled_count == 1) {
+    return last_label;
+  }
+  return "Custom";
+}
+
+std::string source_filter_label(const LogsUiState &logs_state, const std::vector<std::string> &sources) {
+  if (logs_state.all_sources || logs_state.selected_sources.size() == sources.size()) {
+    return "All sources";
+  }
+  if (logs_state.selected_sources.empty()) {
+    return "No sources";
+  }
+  if (logs_state.selected_sources.size() == 1) {
+    return logs_state.selected_sources.front();
+  }
+  return std::to_string(logs_state.selected_sources.size()) + " sources";
+}
+
 const char *level_label(const LogEntry &entry) {
   if (entry.origin == LogOrigin::Alert) {
     return "ALRT";
@@ -211,19 +276,13 @@ ImU32 row_bg_color(const LogEntry &entry, bool active) {
   if (active) {
     return IM_COL32(80, 140, 210, 38);
   }
-  if (entry.origin == LogOrigin::Alert) {
-    return IM_COL32(50, 100, 200, 15);
-  }
-  if (entry.level >= 50) return IM_COL32(255, 30, 20, 31);
-  if (entry.level >= 40) return IM_COL32(255, 60, 50, 20);
-  if (entry.level >= 30) return IM_COL32(255, 200, 50, 20);
   return 0;
 }
 
 void set_tracker_to_log(UiState *state, const LogEntry &entry) {
   state->tracker_time = entry.mono_time;
   state->has_tracker_time = true;
-  state->logs.last_auto_scroll_time = -1.0;
+  state->logs.last_auto_scroll_time = entry.mono_time;
 }
 
 void draw_log_expansion_row(const LogEntry &entry) {
@@ -250,6 +309,7 @@ void draw_log_row(const LogEntry &entry,
                   int log_index,
                   bool active,
                   UiState *state) {
+  ImGui::PushID(log_index);
   const ImU32 bg = row_bg_color(entry, active);
   ImGui::TableNextRow();
   if (bg != 0) {
@@ -261,8 +321,8 @@ void draw_log_row(const LogEntry &entry,
     ImGui::PushID(id);
     ImGui::PushStyleColor(ImGuiCol_Text, color);
     ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, color_rgb(229, 235, 241, 0.75f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, color_rgb(214, 223, 232, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0, 0, 0, 0));
     const bool clicked = ImGui::Selectable(text.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
     ImGui::PopStyleColor(4);
     ImGui::PopID();
@@ -286,6 +346,7 @@ void draw_log_row(const LogEntry &entry,
     set_tracker_to_log(state, entry);
     state->logs.expanded_index = state->logs.expanded_index == log_index ? -1 : log_index;
   }
+  ImGui::PopID();
 }
 
 }  // namespace
@@ -293,24 +354,37 @@ void draw_log_row(const LogEntry &entry,
 void draw_logs_tab(AppSession *session, UiState *state) {
   LogsUiState &logs_state = state->logs;
   const RouteData &route_data = session->route_data;
+  const RouteLoadSnapshot load = session->route_loader ? session->route_loader->snapshot() : RouteLoadSnapshot{};
+  const bool loading_logs = load.active && route_data.logs.empty();
+  const std::vector<std::string> sources = collect_log_sources(route_data.logs);
+
+  if (!logs_state.all_sources) {
+    logs_state.selected_sources.erase(
+      std::remove_if(logs_state.selected_sources.begin(),
+                     logs_state.selected_sources.end(),
+                     [&](const std::string &source) {
+                       return std::find(sources.begin(), sources.end(), source) == sources.end();
+                     }),
+      logs_state.selected_sources.end());
+  }
 
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
   ImGui::SetNextItemWidth(110.0f);
-  if (ImGui::BeginCombo("##logs_level", [&]() -> const char * {
-        for (const LevelOption &option : kLevelOptions) {
-          if (option.value == logs_state.min_level) {
-            return option.label;
-          }
+  const std::string levels_label = level_filter_label(logs_state.enabled_levels_mask);
+  if (ImGui::BeginCombo("##logs_level", levels_label.c_str())) {
+    bool all_levels = logs_state.enabled_levels_mask == kAllLevelMask;
+    if (ImGui::Checkbox("All levels", &all_levels)) {
+      logs_state.enabled_levels_mask = all_levels ? kAllLevelMask : 0u;
+    }
+    ImGui::Separator();
+    for (size_t i = 0; i < kLevelOptions.size(); ++i) {
+      bool enabled = (logs_state.enabled_levels_mask & (1u << i)) != 0;
+      if (ImGui::Checkbox(kLevelOptions[i].label, &enabled)) {
+        if (enabled) {
+          logs_state.enabled_levels_mask |= (1u << i);
+        } else {
+          logs_state.enabled_levels_mask &= ~(1u << i);
         }
-        return "INFO";
-      }())) {
-    for (const LevelOption &option : kLevelOptions) {
-      const bool selected = option.value == logs_state.min_level;
-      if (ImGui::Selectable(option.label, selected)) {
-        logs_state.min_level = option.value;
-      }
-      if (selected) {
-        ImGui::SetItemDefaultFocus();
       }
     }
     ImGui::EndCombo();
@@ -321,21 +395,39 @@ void draw_logs_tab(AppSession *session, UiState *state) {
   input_text_with_hint_string("##logs_search", "Search...", &logs_state.search);
   ImGui::SameLine();
 
-  const std::vector<std::string> sources = collect_log_sources(route_data.logs);
-  const char *source_label = logs_state.source_filter.empty() ? "All sources" : logs_state.source_filter.c_str();
+  const std::string sources_label = source_filter_label(logs_state, sources);
   ImGui::SetNextItemWidth(180.0f);
-  if (ImGui::BeginCombo("##logs_source", source_label)) {
-    const bool all_selected = logs_state.source_filter.empty();
-    if (ImGui::Selectable("All sources", all_selected)) {
-      logs_state.source_filter.clear();
+  if (ImGui::BeginCombo("##logs_source", sources_label.c_str())) {
+    bool all_sources = logs_state.all_sources;
+    if (ImGui::Checkbox("All sources", &all_sources)) {
+      logs_state.all_sources = all_sources;
+      if (logs_state.all_sources) {
+        logs_state.selected_sources.clear();
+      } else {
+        logs_state.selected_sources = sources;
+      }
     }
-    if (all_selected) {
-      ImGui::SetItemDefaultFocus();
-    }
+    ImGui::Separator();
     for (const std::string &source : sources) {
-      const bool selected = source == logs_state.source_filter;
-      if (ImGui::Selectable(source.c_str(), selected)) {
-        logs_state.source_filter = source;
+      bool enabled = logs_state.all_sources
+        || std::find(logs_state.selected_sources.begin(), logs_state.selected_sources.end(), source) != logs_state.selected_sources.end();
+      if (ImGui::Checkbox(source.c_str(), &enabled)) {
+        if (logs_state.all_sources) {
+          logs_state.all_sources = false;
+          logs_state.selected_sources = sources;
+        }
+        auto it = std::find(logs_state.selected_sources.begin(), logs_state.selected_sources.end(), source);
+        if (enabled) {
+          if (it == logs_state.selected_sources.end()) {
+            logs_state.selected_sources.push_back(source);
+          }
+        } else if (it != logs_state.selected_sources.end()) {
+          logs_state.selected_sources.erase(it);
+        }
+        if (logs_state.selected_sources.size() == sources.size()) {
+          logs_state.all_sources = true;
+          logs_state.selected_sources.clear();
+        }
       }
     }
     ImGui::EndCombo();
@@ -365,7 +457,7 @@ void draw_logs_tab(AppSession *session, UiState *state) {
   if (route_data.logs.empty()) {
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(116, 124, 133));
-    ImGui::TextWrapped("No text logs available for this route.");
+    ImGui::TextWrapped("%s", loading_logs ? "Loading logs..." : "No text logs available for this route.");
     ImGui::PopStyleColor();
     return;
   }
@@ -384,18 +476,26 @@ void draw_logs_tab(AppSession *session, UiState *state) {
                           ImGuiTableFlags_BordersInnerV |
                             ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_Resizable |
-                            ImGuiTableFlags_ScrollY |
                             ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-      ImGui::TableSetupColumn("Lvl", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+      ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 72.0f);
       ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 180.0f);
       ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
       ImGui::TableHeadersRow();
 
-      ImGuiListClipper clipper;
-      clipper.Begin(static_cast<int>(filtered_indices.size()));
-      while (clipper.Step()) {
-        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+      const bool use_clipper = logs_state.expanded_index < 0;
+      if (use_clipper) {
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(filtered_indices.size()));
+        while (clipper.Step()) {
+          for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+            const int log_index = filtered_indices[static_cast<size_t>(i)];
+            const LogEntry &entry = route_data.logs[static_cast<size_t>(log_index)];
+            draw_log_row(entry, log_index, i == active_pos, state);
+          }
+        }
+      } else {
+        for (int i = 0; i < static_cast<int>(filtered_indices.size()); ++i) {
           const int log_index = filtered_indices[static_cast<size_t>(i)];
           const LogEntry &entry = route_data.logs[static_cast<size_t>(log_index)];
           draw_log_row(entry, log_index, i == active_pos, state);

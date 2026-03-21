@@ -72,10 +72,11 @@ enum class LogTimeMode : uint8_t {
 struct LogsUiState {
   bool selected = false;
   bool request_select = false;
-  int min_level = 20;
+  bool all_sources = true;
+  uint32_t enabled_levels_mask = 0b11110;
   int expanded_index = -1;
   std::string search;
-  std::string source_filter;
+  std::vector<std::string> selected_sources;
   double last_auto_scroll_time = -1.0;
   LogTimeMode time_mode = LogTimeMode::Route;
 };
