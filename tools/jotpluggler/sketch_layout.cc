@@ -24,6 +24,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -48,6 +49,7 @@ struct RouteSelection {
 struct SegmentLogs {
   std::string rlog;
   std::string qlog;
+  std::string fcamera;
 };
 
 enum class ScalarKind {
@@ -352,6 +354,8 @@ void add_log_file_to_segments(std::map<int, SegmentLogs> *segments, int segment_
     segment.rlog = file;
   } else if (name == "qlog.bz2" || name == "qlog.zst" || name == "qlog") {
     segment.qlog = file;
+  } else if (name == "fcamera.hevc") {
+    segment.fcamera = file;
   }
 }
 
@@ -1066,6 +1070,73 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list) {
   return route_data;
 }
 
+const RouteSeries *find_route_series(const RouteData &route_data, std::string_view path) {
+  auto it = std::lower_bound(route_data.series.begin(), route_data.series.end(), path,
+                             [](const RouteSeries &series, std::string_view target) {
+                               return series.path < target;
+                             });
+  if (it == route_data.series.end() || it->path != path) {
+    return nullptr;
+  }
+  return &(*it);
+}
+
+void build_road_camera_index(const std::map<int, SegmentLogs> &segments, RouteData *route_data) {
+  route_data->road_camera = {};
+  route_data->road_camera.segment_files.reserve(segments.size());
+
+  std::unordered_set<int> available_segments;
+  available_segments.reserve(segments.size());
+  for (const auto &[segment_number, segment] : segments) {
+    if (segment.fcamera.empty()) {
+      continue;
+    }
+    route_data->road_camera.segment_files.push_back(CameraSegmentFile{
+      .segment = segment_number,
+      .path = segment.fcamera,
+    });
+    available_segments.insert(segment_number);
+  }
+  if (route_data->road_camera.segment_files.empty()) {
+    return;
+  }
+
+  const RouteSeries *segment_numbers = find_route_series(*route_data, "/roadEncodeIdx/segmentNum");
+  const RouteSeries *decode_indices = find_route_series(*route_data, "/roadEncodeIdx/segmentId");
+  const RouteSeries *frame_ids = find_route_series(*route_data, "/roadEncodeIdx/frameId");
+  if (segment_numbers == nullptr || decode_indices == nullptr) {
+    return;
+  }
+
+  size_t count = std::min(segment_numbers->times.size(), segment_numbers->values.size());
+  count = std::min(count, decode_indices->values.size());
+  if (frame_ids != nullptr) {
+    count = std::min(count, frame_ids->values.size());
+  }
+  route_data->road_camera.entries.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    const int segment_number = static_cast<int>(std::llround(segment_numbers->values[i]));
+    if (available_segments.find(segment_number) == available_segments.end()) {
+      continue;
+    }
+    const int decode_index = static_cast<int>(std::llround(decode_indices->values[i]));
+    const uint32_t frame_id = frame_ids != nullptr
+      ? static_cast<uint32_t>(std::llround(frame_ids->values[i]))
+      : static_cast<uint32_t>(std::max(0, decode_index));
+    route_data->road_camera.entries.push_back(CameraFrameIndexEntry{
+      .timestamp = segment_numbers->times[i],
+      .segment = segment_number,
+      .decode_index = decode_index,
+      .frame_id = frame_id,
+    });
+  }
+
+  std::sort(route_data->road_camera.entries.begin(), route_data->road_camera.entries.end(),
+            [](const CameraFrameIndexEntry &a, const CameraFrameIndexEntry &b) {
+              return a.timestamp < b.timestamp;
+            });
+}
+
 size_t load_worker_budget() {
   size_t worker_count = std::thread::hardware_concurrency();
   if (worker_count == 0) {
@@ -1296,6 +1367,7 @@ RouteData load_route_data(const std::string &route_name,
   const SchemaIndex &schema = SchemaIndex::instance();
   std::vector<RouteSeries> series = load_route_series_parallel(segments, schema, &stats);
   RouteData route_data = build_route_data(std::move(series));
+  build_road_camera_index(segments, &route_data);
   stats.load_end = LoadStats::Clock::now();
   stats.publish(RouteLoadStage::Finished, segments.size(), {});
   stats.print_summary(route_data.series.size());

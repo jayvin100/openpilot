@@ -2,12 +2,14 @@
 #include "tools/jotpluggler/bootstrap_icons.h"
 #include "imgui_impl_glfw.h"
 #include "tools/jotpluggler/sketch_layout.h"
+#include "tools/replay/framereader.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_opengl3_loader.h"
 #include "implot.h"
+#include "libyuv.h"
 
 #include <GLFW/glfw3.h>
 
@@ -17,6 +19,7 @@
 #include <cctype>
 #include <cmath>
 #include <cfloat>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -35,6 +38,8 @@
 #include <unordered_map>
 #include <unistd.h>
 #include <vector>
+
+#include "system/camerad/cameras/nv12_info.h"
 
 namespace jotpluggler {
 namespace fs = std::filesystem;
@@ -70,6 +75,7 @@ struct BrowserNode {
 };
 
 class AsyncRouteLoader;
+class SidebarCameraFeed;
 
 struct AppSession {
   fs::path layout_path;
@@ -81,6 +87,7 @@ struct AppSession {
   std::unordered_map<std::string, const RouteSeries *> series_by_path;
   std::vector<BrowserNode> browser_nodes;
   std::unique_ptr<AsyncRouteLoader> route_loader;
+  std::unique_ptr<SidebarCameraFeed> camera_feed;
   bool async_route_loading = false;
 };
 
@@ -151,6 +158,10 @@ struct RouteLoadSnapshot {
 };
 
 void glfw_error_callback(int error, const char *description) {
+  const std::string_view desc = description != nullptr ? description : "unknown";
+  if (error == 65539 && desc.find("Invalid window attribute 0x0002000D") != std::string_view::npos) {
+    return;
+  }
   std::cerr << "GLFW error " << error << ": " << (description != nullptr ? description : "unknown") << "\n";
 }
 
@@ -422,6 +433,330 @@ private:
   std::atomic<size_t> segments_downloaded_{0};
   std::atomic<size_t> segments_parsed_{0};
   TerminalRouteProgress terminal_progress_;
+};
+
+class SidebarCameraFeed {
+public:
+  SidebarCameraFeed() {
+    worker_ = std::thread([this]() { worker_loop(); });
+  }
+
+  ~SidebarCameraFeed() {
+    stop_.store(true);
+    cv_.notify_all();
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+    destroy_texture();
+  }
+
+  void set_route_data(const RouteData &route_data) {
+    destroy_texture();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      route_index_ = route_data.road_camera;
+      pending_request_.reset();
+      pending_result_.reset();
+      ++route_generation_;
+      latest_request_serial_ = 0;
+    }
+    active_request_.reset();
+    displayed_request_.reset();
+    failed_request_.reset();
+    frame_width_ = 0;
+    frame_height_ = 0;
+    cv_.notify_all();
+  }
+
+  void update(double tracker_time) {
+    upload_pending_result();
+    std::optional<DecodeRequest> request = request_for_time(tracker_time);
+    if (!request.has_value()) {
+      return;
+    }
+    if (same_request(active_request_, request->key) || same_request(displayed_request_, request->key) ||
+        same_request(failed_request_, request->key)) {
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      request->serial = ++latest_request_serial_;
+      request->generation = route_generation_;
+      pending_request_ = request;
+    }
+    active_request_ = request->key;
+    failed_request_.reset();
+    cv_.notify_one();
+  }
+
+  void draw(float width) {
+    const float preview_width = std::max(1.0f, width);
+    const float preview_height = preview_width * preview_aspect();
+    if (texture_ != 0) {
+      ImGui::Image(static_cast<ImTextureID>(static_cast<intptr_t>(texture_)), ImVec2(preview_width, preview_height));
+    } else {
+      const ImVec2 top_left = ImGui::GetCursorScreenPos();
+      const ImVec2 size(preview_width, preview_height);
+      ImGui::InvisibleButton("##camera_feed_placeholder", size);
+
+      ImDrawList *draw_list = ImGui::GetWindowDrawList();
+      draw_list->AddRectFilled(top_left, ImVec2(top_left.x + size.x, top_left.y + size.y), IM_COL32(213, 217, 223, 255));
+      draw_list->AddRect(top_left, ImVec2(top_left.x + size.x, top_left.y + size.y), IM_COL32(172, 178, 186, 255));
+
+      const char *label = has_video_source() ? "loading video" : "no video";
+      const ImVec2 text_size = ImGui::CalcTextSize(label);
+      const ImVec2 text_pos(top_left.x + (size.x - text_size.x) * 0.5f,
+                            top_left.y + (size.y - text_size.y) * 0.5f);
+      draw_list->AddText(text_pos, IM_COL32(90, 96, 104, 255), label);
+    }
+    ImGui::Spacing();
+  }
+
+private:
+  struct RequestKey {
+    int segment = -1;
+    int decode_index = -1;
+  };
+
+  struct DecodeRequest {
+    RequestKey key;
+    std::string path;
+    uint64_t serial = 0;
+    uint64_t generation = 0;
+  };
+
+  struct DecodeResult {
+    RequestKey key;
+    bool success = false;
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> rgba;
+  };
+
+  static constexpr float kDefaultAspect = 1208.0f / 1928.0f;
+
+  static bool same_request(const std::optional<RequestKey> &lhs, const RequestKey &rhs) {
+    return lhs.has_value() && lhs->segment == rhs.segment && lhs->decode_index == rhs.decode_index;
+  }
+
+  bool has_video_source() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return !route_index_.entries.empty() && !route_index_.segment_files.empty();
+  }
+
+  float preview_aspect() const {
+    if (frame_width_ > 0 && frame_height_ > 0) {
+      return static_cast<float>(frame_height_) / static_cast<float>(frame_width_);
+    }
+    return kDefaultAspect;
+  }
+
+  std::optional<DecodeRequest> request_for_time(double tracker_time) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (route_index_.entries.empty()) {
+      return std::nullopt;
+    }
+
+    auto it = std::lower_bound(route_index_.entries.begin(), route_index_.entries.end(), tracker_time,
+                               [](const CameraFrameIndexEntry &entry, double tm) {
+                                 return entry.timestamp < tm;
+                               });
+    if (it == route_index_.entries.end()) {
+      it = std::prev(route_index_.entries.end());
+    } else if (it != route_index_.entries.begin()) {
+      const auto prev = std::prev(it);
+      if (std::abs(prev->timestamp - tracker_time) <= std::abs(it->timestamp - tracker_time)) {
+        it = prev;
+      }
+    }
+
+    auto path_it = std::find_if(route_index_.segment_files.begin(), route_index_.segment_files.end(),
+                                [&](const CameraSegmentFile &segment) {
+                                  return segment.segment == it->segment && !segment.path.empty();
+                                });
+    if (path_it == route_index_.segment_files.end()) {
+      return std::nullopt;
+    }
+
+    return DecodeRequest{
+      .key = RequestKey{.segment = it->segment, .decode_index = it->decode_index},
+      .path = path_it->path,
+    };
+  }
+
+  void upload_pending_result() {
+    std::optional<DecodeResult> result;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!pending_result_.has_value()) {
+        return;
+      }
+      result = std::move(pending_result_);
+      pending_result_.reset();
+    }
+
+    active_request_.reset();
+    if (!result->success || result->rgba.empty() || result->width <= 0 || result->height <= 0) {
+      failed_request_ = result->key;
+      return;
+    }
+
+    if (texture_ == 0) {
+      glGenTextures(1, &texture_);
+    }
+    glBindTexture(GL_TEXTURE_2D, texture_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (texture_width_ != result->width || texture_height_ != result->height) {
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, result->width, result->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, result->rgba.data());
+      texture_width_ = result->width;
+      texture_height_ = result->height;
+    } else {
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, result->width, result->height, GL_RGBA, GL_UNSIGNED_BYTE, result->rgba.data());
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    frame_width_ = result->width;
+    frame_height_ = result->height;
+    displayed_request_ = result->key;
+    failed_request_.reset();
+  }
+
+  void destroy_texture() {
+    if (texture_ != 0 && glfwGetCurrentContext() != nullptr) {
+      glDeleteTextures(1, &texture_);
+    }
+    texture_ = 0;
+    texture_width_ = 0;
+    texture_height_ = 0;
+    frame_width_ = 0;
+    frame_height_ = 0;
+  }
+
+  static bool ensure_decode_buffer(FrameReader *reader,
+                                   VisionBuf *buffer,
+                                   bool *allocated,
+                                   int *width,
+                                   int *height) {
+    if (reader == nullptr || buffer == nullptr || allocated == nullptr || width == nullptr || height == nullptr) {
+      return false;
+    }
+    if (*allocated && *width == reader->width && *height == reader->height) {
+      return true;
+    }
+    if (*allocated) {
+      buffer->free();
+      *allocated = false;
+    }
+
+    const auto [stride, y_height, _uv_height, size] = get_nv12_info(reader->width, reader->height);
+    buffer->allocate(size);
+    buffer->init_yuv(reader->width, reader->height, stride, stride * y_height);
+    *width = reader->width;
+    *height = reader->height;
+    *allocated = true;
+    return true;
+  }
+
+  void publish_result(const DecodeRequest &request, DecodeResult result) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!pending_request_.has_value() || pending_request_->serial != request.serial ||
+        pending_request_->generation != request.generation) {
+      return;
+    }
+    pending_result_ = std::move(result);
+  }
+
+  void worker_loop() {
+    std::unique_ptr<FrameReader> reader;
+    std::string loaded_path;
+    uint64_t loaded_generation = 0;
+    VisionBuf buffer;
+    bool buffer_allocated = false;
+    int buffer_width = 0;
+    int buffer_height = 0;
+    uint64_t handled_serial = 0;
+
+    while (true) {
+      DecodeRequest request;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [&]() {
+          return stop_.load() || (pending_request_.has_value() && pending_request_->serial != handled_serial);
+        });
+        if (stop_.load()) {
+          break;
+        }
+        request = *pending_request_;
+        handled_serial = request.serial;
+      }
+
+      DecodeResult result{.key = request.key};
+      if (!reader || loaded_path != request.path || loaded_generation != request.generation) {
+        reader = std::make_unique<FrameReader>();
+        loaded_path.clear();
+        loaded_generation = 0;
+        if (buffer_allocated) {
+          buffer.free();
+          buffer_allocated = false;
+          buffer_width = 0;
+          buffer_height = 0;
+        }
+        if (!reader->load(RoadCam, request.path, true, &stop_, true)) {
+          publish_result(request, std::move(result));
+          continue;
+        }
+        loaded_path = request.path;
+        loaded_generation = request.generation;
+      }
+
+      if (!ensure_decode_buffer(reader.get(), &buffer, &buffer_allocated, &buffer_width, &buffer_height) ||
+          !reader->get(request.key.decode_index, &buffer)) {
+        publish_result(request, std::move(result));
+        continue;
+      }
+
+      result.width = reader->width;
+      result.height = reader->height;
+      result.rgba.resize(static_cast<size_t>(result.width) * static_cast<size_t>(result.height) * 4U, 0);
+      libyuv::NV12ToABGR(buffer.y,
+                         static_cast<int>(buffer.stride),
+                         buffer.uv,
+                         static_cast<int>(buffer.stride),
+                         result.rgba.data(),
+                         result.width * 4,
+                         result.width,
+                         result.height);
+      result.success = true;
+      publish_result(request, std::move(result));
+    }
+
+    if (buffer_allocated) {
+      buffer.free();
+    }
+  }
+
+  mutable std::mutex mutex_;
+  std::condition_variable cv_;
+  std::thread worker_;
+  std::atomic<bool> stop_{false};
+  CameraFeedIndex route_index_;
+  std::optional<DecodeRequest> pending_request_;
+  std::optional<DecodeResult> pending_result_;
+  uint64_t latest_request_serial_ = 0;
+  uint64_t route_generation_ = 1;
+  std::optional<RequestKey> active_request_;
+  std::optional<RequestKey> displayed_request_;
+  std::optional<RequestKey> failed_request_;
+  GLuint texture_ = 0;
+  int texture_width_ = 0;
+  int texture_height_ = 0;
+  int frame_width_ = 0;
+  int frame_height_ = 0;
 };
 
 std::string shell_quote(const std::string &value) {
@@ -1377,6 +1712,9 @@ void apply_route_data(AppSession *session, UiState *state, RouteData route_data)
   session->route_data = std::move(route_data);
   rebuild_route_index(session);
   rebuild_browser_nodes(session, state);
+  if (session->camera_feed) {
+    session->camera_feed->set_route_data(session->route_data);
+  }
   state->has_shared_range = false;
   state->has_tracker_time = false;
   reset_shared_range(state, *session);
@@ -1427,6 +1765,10 @@ void ensure_shared_range(UiState *state, const AppSession &session) {
       state->x_view_min = tab_range->first;
       state->x_view_max = tab_range->second;
       state->has_shared_range = true;
+      if (!state->has_tracker_time || state->tracker_time < state->route_x_min || state->tracker_time > state->route_x_max) {
+        state->tracker_time = state->route_x_min;
+        state->has_tracker_time = true;
+      }
       return;
     }
   }
@@ -1725,7 +2067,7 @@ void draw_browser_node(AppSession *session,
   }
 }
 
-void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
+void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed) {
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.top_offset));
   ImGui::SetNextWindowSize(ImVec2(ui.sidebar_width, std::max(1.0f, ui.height - ui.top_offset)));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(238, 240, 244));
@@ -1735,6 +2077,10 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state) {
                                  ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoSavedSettings;
   if (ImGui::Begin("##sidebar", nullptr, flags)) {
+    if (show_camera_feed && session->camera_feed) {
+      session->camera_feed->draw(ImGui::GetContentRegionAvail().x);
+    }
+
     if (session->route_loader) {
       const RouteLoadSnapshot load = session->route_loader->snapshot();
       if (load.active || load.total_segments > 0) {
@@ -3235,7 +3581,7 @@ void draw_popups(AppSession *session, UiState *state) {
   }
 }
 
-void render_layout(AppSession *session, UiState *state) {
+void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   ensure_shared_range(state, *session);
   if (state->follow_latest) {
     update_follow_range(state);
@@ -3250,9 +3596,12 @@ void render_layout(AppSession *session, UiState *state) {
     step_tracker(state, 1.0);
   }
   advance_playback(state);
+  if (show_camera_feed && session->camera_feed && state->has_tracker_time) {
+    session->camera_feed->update(state->tracker_time);
+  }
   const float menu_height = draw_main_menu_bar(session, state);
   const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height);
-  draw_sidebar(session, ui, state);
+  draw_sidebar(session, ui, state, show_camera_feed);
   draw_workspace(session, ui, state);
   draw_pane_windows(session, state);
   draw_status_bar(*session, ui, state);
@@ -3314,7 +3663,7 @@ void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const
   }
   poll_async_route_load(session, state);
 
-  render_layout(session, state);
+  render_layout(session, state, capture_path == nullptr);
   ImGui::Render();
   if (state->request_close) {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -3362,6 +3711,8 @@ int run_app(const Options &options) {
   GlfwRuntime glfw_runtime(options);
   ImGuiRuntime imgui_runtime(glfw_runtime.window());
   configure_style();
+  session.camera_feed = std::make_unique<SidebarCameraFeed>();
+  session.camera_feed->set_route_data(session.route_data);
 
   if (session.async_route_loading) {
     session.route_loader = std::make_unique<AsyncRouteLoader>(::isatty(STDERR_FILENO) != 0);
@@ -3370,6 +3721,7 @@ int run_app(const Options &options) {
 
   const bool should_capture = !options.output_path.empty();
   const fs::path output_path = should_capture ? fs::path(options.output_path) : fs::path();
+  int exit_code = 0;
   if (options.show) {
     bool captured = false;
     while (!glfwWindowShouldClose(glfw_runtime.window())) {
@@ -3377,14 +3729,14 @@ int run_app(const Options &options) {
       render_frame(glfw_runtime.window(), &session, &ui_state, capture_path);
       captured = captured || should_capture;
     }
-    return 0;
+  } else {
+    render_frame(glfw_runtime.window(), &session, &ui_state, nullptr);
+    if (should_capture) {
+      render_frame(glfw_runtime.window(), &session, &ui_state, &output_path);
+    }
   }
-
-  render_frame(glfw_runtime.window(), &session, &ui_state, nullptr);
-  if (should_capture) {
-    render_frame(glfw_runtime.window(), &session, &ui_state, &output_path);
-  }
-  return 0;
+  session.camera_feed.reset();
+  return exit_code;
 }
 
 }  // namespace

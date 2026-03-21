@@ -65,10 +65,28 @@ struct RouteSeries {
   std::vector<double> values;
 };
 
+struct CameraSegmentFile {
+  int segment = -1;
+  std::string path;
+};
+
+struct CameraFrameIndexEntry {
+  double timestamp = 0.0;
+  int segment = -1;
+  int decode_index = -1;
+  uint32_t frame_id = 0;
+};
+
+struct CameraFeedIndex {
+  std::vector<CameraSegmentFile> segment_files;
+  std::vector<CameraFrameIndexEntry> entries;
+};
+
 struct RouteData {
   std::vector<RouteSeries> series;
   std::vector<std::string> paths;
   std::vector<std::string> roots;
+  CameraFeedIndex road_camera;
   bool has_time_range = false;
   double x_min = 0.0;
   double x_max = 1.0;
