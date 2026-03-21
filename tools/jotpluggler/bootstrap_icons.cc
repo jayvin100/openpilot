@@ -1,60 +1,62 @@
 #include "tools/jotpluggler/bootstrap_icons.h"
+#include "tools/jotpluggler/bootstrap_icons_font_data.h"
 
 #include <algorithm>
 #include <array>
-#include <cstdint>
+#include <cstring>
 #include <string>
 
 namespace jotpluggler::bootstrap_icons {
 namespace {
 
-struct RasterizedBootstrapIconData {
+struct IconEntry {
   const char *id;
-  int width;
-  int height;
-  const unsigned char *alpha;
+  const char *utf8;
 };
 
-#include "tools/jotpluggler/bootstrap_icons_generated.inc"
-
-const RasterizedBootstrapIconData *find_icon(std::string_view icon_id) {
-  const auto it = std::find_if(std::begin(kBootstrapIcons), std::end(kBootstrapIcons), [&](const auto &icon) {
-    return icon_id == icon.id;
-  });
-  return it == std::end(kBootstrapIcons) ? nullptr : &(*it);
-}
-
-ImU32 modulate_alpha(ImU32 color, unsigned char alpha) {
-  ImVec4 rgba = ImGui::ColorConvertU32ToFloat4(color);
-  rgba.w *= static_cast<float>(alpha) / 255.0f;
-  return ImGui::ColorConvertFloat4ToU32(rgba);
-}
+// Sorted by id for binary search
+constexpr std::array<IconEntry, 15> kIcons = {{
+  {"arrow-down-up",         "\xef\x84\xa7"},  // U+F127
+  {"arrow-left-right",      "\xef\x84\xab"},  // U+F12B
+  {"bar-chart",             "\xef\x85\xbe"},  // U+F17E
+  {"clipboard2",            "\xef\x9c\xb3"},  // U+F733
+  {"distribute-horizontal", "\xef\x8c\x83"},  // U+F303
+  {"distribute-vertical",   "\xef\x8c\x84"},  // U+F304
+  {"file-earmark-image",    "\xef\x8d\xad"},  // U+F36D
+  {"files",                 "\xef\x8f\x82"},  // U+F3C2
+  {"palette",               "\xef\x92\xb1"},  // U+F4B1
+  {"plus-slash-minus",      "\xef\x9a\xaa"},  // U+F6AA
+  {"save",                  "\xef\x94\xa5"},  // U+F525
+  {"sliders",               "\xef\x95\xab"},  // U+F56B
+  {"trash",                 "\xef\x97\x9e"},  // U+F5DE
+  {"x-square",              "\xef\x98\xa9"},  // U+F629
+  {"zoom-out",              "\xef\x98\xad"},  // U+F62D
+}};
 
 }  // namespace
 
-void draw(std::string_view icon_id, ImVec2 pos, float size, ImU32 color, ImDrawList *draw_list) {
-  const RasterizedBootstrapIconData *icon = find_icon(icon_id);
-  if (icon == nullptr) {
-    return;
-  }
+void load_font(float size) {
+  ImGuiIO &io = ImGui::GetIO();
+  ImFontConfig config;
+  config.MergeMode = true;
+  config.GlyphMinAdvanceX = size;
+  config.FontDataOwnedByAtlas = false;
+  static const ImWchar ranges[] = {0xF000, 0xF8FF, 0};
+  io.Fonts->AddFontFromMemoryTTF(
+      const_cast<unsigned char *>(kBootstrapIconsFontData),
+      static_cast<int>(kBootstrapIconsFontSize),
+      size, &config, ranges);
+}
 
-  ImDrawList *target = draw_list != nullptr ? draw_list : ImGui::GetWindowDrawList();
-  const float scale_x = size / static_cast<float>(icon->width);
-  const float scale_y = size / static_cast<float>(icon->height);
-  const float pixel_w = std::max(1.0f, scale_x);
-  const float pixel_h = std::max(1.0f, scale_y);
-
-  for (int y = 0; y < icon->height; ++y) {
-    for (int x = 0; x < icon->width; ++x) {
-      const unsigned char alpha = icon->alpha[y * icon->width + x];
-      if (alpha == 0) {
-        continue;
-      }
-      const ImVec2 p0(pos.x + static_cast<float>(x) * scale_x, pos.y + static_cast<float>(y) * scale_y);
-      const ImVec2 p1(p0.x + pixel_w, p0.y + pixel_h);
-      target->AddRectFilled(p0, p1, modulate_alpha(color, alpha));
-    }
+const char *glyph(std::string_view icon_id) {
+  auto it = std::lower_bound(kIcons.begin(), kIcons.end(), icon_id,
+                             [](const IconEntry &e, std::string_view id) {
+                               return std::strcmp(e.id, id.data()) < 0;
+                             });
+  if (it != kIcons.end() && icon_id == it->id) {
+    return it->utf8;
   }
+  return "";
 }
 
 bool menu_item(std::string_view icon_id,
@@ -62,18 +64,14 @@ bool menu_item(std::string_view icon_id,
                const char *shortcut,
                bool selected,
                bool enabled) {
-  std::string padded_label = "      ";
-  padded_label += label;
-  const bool activated = ImGui::MenuItem(padded_label.c_str(), shortcut, selected, enabled);
-
-  const ImVec2 item_min = ImGui::GetItemRectMin();
-  const ImVec2 item_max = ImGui::GetItemRectMax();
-  const float icon_size = ImGui::GetTextLineHeight();
-  const float icon_x = item_min.x + ImGui::GetStyle().FramePadding.x;
-  const float icon_y = item_min.y + std::max(0.0f, (item_max.y - item_min.y - icon_size) * 0.5f);
-  const ImU32 color = ImGui::GetColorU32(enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled);
-  draw(icon_id, ImVec2(icon_x, icon_y), icon_size, color, ImGui::GetWindowDrawList());
-  return activated;
+  const char *icon = glyph(icon_id);
+  std::string text;
+  if (icon[0] != '\0') {
+    text = std::string(icon) + "  " + label;
+  } else {
+    text = std::string("   ") + label;
+  }
+  return ImGui::MenuItem(text.c_str(), shortcut, selected, enabled);
 }
 
 }  // namespace jotpluggler::bootstrap_icons

@@ -1,5 +1,6 @@
 #include "tools/jotpluggler/app.h"
 #include "tools/jotpluggler/bootstrap_icons.h"
+#include "tools/jotpluggler/bootstrap_icons_font_data.h"
 #include "imgui_impl_glfw.h"
 #include "tools/jotpluggler/sketch_layout.h"
 #include "tools/replay/framereader.h"
@@ -1045,6 +1046,7 @@ void configure_style() {
       io.FontDefault = font;
     }
   }
+  bootstrap_icons::load_font(16.75f);
 
   ImGuiStyle &style = ImGui::GetStyle();
   style.WindowRounding = 0.0f;
