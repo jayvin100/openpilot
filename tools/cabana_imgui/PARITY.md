@@ -1,44 +1,44 @@
 # Cabana ImGui Parity Tracker
 
 ## Stream Sources
-- [ ] route replay loading and playback controls — `not started`
-- [ ] demo route support — `not started`
-- [ ] auto-source route loading — `not started`
+- [x] route replay loading and playback controls — `wired`
+- [x] demo route support — `wired`
+- [x] auto-source route loading — `wired`
 - [ ] live device streaming — `not started`
 - [ ] panda streaming — `not started`
 - [ ] socketcan streaming — `not started`
 - [ ] zmq/device address streaming — `not started`
-- [ ] qcam, ecam, dcam handling — `not started`
+- [x] qcam, ecam, dcam handling — `wired`
 
 ## DBC
-- [ ] automatic DBC selection from fingerprint — `not started`
+- [x] automatic DBC selection from fingerprint — `wired`
 - [ ] manual DBC open/new/save/save-as — `not started`
 - [ ] DBC clipboard import/export — `not started`
 - [ ] DBC management per bus/source — `not started`
-- [ ] route metadata and fingerprint display — `not started`
+- [x] route metadata and fingerprint display — `wired`
 
 ## Messages
-- [ ] message list filtering — `not started`
+- [x] message list filtering — `wired`
 - [ ] message list sorting — `not started`
 - [ ] message visibility behavior — `not started`
-- [ ] message selection and tab restoration — `not started`
+- [x] message selection and tab restoration — `wired`
 
 ## Detail View
-- [ ] binary view — `not started`
-- [ ] signal view — `not started`
+- [x] binary view — `wired`
+- [x] signal view — `wired`
 - [ ] signal editing workflows — `not started`
 - [ ] message editing workflows — `not started`
-- [ ] history log — `not started`
+- [x] history log — `skeleton only`
 
 ## Charts
-- [ ] charts display — `not started`
+- [x] charts display — `skeleton only`
 - [ ] chart tabs — `not started`
 - [ ] split/merge behavior — `not started`
 - [ ] layout persistence — `not started`
 
 ## Video
-- [ ] video display — `not started`
-- [ ] video synchronization — `not started`
+- [x] video display — `skeleton only`
+- [x] video synchronization — `skeleton only`
 
 ## Tools
 - [ ] find signal — `not started`
@@ -53,8 +53,8 @@
 - [ ] help overlay — `not started`
 
 ## UI Shell
-- [x] dockspace layout — `skeleton only`
+- [x] dockspace layout — `wired`
 - [x] menu bar (File, Edit, View, Tools, Help) — `skeleton only`
-- [x] messages pane — `skeleton only`
-- [x] detail pane with tabs — `skeleton only`
+- [x] messages pane — `wired`
+- [x] detail pane with tabs — `wired`
 - [x] charts pane — `skeleton only`

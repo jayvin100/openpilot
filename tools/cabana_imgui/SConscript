@@ -24,16 +24,21 @@ cabana_env['CXXFLAGS'] += [opendbc_path]
 cabana_srcs = [
   'main.cc',
   'app/application.cc',
+  'core/app_state.cc',
+  'dbc/dbc_file.cc',
+  'dbc/dbc_manager.cc',
+  'sources/replay_source.cc',
   'ui/shell.cc',
   'ui/theme.cc',
   'ui/menus.cc',
+  'ui/bootstrap_icons.cc',
   'ui/panes/messages_pane.cc',
   'ui/panes/detail_pane.cc',
   'ui/panes/video_pane.cc',
   'ui/panes/charts_pane.cc',
 ]
 
-base_libs = [common, messaging, cereal, visionipc, replay_lib,
+base_libs = [replay_lib, common, messaging, cereal, visionipc,
              'avformat', 'avcodec', 'swresample', 'avutil',
              'x264', 'z', 'bz2', 'zstd', 'yuv',
              imgui_lib, 'glfw3',

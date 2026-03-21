@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 
+#include "core/app_state.h"
 #include "ui/menus.h"
 #include "ui/panes/messages_pane.h"
 #include "ui/panes/detail_pane.h"
@@ -57,8 +58,10 @@ static void render_status_bar() {
 
   if (ImGui::Begin("##StatusBar", nullptr, flags)) {
     ImGui::TextUnformatted("For Help, Press F1");
-    ImGui::SameLine(ImGui::GetWindowWidth() - 200);
-    ImGui::TextUnformatted("Cached Minutes:0  FPS:0");
+    ImGui::SameLine(ImGui::GetWindowWidth() - 220);
+    auto &st = cabana::app_state();
+    ImGui::Text("Cached Minutes:%d  FPS:%.0f", st.cached_minutes,
+                ImGui::GetIO().Framerate);
   }
   ImGui::End();
 

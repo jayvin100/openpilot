@@ -1,6 +1,7 @@
 #include "ui/menus.h"
 
 #include "imgui.h"
+#include "core/app_state.h"
 
 namespace cabana {
 namespace menus {
@@ -32,7 +33,7 @@ void render() {
       if (ImGui::MenuItem("Copy DBC To Clipboard")) {}
       ImGui::Separator();
       if (ImGui::MenuItem("Settings...")) {}
-      if (ImGui::MenuItem("Exit", "Ctrl+Q")) {}
+      if (ImGui::MenuItem("Exit", "Ctrl+Q")) { cabana::app_state().quit_requested = true; }
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Edit")) {

@@ -1,6 +1,7 @@
 #include "ui/theme.h"
 
 #include "imgui.h"
+#include "ui/bootstrap_icons.h"
 
 namespace cabana {
 namespace theme {
@@ -8,28 +9,34 @@ namespace theme {
 static ImFont *s_font_default = nullptr;
 static ImFont *s_font_bold = nullptr;
 static ImFont *s_font_splash = nullptr;
+static float s_dpi_scale = 1.0f;
 
 // System font paths (NotoSans matches what Qt uses on Linux)
 static const char *FONT_REGULAR = "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf";
 static const char *FONT_BOLD = "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf";
 
-void load_fonts() {
+void load_fonts(float scale) {
+  s_dpi_scale = scale;
+
   ImGuiIO &io = ImGui::GetIO();
   io.Fonts->Clear();
 
-  // Base UI font — 13px matches Qt's rendered size at default DPI
-  s_font_default = io.Fonts->AddFontFromFileTTF(FONT_REGULAR, 13.0f);
+  // Scale font pixel sizes by DPI scale factor
+  float base_size = 14.0f * scale;
+  float splash_size = 52.0f * scale;
+
+  s_font_default = io.Fonts->AddFontFromFileTTF(FONT_REGULAR, base_size);
   if (!s_font_default) {
-    // Fallback to imgui built-in
     s_font_default = io.Fonts->AddFontDefault();
   }
 
-  // Bold font for headers and emphasis
-  s_font_bold = io.Fonts->AddFontFromFileTTF(FONT_BOLD, 13.0f);
+  // Merge bootstrap icons into the default font
+  cabana::icons::load_font(base_size);
+
+  s_font_bold = io.Fonts->AddFontFromFileTTF(FONT_BOLD, base_size);
   if (!s_font_bold) s_font_bold = s_font_default;
 
-  // Large font for the CABANA splash text
-  s_font_splash = io.Fonts->AddFontFromFileTTF(FONT_BOLD, 56.0f);
+  s_font_splash = io.Fonts->AddFontFromFileTTF(FONT_BOLD, splash_size);
   if (!s_font_splash) s_font_splash = s_font_default;
 }
 
@@ -38,13 +45,13 @@ void apply() {
 
   ImGuiStyle &style = ImGui::GetStyle();
 
-  // Match Qt's tight spacing
-  style.WindowPadding = ImVec2(4, 4);
-  style.FramePadding = ImVec2(4, 1);
-  style.CellPadding = ImVec2(4, 1);
-  style.ItemSpacing = ImVec2(4, 2);
-  style.ItemInnerSpacing = ImVec2(4, 2);
-  style.IndentSpacing = 12.0f;
+  // Spacing tuned to match Qt cabana element sizes
+  style.WindowPadding = ImVec2(6, 4);
+  style.FramePadding = ImVec2(4, 2);
+  style.CellPadding = ImVec2(4, 2);
+  style.ItemSpacing = ImVec2(6, 3);
+  style.ItemInnerSpacing = ImVec2(4, 3);
+  style.IndentSpacing = 14.0f;
   style.ScrollbarSize = 12.0f;
   style.GrabMinSize = 8.0f;
 
@@ -97,11 +104,17 @@ void apply() {
   c[ImGuiCol_ButtonActive] = ImVec4(0.26f, 0.59f, 0.98f, 0.60f);
   c[ImGuiCol_Text] = ImVec4(0.86f, 0.86f, 0.86f, 1.0f);
   c[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.50f, 1.0f);
+
+  // Scale all sizes by DPI factor (called again after load_fonts sets s_dpi_scale)
+  if (s_dpi_scale > 1.0f) {
+    style.ScaleAllSizes(s_dpi_scale);
+  }
 }
 
 ImFont *font_default() { return s_font_default; }
 ImFont *font_bold() { return s_font_bold; }
 ImFont *font_splash() { return s_font_splash; }
+float dpi_scale() { return s_dpi_scale; }
 
 }  // namespace theme
 }  // namespace cabana

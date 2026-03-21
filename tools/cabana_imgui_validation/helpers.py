@@ -11,7 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
-CABANA_BIN = os.environ.get("CABANA_BIN", os.path.join(os.path.dirname(__file__), "../cabana/_cabana"))
+CABANA_BIN = os.environ.get("CABANA_BIN", os.path.join(os.path.dirname(__file__), "../cabana_imgui/cabana_imgui"))
 DEMO_ROUTE = os.environ.get("CABANA_DEMO_ROUTE", "5beb9b58bd12b691/0000010a--a51155e496")
 GOLDENS_DIR = Path(__file__).parent / "goldens"
 GOLDENS_DIR.mkdir(exist_ok=True)
@@ -64,6 +64,26 @@ class XvfbCabana:
     self.wid = self._wait_for_window()
     return self
 
+  def _close_process_streams(self):
+    """Close child pipes to avoid leaking file descriptors into pytest."""
+    if self.proc is None:
+      return
+    for stream_name in ("stdout", "stderr"):
+      stream = getattr(self.proc, stream_name, None)
+      if stream is None:
+        continue
+      try:
+        stream.close()
+      except OSError:
+        pass
+
+  def _cleanup_tmpdir(self):
+    """Remove the temporary config directory created for this run."""
+    if self._tmpdir:
+      import shutil
+      shutil.rmtree(self._tmpdir, ignore_errors=True)
+      self._tmpdir = None
+
   def _wait_for_window(self):
     """Poll until a real Cabana window (>= MIN_WINDOW_SIZE) appears or timeout."""
     deadline = time.monotonic() + self.timeout
@@ -71,6 +91,8 @@ class XvfbCabana:
       if self.proc.poll() is not None:
         stdout = self.proc.stdout.read().decode(errors="replace")
         stderr = self.proc.stderr.read().decode(errors="replace")
+        self._close_process_streams()
+        self._cleanup_tmpdir()
         raise RuntimeError(
           f"Cabana exited early with code {self.proc.returncode}\n"
           f"stdout: {stdout}\nstderr: {stderr}"
@@ -303,6 +325,8 @@ class XvfbCabana:
   def close(self, timeout=5):
     """Send alt+F4 to close gracefully, then kill if needed. Returns exit code."""
     if not self.is_alive():
+      self._close_process_streams()
+      self._cleanup_tmpdir()
       return self.proc.returncode if self.proc else -1
 
     # Try graceful close via alt+F4
@@ -310,6 +334,8 @@ class XvfbCabana:
 
     try:
       self.proc.wait(timeout=timeout)
+      self._close_process_streams()
+      self._cleanup_tmpdir()
       return self.proc.returncode
     except subprocess.TimeoutExpired:
       pass
@@ -324,6 +350,8 @@ class XvfbCabana:
         self.proc.wait(timeout=2)
       except (ProcessLookupError, subprocess.TimeoutExpired):
         pass
+    self._close_process_streams()
+    self._cleanup_tmpdir()
     return self.proc.returncode
 
   def kill(self):
@@ -334,9 +362,8 @@ class XvfbCabana:
         self.proc.wait(timeout=5)
       except (ProcessLookupError, subprocess.TimeoutExpired, ChildProcessError):
         pass
-    if self._tmpdir:
-      import shutil
-      shutil.rmtree(self._tmpdir, ignore_errors=True)
+    self._close_process_streams()
+    self._cleanup_tmpdir()
 
   def __enter__(self):
     self.start()
