@@ -242,6 +242,96 @@ Parity means all current user-facing Cabana functionality is represented in the 
 
 ## Execution Phases
 
+### Phase -1: Validator Baseline (Current Cabana)
+
+Before writing any imgui code, establish the behavioral ground truth of the current Qt Cabana by launching it under xvfb and driving it with xdotool.
+
+#### Toolchain
+
+- `xvfb-run` — headless X server, launches cabana with no physical display
+- `xdotool` — find windows, send clicks, keystrokes, and window management
+- `scrot` / `import` (imagemagick) — capture screenshots
+- Python 3 test scripts — orchestrate launch, interaction, capture, and comparison
+
+#### What to capture
+
+Smoke (app lifecycle):
+
+- boot to window visible (xdotool search --name)
+- demo route loads (--demo flag)
+- UI stays alive for 10+ seconds without crash
+- clean exit (send WM_DELETE, check return code 0)
+- startup time (wall clock from launch to window mapped)
+
+Screenshots (visual golden baselines):
+
+- initial window after demo route load
+- message list populated
+- message selected → detail/binary/signals tabs visible
+- chart added for a signal
+- DBC loaded (fingerprint auto-select or manual open)
+
+Workflow interactions:
+
+- click a message in the list → detail pane updates
+- switch between Binary/Signals/History tabs
+- add a chart via double-click or menu
+- open DBC file via File menu
+- export CSV via menu → verify output file on disk
+- open Find Signal dialog
+- open Settings dialog
+
+File output captures:
+
+- CSV export content for a known message/signal
+- DBC save-as output for a loaded+modified DBC
+- settings file content after changing a preference
+
+#### Structure
+
+```text
+tools/cabana_imgui_validation/
+  conftest.py              # shared fixtures: xvfb launch, window wait, screenshot helpers
+  helpers.py               # xdotool wrappers, process management, image comparison
+  smoke/
+    test_boot.py           # launch, window appears, stays alive, clean exit
+    test_demo_route.py     # --demo flag loads route, messages populate
+  workflows/
+    test_message_select.py # click message, verify detail pane updates
+    test_tabs.py           # switch Binary/Signals/History tabs
+    test_chart.py          # add chart for signal, screenshot
+    test_dbc_load.py       # load DBC, verify signals appear
+    test_export_csv.py     # export CSV, verify file contents
+    test_find_signal.py    # open find dialog, interact
+  goldens/
+    boot.png
+    demo_loaded.png
+    message_selected.png
+    chart_added.png
+    ...
+  compare.py               # image diff (imagemagick compare or pixel-diff threshold)
+```
+
+#### Approach
+
+Each test script:
+
+1. Starts cabana under `xvfb-run` with known args (e.g. `--demo`, `--dbc <file>`)
+2. Waits for the main window via `xdotool search --sync --name`
+3. Optionally interacts via `xdotool key`, `xdotool mousemove --window`, `xdotool click`
+4. Captures screenshots via `import -window <wid>` or `scrot`
+5. Captures file outputs (CSV, DBC, settings) from temp directories
+6. Compares against goldens or validates content programmatically
+7. Sends `xdotool key alt+F4` or `kill`, verifies clean exit
+
+Tests run with pytest. No app modifications required.
+
+#### Deliverable
+
+- golden screenshots and file outputs for the current Qt Cabana
+- a repeatable test suite that can later be pointed at the imgui cabana binary
+- confidence that we know exactly what the current app does before replacing it
+
 ### Phase 0: Bootstrap
 
 - create the new target and launcher
@@ -333,79 +423,88 @@ Deliverable:
 
 ## Validation Architecture
 
-Validation must be completely self-contained outside the app.
+Validation is completely self-contained outside the app. The primary mechanism is black-box: launch the app under `xvfb-run`, drive it with `xdotool`, capture screenshots and file outputs, compare against goldens.
 
-Suggested tree:
+### Directory
 
 ```text
 tools/cabana_imgui_validation/
-  parity/
+  conftest.py
+  helpers.py
+  compare.py
   smoke/
   workflows/
+  parity/
   perf/
   goldens/
 ```
 
 ### Validation Rules
 
-- No production file in `tools/cabana_imgui/` should exist solely for validation.
-- Validation may launch the app as a black box, but may not require app-only test modes.
-- Validation may directly test shared production libraries below the UI layer.
-- Validation may use cached routes on disk and existing route slices.
-- Validation state isolation should be external via environment/config/output directories.
+- No production file in `tools/cabana_imgui/` or `tools/cabana/` should exist solely for validation.
+- All validation launches the app as a black box under xvfb. No app-only test modes.
+- Validation may also directly test shared production libraries below the UI layer.
+- Validation uses cached routes on disk and existing route slices.
+- State isolation is external via environment variables, temp config directories, and temp output directories.
+
+### xvfb + xdotool Pattern
+
+Every test follows the same pattern:
+
+1. `xvfb-run` launches the app binary with known CLI args
+2. `xdotool search --sync --name` waits for the window
+3. `xdotool` sends clicks, keystrokes, and window commands
+4. `import -window <wid>` captures screenshots
+5. File outputs (CSV, DBC, settings) are written to temp directories and verified
+6. `xdotool key alt+F4` or `kill -TERM` ends the app; return code is checked
+
+This pattern works identically for legacy Qt Cabana and the new imgui Cabana — only the binary path changes.
 
 ### Validation Types
 
-#### `parity/`
-
-Route-based and behavior-based parity checks for:
-
-- message inventory
-- latest bytes for selected messages
-- decoded signal values at fixed timestamps
-- history/log behavior
-- chart data behavior
-- DBC round-trip and mapping behavior
-- fingerprint-based DBC selection
-- CSV export behavior
-- session persistence behavior
-
-These should compare legacy Cabana behavior to the new app's shared logic and outputs where possible.
-
 #### `smoke/`
 
-Black-box app launch checks:
+App lifecycle checks:
 
-- app boots
-- cached route opens
+- app boots to visible window
+- cached route or demo route opens and populates
 - UI stays alive for a stable interval
-- screenshots can be captured
-- exit is clean
+- clean exit on close
 
 #### `workflows/`
 
-External UI automation for real workflows:
+UI automation for real workflows:
 
-- open stream
-- select message
-- open/edit message or signal
-- split and manage charts
-- save DBC
-- restore session
-- use find dialogs
-- exercise video-related flows
+- select message → detail pane updates
+- switch tabs (Binary, Signals, History)
+- add/remove charts
+- open/save DBC
+- export CSV
+- open find dialogs
+- settings changes persist
+
+#### `parity/`
+
+Side-by-side comparison between legacy and new app:
+
+- same route → same message inventory (screenshot + file output)
+- same message selected → same binary/signal view
+- same DBC loaded → same decoded values
+- same CSV export → identical file content
+- same session state → same restore behavior
+
+Parity tests capture outputs from both binaries and diff them.
 
 #### `perf/`
 
 External timing and process metrics only:
 
-- startup time
+- startup time (launch to window mapped)
 - route load time
-- memory footprint
-- CPU usage
-- steady-state responsiveness
+- memory footprint (RSS via /proc)
+- CPU usage over steady-state interval
 
-No in-app performance instrumentation should be added solely for this.
+No in-app performance instrumentation.
 
 ## Fast Iteration Loop
 
@@ -413,20 +512,22 @@ The iteration loop should rely on:
 
 - cached routes already available on disk
 - building only the new app target
-- validating specific layers independently
+- the same xvfb/xdotool test suite used for the baseline, pointed at the new binary
 
 The expected development rhythm is:
 
 1. build `tools/cabana_imgui`
-2. run against a fixed cached route slice
-3. validate relevant shared library behavior in `tools/cabana_imgui_validation/parity`
-4. run black-box smoke/workflow checks externally
+2. run `pytest tools/cabana_imgui_validation/smoke/` against the new binary
+3. run `pytest tools/cabana_imgui_validation/workflows/` for feature-level checks
+4. run `pytest tools/cabana_imgui_validation/parity/` to diff against legacy goldens
+
+The validator binary is controlled by an environment variable (e.g. `CABANA_BIN`), defaulting to the legacy Qt cabana. Set `CABANA_BIN` to the imgui binary to validate the new app against the same goldens.
 
 Fast iteration comes from architecture, not app instrumentation:
 
 - thin UI layer
 - reusable core/model code
-- parity tests that do not require full UI automation for every check
+- one test suite that validates both apps identically
 - stable route fixtures from cache
 
 ## Initial Implementation Priorities

@@ -1,0 +1,42 @@
+import os
+import imgui
+
+Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal', 'replay_lib')
+
+cabana_env = env.Clone()
+
+# imgui sources
+cabana_env['CPPPATH'] += [imgui.INCLUDE_DIR, '#tools/cabana_imgui']
+cabana_env['LIBPATH'] += [imgui.LIB_DIR]
+
+imgui_srcs = [os.path.join(imgui.SRC_DIR, f) for f in [
+  'imgui.cpp', 'imgui_draw.cpp', 'imgui_tables.cpp', 'imgui_widgets.cpp',
+  'implot.cpp', 'implot_items.cpp',
+  'imgui_impl_glfw.cpp', 'imgui_impl_opengl3.cpp',
+]]
+imgui_lib = cabana_env.Library('imgui', imgui_srcs)
+
+# opendbc path (shared with legacy cabana)
+opendbc_path = '-DOPENDBC_FILE_PATH=\'"%s"\'' % (cabana_env.Dir("../../opendbc/dbc").abspath)
+cabana_env['CXXFLAGS'] += [opendbc_path]
+
+# cabana_imgui sources
+cabana_srcs = [
+  'main.cc',
+  'app/application.cc',
+  'ui/shell.cc',
+  'ui/theme.cc',
+  'ui/menus.cc',
+  'ui/panes/messages_pane.cc',
+  'ui/panes/detail_pane.cc',
+  'ui/panes/video_pane.cc',
+  'ui/panes/charts_pane.cc',
+]
+
+base_libs = [common, messaging, cereal, visionipc, replay_lib,
+             'avformat', 'avcodec', 'swresample', 'avutil',
+             'x264', 'z', 'bz2', 'zstd', 'yuv',
+             imgui_lib, 'glfw3',
+             'GL', 'dl', 'pthread', 'm']
+
+cabana_env.Program('_cabana_imgui', cabana_srcs, LIBS=base_libs)
