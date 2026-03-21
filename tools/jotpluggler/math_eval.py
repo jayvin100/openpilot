@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import json
-import pathlib
 import sys
 import textwrap
 import traceback
@@ -124,6 +123,6 @@ def main() -> int:
 if __name__ == "__main__":
   try:
     raise SystemExit(main())
-  except Exception:
+  except Exception as err:
     traceback.print_exc()
-    raise SystemExit(1)
+    raise SystemExit(1) from err
