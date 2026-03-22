@@ -1222,7 +1222,7 @@ void append_event_fast(cereal::Event::Which which,
                        int32_t eidx_segnum,
                        kj::ArrayPtr<const capnp::word> data,
                        const SchemaIndex &schema,
-                       const dbc_core::Database *can_dbc,
+                       const dbc::Database *can_dbc,
                        bool skip_raw_can,
                        double time_offset,
                        SeriesAccumulator *series) {
@@ -1251,7 +1251,7 @@ void append_event_fast(cereal::Event::Which which,
       if (can_dbc == nullptr) {
         return;
       }
-      const dbc_core::Message *message = can_dbc->message(address);
+      const dbc::Message *message = can_dbc->message(address);
       if (message == nullptr) {
         return;
       }
@@ -1259,8 +1259,8 @@ void append_event_fast(cereal::Event::Which which,
       const uint8_t *raw = bytes;
       const size_t data_size = dat_reader.size();
       const std::string base_path = "/" + service.service_name + "/" + std::to_string(bus) + "/" + message->name;
-      for (const dbc_core::Signal &signal : message->signals) {
-        std::optional<double> value = dbc_core::signalValue(signal, *message, raw, data_size);
+      for (const dbc::Signal &signal : message->signals) {
+        std::optional<double> value = dbc::signalValue(signal, *message, raw, data_size);
         if (!value.has_value()) continue;
         const std::string path = base_path + "/" + signal.name;
         append_dynamic_scalar_point(path, tm, *value, series);
@@ -1292,7 +1292,7 @@ void append_events_fast_range(const std::vector<Event> &events,
                               size_t begin,
                               size_t end,
                               const SchemaIndex &schema,
-                              const dbc_core::Database *can_dbc,
+                              const dbc::Database *can_dbc,
                               bool skip_raw_can,
                               SeriesAccumulator *series) {
   for (size_t i = begin; i < end; ++i) {
@@ -1691,7 +1691,7 @@ size_t extract_chunk_count(size_t event_count, size_t worker_budget, size_t segm
 
 SeriesAccumulator extract_segment_series(const std::vector<Event> &events,
                                          const SchemaIndex &schema,
-                                         const dbc_core::Database *can_dbc,
+                                         const dbc::Database *can_dbc,
                                          bool skip_raw_can,
                                          size_t worker_budget,
                                          size_t segment_workers) {
@@ -1733,7 +1733,7 @@ SeriesAccumulator extract_segment_series(const std::vector<Event> &events,
 LoadedRouteArtifacts load_route_series_parallel(
     const std::map<int, SegmentLogs> &segments,
     const SchemaIndex &schema,
-    const dbc_core::Database *can_dbc,
+    const dbc::Database *can_dbc,
     LogSelector selector,
     bool skip_raw_can,
     LoadStats *stats) {
@@ -1897,7 +1897,7 @@ struct StreamAccumulator::Impl {
   std::string manual_dbc_name;
   std::string detected_dbc_name;
   std::string car_fingerprint;
-  std::optional<dbc_core::Database> can_dbc;
+  std::optional<dbc::Database> can_dbc;
   std::optional<double> time_offset;
 
   void refresh_dbc() {
@@ -2026,9 +2026,9 @@ RouteData load_route_data(const std::string &route_name,
 
   const RouteMetadata metadata = detect_route_metadata(segments, route.selector);
   const std::string resolved_dbc = !dbc_name.empty() ? dbc_name : detect_dbc_for_fingerprint(metadata.car_fingerprint);
-  const std::optional<dbc_core::Database> can_dbc = resolved_dbc.empty()
+  const std::optional<dbc::Database> can_dbc = resolved_dbc.empty()
     ? std::nullopt
-    : std::optional<dbc_core::Database>(std::in_place, resolve_dbc_path(resolved_dbc));
+    : std::optional<dbc::Database>(std::in_place, resolve_dbc_path(resolved_dbc));
 
   const SchemaIndex &schema = SchemaIndex::instance();
   LoadedRouteArtifacts artifacts = load_route_series_parallel(segments, schema, can_dbc ? &*can_dbc : nullptr,

@@ -542,19 +542,6 @@ std::string percent_encode(std::string_view text) {
   return out;
 }
 
-std::string shell_quote(std::string_view text) {
-  std::string out = "'";
-  for (char c : text) {
-    if (c == '\'') {
-      out += "'\\''";
-    } else {
-      out.push_back(c);
-    }
-  }
-  out.push_back('\'');
-  return out;
-}
-
 std::string route_google_maps_url(const GpsTrace &trace) {
   if (trace.points.size() < 2) return {};
   auto coord = [](const GpsPoint &p) {
@@ -1400,9 +1387,7 @@ void draw_map_pane(AppSession *session, UiState *state, Pane *, int pane_index) 
   const bool double_clicked = canvas_hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
   bool overlay_hovered = false;
   if (const std::string google_maps_url = route_google_maps_url(trace); !google_maps_url.empty()) {
-    const char *link_icon = bootstrap_icons::glyph("box-arrow-up-right");
-    std::string label = std::string("Google Maps ");
-    label += (link_icon != nullptr && link_icon[0] != '\0') ? link_icon : ">";
+    std::string label = std::string("Google Maps ") + icon::BOX_ARROW_UP_RIGHT;
     const ImVec2 text_size = ImGui::CalcTextSize(label.c_str());
     const ImVec2 button_size(text_size.x + 20.0f, text_size.y + 10.0f);
     const ImVec2 button_pos(rect_max.x - button_size.x - 28.0f, rect_min.y + 10.0f);

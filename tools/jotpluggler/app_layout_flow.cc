@@ -76,7 +76,6 @@ bool save_layout(AppSession *session, UiState *state, const std::string &layout_
     state->layout_dirty = false;
     sync_layout_buffers(state, *session);
     state->status_text = "Saved layout " + output.filename().string();
-    g_layout_names_dirty = true;
     return true;
   } catch (const std::exception &err) {
     state->error_text = err.what();

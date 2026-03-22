@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <tuple>
 
-namespace dbc_core {
+namespace dbc {
 
 namespace {
 
@@ -226,4 +226,4 @@ std::optional<double> signalValue(const Signal &signal, const Message &message, 
   return raw_signalValue(signal, data, data_size);
 }
 
-}  // namespace dbc_core
+}  // namespace dbc

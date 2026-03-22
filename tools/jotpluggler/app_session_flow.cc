@@ -502,15 +502,15 @@ void draw_route_copy_feedback(UiState *state, ImDrawList *draw_list, ImVec2 chip
 }
 
 ImVec2 calc_icon_size(const char *icon) {
-  if (ImFont *icon_font = bootstrap_icons::font(); icon_font != nullptr && icon != nullptr && icon[0] != '\0') {
-    return icon_font->CalcTextSizeA(icon_font->LegacySize, std::numeric_limits<float>::max(), 0.0f, icon);
+  if (ImFont *ifont = icon_font(); ifont != nullptr && icon != nullptr && icon[0] != '\0') {
+    return ifont->CalcTextSizeA(ifont->LegacySize, std::numeric_limits<float>::max(), 0.0f, icon);
   }
   return ImGui::CalcTextSize(icon);
 }
 
 void draw_icon_glyph(ImDrawList *draw_list, const ImVec2 &pos, ImU32 color, const char *icon) {
-  if (ImFont *icon_font = bootstrap_icons::font(); icon_font != nullptr && icon != nullptr && icon[0] != '\0') {
-    draw_list->AddText(icon_font, icon_font->LegacySize, pos, color, icon);
+  if (ImFont *ifont = icon_font(); ifont != nullptr && icon != nullptr && icon[0] != '\0') {
+    draw_list->AddText(ifont, ifont->LegacySize, pos, color, icon);
     return;
   }
   draw_list->AddText(pos, color, icon);
@@ -584,10 +584,8 @@ void draw_route_info_popup(AppSession *session, UiState *state, ImVec2 anchor) {
   ImGui::TextUnformatted(session->route_id.canonical().c_str());
   app_pop_mono_font();
 
-  const char *copy_icon = bootstrap_icons::glyph("clipboard");
-  const char *link_icon = bootstrap_icons::glyph("box-arrow-up-right");
-  if (copy_icon[0] == '\0') copy_icon = "C";
-  if (link_icon[0] == '\0') link_icon = ">";
+  const char *copy_icon = icon::CLIPBOARD;
+  const char *link_icon = icon::BOX_ARROW_UP_RIGHT;
   if (draw_popup_icon_button("##copy_route", copy_icon, ImVec2(34.0f, 26.0f), "Copy route")) {
     ImGui::SetClipboardText(session->route_id.canonical().c_str());
     state->status_text = "Copied route to clipboard";
@@ -743,8 +741,7 @@ void draw_route_id_chip(AppSession *session, UiState *state) {
   draw_list->AddCircleFilled(info_center, info_size * 0.5f,
                              ImGui::GetColorU32(info_hovered ? color_rgb(220, 229, 240) : color_rgb(239, 243, 248)));
   draw_list->AddCircle(info_center, info_size * 0.5f, chip_border, 20, 1.0f);
-  const char *info_glyph = bootstrap_icons::glyph("info-circle");
-  const char *info_text = info_glyph[0] != '\0' ? info_glyph : "i";
+  const char *info_text = icon::INFO_CIRCLE;
   const ImVec2 info_text_size = calc_icon_size(info_text);
   draw_icon_glyph(draw_list,
                   ImVec2(std::floor(info_center.x - info_text_size.x * 0.5f),

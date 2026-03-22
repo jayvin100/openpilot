@@ -188,15 +188,8 @@ std::vector<std::string> scan_layout_names() {
   return names;
 }
 
-bool g_layout_names_dirty = true;
-
-const std::vector<std::string> &available_layout_names() {
-  static std::vector<std::string> cached;
-  if (g_layout_names_dirty) {
-    cached = scan_layout_names();
-    g_layout_names_dirty = false;
-  }
-  return cached;
+std::vector<std::string> available_layout_names() {
+  return scan_layout_names();
 }
 
 void run_or_throw(const std::string &command, const std::string &action) {
@@ -218,7 +211,6 @@ bool start_stream_session(AppSession *session,
                           double buffer_seconds,
                           bool preserve_existing_data = false);
 void stop_stream_session(AppSession *session, UiState *state, bool preserve_data = true);
-bool apply_special_item_to_active_pane(AppSession *session, UiState *state, std::string_view item_id);
 
 void start_new_layout(AppSession *session, UiState *state, const std::string &status_text = "New untitled layout") {
   session->layout = make_empty_layout();
@@ -263,11 +255,11 @@ void configure_style() {
   font_cfg.OversampleH = 2;
   font_cfg.OversampleV = 2;
   font_cfg.RasterizerDensity = 1.0f;
-  bootstrap_icons::loadFont(16.0f);
+  icon_add_font(16.0f);
   const auto add_font_with_icons = [&](const fs::path &path, float size) -> ImFont * {
     ImFont *font = io.Fonts->AddFontFromFileTTF(path.c_str(), size, &font_cfg);
     if (font != nullptr) {
-      bootstrap_icons::mergeFont(size);
+      icon_add_font(size, true);
     }
     return font;
   };
@@ -394,11 +386,6 @@ void copy_to_buffer(const std::string &value, std::array<char, N> *buffer) {
     std::copy_n(value.data(), count, buffer->data());
     (*buffer)[count] = '\0';
   }
-}
-
-template <size_t N>
-std::string string_from_buffer(const std::array<char, N> &buffer) {
-  return std::string(buffer.data());
 }
 
 void sync_ui_state(UiState *state, const SketchLayout &layout) {
@@ -812,7 +799,7 @@ constexpr std::array<std::pair<const char *, const char *>, 5> kBrowserSpecialIt
   {"camera_qroad", "qRoad Camera"},
 }};
 
-void draw_browser_special_item(AppSession *session, UiState *state, const char *item_id, const char *label) {
+void draw_browser_special_item(const char *item_id, const char *label) {
   const ImGuiStyle &style = ImGui::GetStyle();
   const ImVec2 row_size(std::max(1.0f, ImGui::GetContentRegionAvail().x), ImGui::GetFrameHeight());
   ImGui::PushID(item_id);
@@ -934,13 +921,13 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       ImGui::EndCombo();
     }
     ImGui::SeparatorText("Layout");
-    const std::vector<std::string> layouts = available_layout_names();
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##layout_combo", layout_combo_label(*session, *state).c_str())) {
       if (ImGui::Selectable("New Layout")) {
         start_new_layout(session, state);
       }
       ImGui::Separator();
+      const std::vector<std::string> layouts = available_layout_names();
       const std::string current_layout = session->layout_path.empty() ? std::string("untitled") : session->layout_path.stem().string();
       for (const std::string &layout_name : layouts) {
         const bool selected = layout_name == current_layout;
@@ -982,13 +969,13 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 2.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 3.0f));
     if (ImGui::BeginChild("##timeseries_browser", ImVec2(0.0f, browser_height), true)) {
-      const std::string filter = lowercase(string_from_buffer(state->browser_filter));
+      const std::string filter = lowercase(state->browser_filter.data());
       std::vector<std::string> visible_paths;
       for (const BrowserNode &node : session->browser_nodes) {
         collect_visible_leaf_paths(node, filter, &visible_paths);
       }
       for (const auto &[item_id, label] : kBrowserSpecialItems) {
-        draw_browser_special_item(session, state, item_id, label);
+        draw_browser_special_item(item_id, label);
       }
       ImGui::Dummy(ImVec2(0.0f, 2.0f));
       ImGui::Separator();
@@ -1175,40 +1162,6 @@ bool convert_pane_to_camera(WorkspaceTab *tab, TabUiState *tab_state, int pane_i
   return true;
 }
 
-bool apply_special_item_to_active_pane(AppSession *session, UiState *state, std::string_view item_id) {
-  WorkspaceTab *tab = app_active_tab(&session->layout, *state);
-  TabUiState *tab_state = app_active_tab_state(state);
-  if (tab == nullptr || tab_state == nullptr) return false;
-  if (tab_state->active_pane_index < 0 || tab_state->active_pane_index >= static_cast<int>(tab->panes.size())) {
-    state->status_text = "No active pane";
-    return false;
-  }
-  if (!pane_can_accept_special_item(tab->panes[static_cast<size_t>(tab_state->active_pane_index)])) {
-    state->status_text = std::string(special_item_label(item_id)) + " can only replace another special pane or use an empty pane";
-    return false;
-  }
-
-  const SketchLayout before_layout = session->layout;
-  bool changed = false;
-  if (item_id == "map") {
-    changed = convert_pane_to_map(tab, tab_state, tab_state->active_pane_index);
-  } else if (const auto view = camera_view_from_special_item(item_id)) {
-    changed = convert_pane_to_camera(tab, tab_state, tab_state->active_pane_index, *view);
-  } else {
-    return false;
-  }
-  if (!changed) {
-    state->status_text = std::string(special_item_label(item_id)) + " already shown in pane";
-    return false;
-  }
-  resize_tab_pane_state(tab_state, tab->panes.size());
-  state->undo.push(before_layout);
-  if (mark_layout_dirty(session, state)) {
-    state->status_text = std::string(special_item_label(item_id)) + " added to active pane";
-  }
-  return true;
-}
-
 bool split_pane(WorkspaceTab *tab, int pane_index, PaneDropZone zone, std::optional<Curve> curve = std::nullopt) {
   if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
     return false;
@@ -1315,7 +1268,7 @@ void rename_runtime_tab(SketchLayout *layout, UiState *state) {
   if (state->rename_tab_index < 0 || state->rename_tab_index >= static_cast<int>(layout->tabs.size())) {
     return;
   }
-  layout->tabs[static_cast<size_t>(state->rename_tab_index)].tab_name = string_from_buffer(state->rename_tab_buffer);
+  layout->tabs[static_cast<size_t>(state->rename_tab_index)].tab_name = state->rename_tab_buffer.data();
   state->status_text = "Renamed tab";
   layout->current_tab_index = state->rename_tab_index;
   cancel_rename_tab(state);
@@ -2310,44 +2263,44 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
     && pane_index < static_cast<int>(tab.panes.size())
     && !tab.panes[static_cast<size_t>(pane_index)].curves.empty();
   const bool is_plot = pane != nullptr && pane->kind == PaneKind::Plot;
-  if (bootstrap_icons::menuItem("sliders", "Edit Axis Limits...", nullptr, false, is_plot)) {
+  if (icon_menu_item(icon::SLIDERS, "Edit Axis Limits...", nullptr, false, is_plot)) {
     action.kind = PaneMenuActionKind::OpenAxisLimits;
   }
-  bootstrap_icons::menuItem("palette", "Edit Curve Style...", nullptr, false, false && is_plot);
+  icon_menu_item(icon::PALETTE, "Edit Curve Style...", nullptr, false, false && is_plot);
   if (action.kind == PaneMenuActionKind::None
-      && bootstrap_icons::menuItem("plus-slash-minus", "Apply filter to data...", nullptr, false, has_curves && is_plot)) {
+      && icon_menu_item(icon::PLUS_SLASH_MINUS, "Apply filter to data...", nullptr, false, has_curves && is_plot)) {
     action.kind = PaneMenuActionKind::OpenCustomSeries;
   }
   ImGui::Separator();
-  if (action.kind == PaneMenuActionKind::None && bootstrap_icons::menuItem("distribute-horizontal", "Split Left / Right")) {
+  if (action.kind == PaneMenuActionKind::None && icon_menu_item(icon::DISTRIBUTE_HORIZONTAL, "Split Left / Right")) {
     action.kind = PaneMenuActionKind::SplitRight;
   } else if (action.kind == PaneMenuActionKind::None
-             && bootstrap_icons::menuItem("distribute-vertical", "Split Top / Bottom")) {
+             && icon_menu_item(icon::DISTRIBUTE_VERTICAL, "Split Top / Bottom")) {
     action.kind = PaneMenuActionKind::SplitBottom;
   }
   ImGui::Separator();
-  if (bootstrap_icons::menuItem("zoom-out", "Zoom Out", nullptr, false, is_plot)) {
+  if (icon_menu_item(icon::ZOOM_OUT, "Zoom Out", nullptr, false, is_plot)) {
     action.kind = PaneMenuActionKind::ResetView;
-  } else if (bootstrap_icons::menuItem("arrow-left-right", "Zoom Out Horizontally", nullptr, false, is_plot)) {
+  } else if (icon_menu_item(icon::ARROW_LEFT_RIGHT, "Zoom Out Horizontally", nullptr, false, is_plot)) {
     action.kind = PaneMenuActionKind::ResetHorizontal;
-  } else if (bootstrap_icons::menuItem("arrow-down-up", "Zoom Out Vertically", nullptr, false, is_plot)) {
+  } else if (icon_menu_item(icon::ARROW_DOWN_UP, "Zoom Out Vertically", nullptr, false, is_plot)) {
     action.kind = PaneMenuActionKind::ResetVertical;
   }
   ImGui::Separator();
-  if (bootstrap_icons::menuItem("trash", "Remove ALL curves", nullptr, false, is_plot)) {
+  if (icon_menu_item(icon::TRASH, "Remove ALL curves", nullptr, false, is_plot)) {
     action.kind = PaneMenuActionKind::Clear;
   }
   ImGui::Separator();
-  bootstrap_icons::menuItem("arrow-left-right", "Flip Horizontal Axis", nullptr, false, false);
-  bootstrap_icons::menuItem("arrow-down-up", "Flip Vertical Axis", nullptr, false, false);
+  icon_menu_item(icon::ARROW_LEFT_RIGHT, "Flip Horizontal Axis", nullptr, false, false);
+  icon_menu_item(icon::ARROW_DOWN_UP, "Flip Vertical Axis", nullptr, false, false);
   ImGui::Separator();
-  bootstrap_icons::menuItem("files", "Copy", nullptr, false, false);
-  bootstrap_icons::menuItem("clipboard2", "Paste", nullptr, false, false);
-  bootstrap_icons::menuItem("file-earmark-image", "Copy image to clipboard", nullptr, false, false);
-  bootstrap_icons::menuItem("save", "Save plot to file", nullptr, false, false);
-  bootstrap_icons::menuItem("bar-chart", "Show data statistics", nullptr, false, false);
+  icon_menu_item(icon::FILES, "Copy", nullptr, false, false);
+  icon_menu_item(icon::CLIPBOARD2, "Paste", nullptr, false, false);
+  icon_menu_item(icon::FILE_EARMARK_IMAGE, "Copy image to clipboard", nullptr, false, false);
+  icon_menu_item(icon::SAVE, "Save plot to file", nullptr, false, false);
+  icon_menu_item(icon::BAR_CHART, "Show data statistics", nullptr, false, false);
   ImGui::Separator();
-  if (bootstrap_icons::menuItem("x-square", "Close Pane")) {
+  if (icon_menu_item(icon::X_SQUARE, "Close Pane")) {
     action.kind = PaneMenuActionKind::Close;
   }
   ImGui::EndPopup();

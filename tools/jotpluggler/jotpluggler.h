@@ -354,10 +354,10 @@ RouteIdentifier parse_route_identifier(std::string_view route_name);
 void rebuild_gps_trace(RouteData *route_data);
 
 // *****
-// dbc_core
+// dbc
 // *****
 
-namespace dbc_core {
+namespace dbc {
 
 struct ValueDescriptionEntry {
   double value = 0.0;
@@ -414,25 +414,40 @@ private:
 
 std::optional<double> signalValue(const Signal &signal, const Message &message, const uint8_t *data, size_t data_size);
 
-}  // namespace dbc_core
+}  // namespace dbc
 
 // *****
-// bootstrap_icons
+// icons
 // *****
 
-namespace bootstrap_icons {
+namespace icon {
+constexpr const char ARROW_DOWN_UP[]         = "\xef\x84\xa7";
+constexpr const char ARROW_LEFT_RIGHT[]      = "\xef\x84\xab";
+constexpr const char BAR_CHART[]             = "\xef\x85\xbe";
+constexpr const char BOX_ARROW_UP_RIGHT[]    = "\xef\x87\x85";
+constexpr const char CLIPBOARD[]             = "\xef\x8a\x90";
+constexpr const char CLIPBOARD2[]            = "\xef\x9c\xb3";
+constexpr const char DISTRIBUTE_HORIZONTAL[] = "\xef\x8c\x83";
+constexpr const char DISTRIBUTE_VERTICAL[]   = "\xef\x8c\x84";
+constexpr const char FILE_EARMARK_IMAGE[]    = "\xef\x8d\xad";
+constexpr const char FILES[]                 = "\xef\x8f\x82";
+constexpr const char INFO_CIRCLE[]           = "\xef\x90\xb1";
+constexpr const char PALETTE[]               = "\xef\x92\xb1";
+constexpr const char PLUS_SLASH_MINUS[]       = "\xef\x9a\xaa";
+constexpr const char SAVE[]                  = "\xef\x94\xa5";
+constexpr const char SLIDERS[]               = "\xef\x95\xab";
+constexpr const char TRASH[]                 = "\xef\x97\x9e";
+constexpr const char X_SQUARE[]              = "\xef\x98\xa9";
+constexpr const char ZOOM_OUT[]              = "\xef\x98\xad";
+}  // namespace icon
 
-void loadFont(float size);
-void mergeFont(float size);
-ImFont *font();
-const char *glyph(std::string_view icon_id);
-bool menuItem(std::string_view icon_id,
-               const char *label,
-               const char *shortcut = nullptr,
-               bool selected = false,
-               bool enabled = true);
-
-}  // namespace bootstrap_icons
+void icon_add_font(float size, bool merge = false);
+ImFont *icon_font();
+bool icon_menu_item(const char *glyph,
+                    const char *label,
+                    const char *shortcut = nullptr,
+                    bool selected = false,
+                    bool enabled = true);
 
 // *****
 // app session, UI state, & internal API
@@ -710,7 +725,6 @@ inline bool input_text_string(const char *label,
                               std::string *text,
                               ImGuiInputTextFlags flags = 0) {
   flags |= ImGuiInputTextFlags_CallbackResize;
-  if (text->capacity() == 0) text->reserve(256);
   return ImGui::InputText(label, text->data(), text->capacity() + 1,
                           flags, imgui_resize_callback, text);
 }
@@ -720,7 +734,6 @@ inline bool input_text_with_hint_string(const char *label,
                                         std::string *text,
                                         ImGuiInputTextFlags flags = 0) {
   flags |= ImGuiInputTextFlags_CallbackResize;
-  if (text->capacity() == 0) text->reserve(256);
   return ImGui::InputTextWithHint(label, hint, text->data(), text->capacity() + 1,
                                   flags, imgui_resize_callback, text);
 }
@@ -730,7 +743,6 @@ inline bool input_text_multiline_string(const char *label,
                                         const ImVec2 &size = ImVec2(0.0f, 0.0f),
                                         ImGuiInputTextFlags flags = 0) {
   flags |= ImGuiInputTextFlags_CallbackResize;
-  if (text->capacity() == 0) text->reserve(1024);
   return ImGui::InputTextMultiline(label, text->data(), text->capacity() + 1,
                                    size, flags, imgui_resize_callback, text);
 }
