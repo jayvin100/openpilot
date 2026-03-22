@@ -27,8 +27,8 @@
 ## Detail View
 - [x] binary view — `wired`
 - [x] signal view — `wired`
-- [ ] signal editing workflows — `not started`
-- [ ] message editing workflows — `not started`
+- [x] signal editing workflows — `wired`
+- [x] message editing workflows — `wired`
 - [x] history log — `wired`
 
 ## Charts
@@ -55,7 +55,7 @@
 
 ## UI Shell
 - [x] dockspace layout — `wired`
-- [x] menu bar (File, Edit, View, Tools, Help) — `skeleton only`
+- [x] menu bar (File, Edit, View, Tools, Help) — `partial (DBC file flows + edit message/add signal + layout/help)`
 - [x] messages pane — `wired`
 - [x] detail pane with tabs — `wired`
 - [x] charts pane — `wired`

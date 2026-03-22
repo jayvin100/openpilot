@@ -31,6 +31,7 @@ void AppState::setSelectedMessage(const MessageId &msg_id) {
   if (!has_selection || selected_msg != msg_id) {
     has_selection = true;
     selected_msg = msg_id;
+    clearBitSelection();
     markSettingsDirty();
   }
 }
@@ -38,8 +39,40 @@ void AppState::setSelectedMessage(const MessageId &msg_id) {
 void AppState::clearSelection() {
   if (has_selection) {
     has_selection = false;
+    clearBitSelection();
     markSettingsDirty();
   }
+}
+
+void AppState::setBitSelection(int start_bit, int size, bool little_endian) {
+  if (size <= 0) {
+    clearBitSelection();
+    return;
+  }
+
+  has_bit_selection = true;
+  bit_selection_anchor = start_bit;
+  bit_selection_start = start_bit;
+  bit_selection_size = size;
+  bit_selection_little_endian = little_endian;
+}
+
+void AppState::extendBitSelection(int end_bit) {
+  if (!has_bit_selection) {
+    setBitSelection(end_bit, 1, true);
+    return;
+  }
+
+  bit_selection_start = std::min(bit_selection_anchor, end_bit);
+  bit_selection_size = std::abs(end_bit - bit_selection_anchor) + 1;
+}
+
+void AppState::clearBitSelection() {
+  has_bit_selection = false;
+  bit_selection_anchor = 0;
+  bit_selection_start = 0;
+  bit_selection_size = 0;
+  bit_selection_little_endian = true;
 }
 
 void AppState::setCurrentDetailTab(DetailTab tab) {
@@ -213,6 +246,56 @@ void AppState::removeSignalFromCharts(const MessageId &msg_id, const std::string
     selected_chart = std::clamp(selected_chart, 0, (int)tab->charts.size() - 1);
   }
   markSettingsDirty();
+}
+
+void AppState::renameChartSignal(const MessageId &msg_id, const std::string &old_name, const std::string &new_name) {
+  if (old_name == new_name) return;
+
+  bool changed = false;
+  for (auto &tab : chart_tabs) {
+    for (auto &chart : tab.charts) {
+      for (auto &signal : chart.signals) {
+        if (signal_matches(signal, msg_id, old_name)) {
+          signal.signal_name = new_name;
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed) {
+    markSettingsDirty();
+  }
+}
+
+void AppState::removeChartsForMessage(const MessageId &msg_id) {
+  ensureChartTab();
+  bool changed = false;
+  for (auto &tab : chart_tabs) {
+    for (auto chart_it = tab.charts.begin(); chart_it != tab.charts.end();) {
+      auto &signals = chart_it->signals;
+      const auto old_size = signals.size();
+      signals.erase(std::remove_if(signals.begin(), signals.end(), [&](const auto &signal) {
+        return signal.msg_id == msg_id;
+      }), signals.end());
+      changed |= signals.size() != old_size;
+      if (signals.empty()) {
+        chart_it = tab.charts.erase(chart_it);
+      } else {
+        ++chart_it;
+      }
+    }
+  }
+
+  auto *tab = activeChartTab();
+  if (!tab || tab->charts.empty()) {
+    selected_chart = -1;
+  } else {
+    selected_chart = std::clamp(selected_chart, 0, (int)tab->charts.size() - 1);
+  }
+
+  if (changed) {
+    markSettingsDirty();
+  }
 }
 
 bool AppState::hasChartSignal(const MessageId &msg_id, const std::string &signal_name) const {

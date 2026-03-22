@@ -48,6 +48,11 @@ struct AppState {
   // Selection state
   bool has_selection = false;
   MessageId selected_msg;
+  bool has_bit_selection = false;
+  int bit_selection_anchor = 0;
+  int bit_selection_start = 0;
+  int bit_selection_size = 0;
+  bool bit_selection_little_endian = true;
   DetailTab current_detail_tab = DetailTab::Binary;
   bool reset_layout_requested = false;
   bool show_help_overlay = false;
@@ -67,6 +72,9 @@ struct AppState {
 
   void setSelectedMessage(const MessageId &msg_id);
   void clearSelection();
+  void setBitSelection(int start_bit, int size, bool little_endian);
+  void extendBitSelection(int end_bit);
+  void clearBitSelection();
   void setCurrentDetailTab(DetailTab tab);
   void rememberRecentDbc(const std::string &path);
   void rememberRecentRoute(const std::string &route);
@@ -82,6 +90,8 @@ struct AppState {
   void splitChart(int chart_idx);
   void addSignalToCharts(const MessageId &msg_id, const std::string &signal_name, bool merge);
   void removeSignalFromCharts(const MessageId &msg_id, const std::string &signal_name);
+  void renameChartSignal(const MessageId &msg_id, const std::string &old_name, const std::string &new_name);
+  void removeChartsForMessage(const MessageId &msg_id);
   bool hasChartSignal(const MessageId &msg_id, const std::string &signal_name) const;
   int totalChartCount() const;
   void markSettingsDirty();

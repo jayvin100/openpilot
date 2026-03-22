@@ -1,5 +1,6 @@
 #include "dbc/dbc_manager.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <filesystem>
@@ -21,6 +22,10 @@ static fs::path repo_root() {
       .parent_path().parent_path().parent_path();
 }
 
+void DbcManager::bumpRevision() {
+  ++revision_;
+}
+
 DbcManager &dbc_manager() {
   static DbcManager mgr;
   return mgr;
@@ -34,6 +39,7 @@ bool DbcManager::loadFromFile(const std::string &path) {
   }
   dbc_ = std::move(f);
   loaded_name_ = path;
+  bumpRevision();
   fprintf(stderr, "Loaded DBC: %s (%d messages, %d signals)\n",
           path.c_str(), msgCount(), signalCount());
   return true;
@@ -52,6 +58,7 @@ bool DbcManager::saveAs(const std::string &path) {
     return false;
   }
   loaded_name_ = dbc_->filename();
+  bumpRevision();
   return true;
 }
 
@@ -105,6 +112,100 @@ const char *DbcManager::msgName(uint32_t address) const {
 
 const Message *DbcManager::msg(uint32_t address) const {
   return dbc_ ? dbc_->msg(address) : nullptr;
+}
+
+bool DbcManager::updateMessage(uint32_t address, const std::string &name, uint32_t size,
+                               const std::string &transmitter, const std::string &comment) {
+  if (!dbc_ || name.empty()) {
+    return false;
+  }
+  dbc_->updateMessage(address, name, size, transmitter, comment);
+  bumpRevision();
+  return true;
+}
+
+bool DbcManager::removeMessage(uint32_t address) {
+  if (!dbc_ || !dbc_->removeMessage(address)) {
+    return false;
+  }
+  bumpRevision();
+  return true;
+}
+
+bool DbcManager::addSignal(uint32_t address, const Signal &signal) {
+  if (!dbc_ || !dbc_->addSignal(address, signal)) {
+    return false;
+  }
+  bumpRevision();
+  return true;
+}
+
+bool DbcManager::updateSignal(uint32_t address, const std::string &original_name, const Signal &signal) {
+  if (!dbc_ || !dbc_->updateSignal(address, original_name, signal)) {
+    return false;
+  }
+  bumpRevision();
+  return true;
+}
+
+bool DbcManager::removeSignal(uint32_t address, const std::string &name) {
+  if (!dbc_ || !dbc_->removeSignal(address, name)) {
+    return false;
+  }
+  bumpRevision();
+  return true;
+}
+
+bool DbcManager::messageNameExists(const std::string &name, uint32_t ignore_address) const {
+  if (!dbc_ || name.empty()) {
+    return false;
+  }
+  for (const auto &[address, msg] : dbc_->messages()) {
+    if (address != ignore_address && msg.name == name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string DbcManager::nextMessageName(uint32_t address) const {
+  char buf[64];
+  snprintf(buf, sizeof(buf), "NEW_MSG_%X", address);
+  std::string candidate = buf;
+  if (!messageNameExists(candidate)) {
+    return candidate;
+  }
+  for (int suffix = 1; suffix < 10000; ++suffix) {
+    snprintf(buf, sizeof(buf), "NEW_MSG_%X_%d", address, suffix);
+    candidate = buf;
+    if (!messageNameExists(candidate)) {
+      return candidate;
+    }
+  }
+  return "NEW_MSG";
+}
+
+std::string DbcManager::nextSignalName(uint32_t address) const {
+  auto *message = msg(address);
+  if (!message) {
+    return "NEW_SIGNAL";
+  }
+  auto signal_exists = [&](const std::string &candidate) {
+    return std::any_of(message->signals.begin(), message->signals.end(), [&](const auto &signal) {
+      return signal.name == candidate;
+    });
+  };
+  if (!signal_exists("NEW_SIGNAL")) {
+    return "NEW_SIGNAL";
+  }
+  char buf[64];
+  for (int suffix = 1; suffix < 10000; ++suffix) {
+    snprintf(buf, sizeof(buf), "NEW_SIGNAL_%d", suffix);
+    if (!signal_exists(buf)) {
+      return buf;
+    }
+  }
+  return "NEW_SIGNAL";
 }
 
 }  // namespace dbc

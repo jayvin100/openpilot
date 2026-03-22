@@ -23,8 +23,8 @@ XVFB_RESOLUTION = "1920x1080x24"
 # Minimum size to consider a window "real" (not a Qt internal widget)
 MIN_WINDOW_SIZE = 50
 
-SIGNAL_PLOT_X = 1418
-SIGNAL_PLOT_Y0 = 172
+SIGNAL_PLOT_X = 1280
+SIGNAL_PLOT_Y0 = 440
 SIGNAL_PLOT_ROW_STEP = 22
 DETAIL_TAB_BINARY = (272, 40)
 DETAIL_TAB_SIGNALS = (309, 40)
@@ -36,7 +36,11 @@ CHART_TAB_X0 = 1485
 CHART_TAB_Y = 710
 CHART_TAB_X_STEP = 60
 FILE_MENU = (15, 12)
+FILE_MENU_SAVE_AS = (60, 215)
 FILE_MENU_EXIT = (30, 295)
+EDIT_MENU = (38, 12)
+EDIT_MENU_EDIT_MESSAGE = (80, 60)
+EDIT_MENU_ADD_SIGNAL = (80, 76)
 
 
 class XvfbCabana:
@@ -506,9 +510,11 @@ def open_dbc_path(cabana, path):
 
 
 def save_dbc_as_path(cabana, path):
-  """Use the real Ctrl+Shift+S flow to save the current DBC."""
+  """Use the real File -> Save DBC As flow to save the current DBC."""
   cabana.focus()
-  cabana.send_key("ctrl+shift+s")
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_SAVE_AS)
   time.sleep(1.0)
   cabana.send_key("ctrl+a")
   time.sleep(0.2)
@@ -516,6 +522,24 @@ def save_dbc_as_path(cabana, path):
   time.sleep(0.5)
   cabana.send_key("Return")
   time.sleep(1.5)
+
+
+def open_add_signal_via_menu(cabana):
+  """Use the real Edit -> Add Signal flow to open the signal editor."""
+  cabana.focus()
+  cabana.click(*EDIT_MENU)
+  time.sleep(0.4)
+  cabana.click(*EDIT_MENU_ADD_SIGNAL)
+  time.sleep(0.8)
+
+
+def open_edit_message_via_menu(cabana):
+  """Use the real Edit -> Edit Message flow to open the message editor."""
+  cabana.focus()
+  cabana.click(*EDIT_MENU)
+  time.sleep(0.4)
+  cabana.click(*EDIT_MENU_EDIT_MESSAGE)
+  time.sleep(0.8)
 
 
 def create_chart_tab(cabana):

@@ -6,6 +6,7 @@
 #include "core/app_state.h"
 #include "dbc/dbc_manager.h"
 #include "ui/file_dialogs.h"
+#include "ui/panes/detail_pane.h"
 
 namespace cabana {
 namespace menus {
@@ -83,6 +84,13 @@ void render() {
     if (ImGui::BeginMenu("Edit")) {
       if (ImGui::MenuItem("Undo", "Ctrl+Z")) {}
       if (ImGui::MenuItem("Redo", "Ctrl+Y")) {}
+      ImGui::Separator();
+      if (ImGui::MenuItem("Edit Message...", "Ctrl+E", false, cabana::panes::canEditSelectedMessage())) {
+        cabana::panes::requestEditSelectedMessage();
+      }
+      if (ImGui::MenuItem("Add Signal...", "Ctrl+N", false, cabana::panes::canAddSignalToSelectedMessage())) {
+        cabana::panes::requestAddSignalForSelectedMessage();
+      }
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {

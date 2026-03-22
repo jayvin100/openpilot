@@ -46,15 +46,26 @@ public:
   bool saveAs(const std::string &filename);
 
   const std::map<uint32_t, Message> &messages() const { return msgs_; }
+  Message *msgMutable(uint32_t address);
   const Message *msg(uint32_t address) const;
   int signalCount() const;
   const std::string &filename() const { return filename_; }
 
+  void updateMessage(uint32_t address, const std::string &name, uint32_t size,
+                     const std::string &transmitter, const std::string &comment);
+  bool removeMessage(uint32_t address);
+  bool addSignal(uint32_t address, const Signal &signal);
+  bool updateSignal(uint32_t address, const std::string &original_name, const Signal &signal);
+  bool removeSignal(uint32_t address, const std::string &name);
+
 private:
   void parse(const std::string &content);
   bool writeContents(const std::string &filename) const;
+  void markDirty();
+  std::string generateDBC() const;
 
   std::map<uint32_t, Message> msgs_;
+  std::string header_;
   std::string name_;
   std::string filename_;
   std::string raw_content_;

@@ -1,5 +1,6 @@
 #include "dbc/dbc_file.h"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <regex>
@@ -11,6 +12,12 @@ namespace dbc {
 // Signal value decoding — ported from tools/cabana/dbc/dbc.cc (Qt-free)
 static inline int flipBitPos(int start_bit) {
   return 8 * (start_bit / 8) + 7 - start_bit % 8;
+}
+
+static std::string double_to_string(double value) {
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%.12g", value);
+  return buf;
 }
 
 double Signal::getValue(const uint8_t *data, int data_size) const {
@@ -80,6 +87,11 @@ bool DbcFile::saveAs(const std::string &filename) {
   return true;
 }
 
+Message *DbcFile::msgMutable(uint32_t address) {
+  auto it = msgs_.find(address);
+  return it != msgs_.end() ? &it->second : nullptr;
+}
+
 const Message *DbcFile::msg(uint32_t address) const {
   auto it = msgs_.find(address);
   return it != msgs_.end() ? &it->second : nullptr;
@@ -98,8 +110,107 @@ bool DbcFile::writeContents(const std::string &filename) const {
   return output.good();
 }
 
+void DbcFile::updateMessage(uint32_t address, const std::string &name, uint32_t size,
+                            const std::string &transmitter, const std::string &comment) {
+  auto &msg = msgs_[address];
+  msg.address = address;
+  msg.name = name;
+  msg.size = size;
+  msg.transmitter = transmitter.empty() ? "XXX" : transmitter;
+  msg.comment = comment;
+  markDirty();
+}
+
+bool DbcFile::removeMessage(uint32_t address) {
+  auto it = msgs_.find(address);
+  if (it == msgs_.end()) return false;
+  msgs_.erase(it);
+  markDirty();
+  return true;
+}
+
+bool DbcFile::addSignal(uint32_t address, const Signal &signal) {
+  auto *msg = msgMutable(address);
+  if (!msg) return false;
+  if (std::any_of(msg->signals.begin(), msg->signals.end(), [&](const auto &existing) {
+        return existing.name == signal.name;
+      })) {
+    return false;
+  }
+  msg->signals.push_back(signal);
+  markDirty();
+  return true;
+}
+
+bool DbcFile::updateSignal(uint32_t address, const std::string &original_name, const Signal &signal) {
+  auto *msg = msgMutable(address);
+  if (!msg) return false;
+
+  auto it = std::find_if(msg->signals.begin(), msg->signals.end(), [&](const auto &existing) {
+    return existing.name == original_name;
+  });
+  if (it == msg->signals.end()) return false;
+
+  if (signal.name != original_name && std::any_of(msg->signals.begin(), msg->signals.end(), [&](const auto &existing) {
+        return existing.name == signal.name;
+      })) {
+    return false;
+  }
+
+  *it = signal;
+  markDirty();
+  return true;
+}
+
+bool DbcFile::removeSignal(uint32_t address, const std::string &name) {
+  auto *msg = msgMutable(address);
+  if (!msg) return false;
+
+  const auto old_size = msg->signals.size();
+  msg->signals.erase(std::remove_if(msg->signals.begin(), msg->signals.end(), [&](const auto &signal) {
+    return signal.name == name;
+  }), msg->signals.end());
+  if (msg->signals.size() == old_size) return false;
+  markDirty();
+  return true;
+}
+
+void DbcFile::markDirty() {
+  raw_content_ = generateDBC();
+}
+
+std::string DbcFile::generateDBC() const {
+  std::string dbc;
+  std::string comments;
+
+  for (const auto &[address, msg] : msgs_) {
+    const std::string transmitter = msg.transmitter.empty() ? "XXX" : msg.transmitter;
+    dbc += "BO_ " + std::to_string(address) + " " + msg.name + ": " + std::to_string(msg.size) + " " + transmitter + "\n";
+    for (const auto &signal : msg.signals) {
+      dbc += " SG_ " + signal.name + " : " + std::to_string(signal.start_bit) + "|" + std::to_string(signal.size) + "@" +
+             (signal.is_little_endian ? "1" : "0") + std::string(signal.is_signed ? "-" : "+") +
+             " (" + double_to_string(signal.factor) + "," + double_to_string(signal.offset) + ")" +
+             " [" + double_to_string(signal.min) + "|" + double_to_string(signal.max) + "]" +
+             " \"" + signal.unit + "\" XXX\n";
+    }
+    dbc += "\n";
+
+    if (!msg.comment.empty()) {
+      comments += "CM_ BO_ " + std::to_string(address) + " \"" + msg.comment + "\";\n";
+    }
+    for (const auto &signal : msg.signals) {
+      if (!signal.comment.empty()) {
+        comments += "CM_ SG_ " + std::to_string(address) + " " + signal.name + " \"" + signal.comment + "\";\n";
+      }
+    }
+  }
+
+  return header_ + dbc + comments;
+}
+
 void DbcFile::parse(const std::string &content) {
   msgs_.clear();
+  header_.clear();
 
   // Regex for BO_ lines: BO_ <id> <name>: <size> <transmitter>
   static const std::regex bo_re(R"re(^BO_\s+(\d+)\s+(\w+)\s*:\s*(\d+)\s+(\w+))re");
@@ -113,11 +224,13 @@ void DbcFile::parse(const std::string &content) {
   std::istringstream stream(content);
   std::string line;
   Message *current_msg = nullptr;
+  bool seen_first = false;
 
   while (std::getline(stream, line)) {
     std::smatch match;
 
     if (std::regex_search(line, match, bo_re)) {
+      seen_first = true;
       uint32_t id = std::stoul(match[1]);
       // DBC uses 29-bit extended IDs with bit 31 set for extended
       uint32_t address = id & 0x1FFFFFFF;
@@ -129,6 +242,7 @@ void DbcFile::parse(const std::string &content) {
       msgs_[address] = std::move(m);
       current_msg = &msgs_[address];
     } else if (current_msg && std::regex_search(line, match, sg_re)) {
+      seen_first = true;
       Signal s;
       s.name = match[1];
       s.start_bit = std::stoi(match[2]);
@@ -142,10 +256,12 @@ void DbcFile::parse(const std::string &content) {
       s.unit = match[10];
       current_msg->signals.push_back(std::move(s));
     } else if (std::regex_search(line, match, cm_bo_re)) {
+      seen_first = true;
       uint32_t id = std::stoul(match[1]) & 0x1FFFFFFF;
       auto it = msgs_.find(id);
       if (it != msgs_.end()) it->second.comment = match[2];
     } else if (std::regex_search(line, match, cm_sg_re)) {
+      seen_first = true;
       uint32_t id = std::stoul(match[1]) & 0x1FFFFFFF;
       auto it = msgs_.find(id);
       if (it != msgs_.end()) {
@@ -158,7 +274,13 @@ void DbcFile::parse(const std::string &content) {
       }
     } else if (line.empty() || line[0] == ' ' || line[0] == '\t') {
       // continuation or blank — skip
+      if (!seen_first) {
+        header_ += line + "\n";
+      }
     } else {
+      if (!seen_first) {
+        header_ += line + "\n";
+      }
       current_msg = nullptr;  // end of BO_ block
     }
   }
