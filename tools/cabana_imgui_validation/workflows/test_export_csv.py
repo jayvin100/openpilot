@@ -5,10 +5,10 @@ Test exporting CAN data to CSV and verify the output file.
 """
 
 import pytest
-import os
 import tempfile
 import time
-from tools.cabana_imgui_validation.helpers import XvfbCabana, DEMO_ROUTE
+
+from ..helpers import DEMO_ROUTE, XvfbCabana  # noqa: TID251
 
 pytestmark = pytest.mark.skip(reason="workflow validation is not stable enough for this checkpoint")
 
@@ -16,9 +16,7 @@ pytestmark = pytest.mark.skip(reason="workflow validation is not stable enough f
 class TestExportCSV:
   def test_export_csv_produces_file(self):
     """Ctrl+Shift+E triggers CSV export and produces a file."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-      csv_path = os.path.join(tmpdir, "export.csv")
-
+    with tempfile.TemporaryDirectory():
       with XvfbCabana(args=[DEMO_ROUTE, "--no-vipc"], timeout=60) as c:
         c.maximize()
         time.sleep(8)

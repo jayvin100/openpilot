@@ -6,7 +6,8 @@ and exit cleanly without requiring any route data.
 """
 
 import time
-from tools.cabana_imgui_validation.helpers import XvfbCabana
+
+from ..helpers import XvfbCabana  # noqa: TID251
 
 
 class TestBoot:

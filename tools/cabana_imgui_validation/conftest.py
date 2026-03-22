@@ -2,8 +2,29 @@
 Shared pytest fixtures for cabana validation.
 """
 
+import subprocess
+from pathlib import Path
+
 import pytest
-from tools.cabana_imgui_validation.helpers import XvfbCabana, DEMO_ROUTE
+
+from .helpers import CABANA_BIN, DEMO_ROUTE, XvfbCabana  # noqa: TID251
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def pytest_sessionstart(session):
+  """Build the app binary once on the controller process before tests start."""
+  if hasattr(session.config, "workerinput"):
+    return
+
+  subprocess.run(
+    ["scons", "-j4", "tools/cabana_imgui/_cabana_imgui"],
+    cwd=ROOT,
+    check=True,
+  )
+
+  if not Path(CABANA_BIN).exists():
+    raise RuntimeError(f"Cabana binary not found after build: {CABANA_BIN}")
 
 
 @pytest.fixture

@@ -7,7 +7,8 @@ then capture the full UI with messages visible.
 
 import pytest
 import time
-from tools.cabana_imgui_validation.helpers import XvfbCabana, DEMO_ROUTE
+
+from ..helpers import DEMO_ROUTE, XvfbCabana  # noqa: TID251
 
 pytestmark = pytest.mark.skip(reason="workflow validation is not stable enough for this checkpoint")
 

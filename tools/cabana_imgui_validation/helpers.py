@@ -11,7 +11,9 @@ import tempfile
 import time
 from pathlib import Path
 
-CABANA_BIN = os.environ.get("CABANA_BIN", os.path.join(os.path.dirname(__file__), "../cabana_imgui/cabana_imgui"))
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CABANA_BIN = ROOT / "tools" / "cabana_imgui" / "_cabana_imgui"
+CABANA_BIN = os.environ.get("CABANA_BIN", str(DEFAULT_CABANA_BIN))
 DEMO_ROUTE = os.environ.get("CABANA_DEMO_ROUTE", "5beb9b58bd12b691/0000010a--a51155e496")
 GOLDENS_DIR = Path(__file__).parent / "goldens"
 GOLDENS_DIR.mkdir(exist_ok=True)
@@ -60,8 +62,12 @@ class XvfbCabana:
       start_new_session=True,  # so we can kill the whole process group
     )
 
-    # Wait for a real window to appear
-    self.wid = self._wait_for_window()
+    try:
+      # Wait for a real window to appear
+      self.wid = self._wait_for_window()
+    except Exception:
+      self.kill()
+      raise
     return self
 
   def _close_process_streams(self):
@@ -93,10 +99,7 @@ class XvfbCabana:
         stderr = self.proc.stderr.read().decode(errors="replace")
         self._close_process_streams()
         self._cleanup_tmpdir()
-        raise RuntimeError(
-          f"Cabana exited early with code {self.proc.returncode}\n"
-          f"stdout: {stdout}\nstderr: {stderr}"
-        )
+        raise RuntimeError(f"Cabana exited early with code {self.proc.returncode}\nstdout: {stdout}\nstderr: {stderr}")
 
       env = self._xdotool_env()
       if env is None:
@@ -244,7 +247,7 @@ class XvfbCabana:
   def screenshot(self, filename=None):
     """Capture a screenshot of the full virtual screen. Returns the path."""
     if filename is None:
-      filename = f"screenshot_{int(time.time())}.png"
+      filename = f"screenshot_{time.monotonic_ns()}.png"
     path = GOLDENS_DIR / filename
     env = self._xdotool_env()
     if env is None:
@@ -261,7 +264,7 @@ class XvfbCabana:
     if not wid:
       raise RuntimeError("No window ID — is cabana running?")
     if filename is None:
-      filename = f"window_{int(time.time())}.png"
+      filename = f"window_{time.monotonic_ns()}.png"
     path = GOLDENS_DIR / filename
     env = self._xdotool_env()
     if env is None:
