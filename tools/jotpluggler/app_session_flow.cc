@@ -218,21 +218,37 @@ void advance_playback(UiState *state, const AppSession &session) {
     return;
   }
 
-  state->tracker_time += std::max(0.0, static_cast<double>(ImGui::GetIO().DeltaTime)) * state->playback_rate;
-  if (state->tracker_time >= state->route_x_max) {
+  const double delta = std::max(0.0, static_cast<double>(ImGui::GetIO().DeltaTime)) * state->playback_rate;
+  const double view_span = std::max(MIN_HORIZONTAL_ZOOM_SECONDS, state->x_view_max - state->x_view_min);
+  const double loop_min = state->playback_loop
+    ? std::clamp(state->x_view_min, state->route_x_min, state->route_x_max)
+    : state->route_x_min;
+  const double loop_max = state->playback_loop
+    ? std::clamp(state->x_view_max, state->route_x_min, state->route_x_max)
+    : state->route_x_max;
+
+  state->tracker_time += delta;
+  if (state->tracker_time >= loop_max) {
     if (state->playback_loop) {
-      state->tracker_time = state->route_x_min;
+      state->tracker_time = loop_min;
     } else {
       state->tracker_time = state->route_x_max;
       state->playback_playing = false;
     }
   }
 
-  const double span = std::max(MIN_HORIZONTAL_ZOOM_SECONDS, state->x_view_max - state->x_view_min);
-  if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
-    state->x_view_min = state->tracker_time - span * 0.5;
-    state->x_view_max = state->tracker_time + span * 0.5;
-    clamp_shared_range(state, session);
+  if (!state->playback_loop) {
+    constexpr double kScrollStartFraction = 0.70;
+    const double scroll_anchor = state->x_view_min + view_span * kScrollStartFraction;
+    if (state->tracker_time > scroll_anchor && state->x_view_max < state->route_x_max) {
+      state->x_view_min = state->tracker_time - view_span * kScrollStartFraction;
+      state->x_view_max = state->x_view_min + view_span;
+      clamp_shared_range(state, session);
+    } else if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
+      state->x_view_min = state->tracker_time - view_span * 0.5;
+      state->x_view_max = state->x_view_min + view_span;
+      clamp_shared_range(state, session);
+    }
   }
 }
 
