@@ -4,6 +4,7 @@
 #include "imgui_internal.h"
 
 #include "core/app_state.h"
+#include "ui/help_overlay.h"
 #include "ui/menus.h"
 #include "ui/panes/messages_pane.h"
 #include "ui/panes/detail_pane.h"
@@ -104,6 +105,11 @@ static void render_route_load_overlay() {
 
 void render() {
   ImGuiViewport *viewport = ImGui::GetMainViewport();
+  auto &st = cabana::app_state();
+
+  if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F1)) {
+    st.show_help_overlay = !st.show_help_overlay;
+  }
 
   // Full-screen dockspace (leave room for status bar at bottom)
   ImGui::SetNextWindowPos(viewport->Pos);
@@ -122,7 +128,6 @@ void render() {
   ImGui::PopStyleVar(3);
 
   ImGuiID dockspace_id = ImGui::GetID("CabanaDockSpace");
-  auto &st = cabana::app_state();
 
   if (first_frame || st.reset_layout_requested) {
     setup_default_layout(dockspace_id);
@@ -146,6 +151,7 @@ void render() {
   // Status bar
   render_status_bar();
   render_route_load_overlay();
+  cabana::help_overlay::render();
 }
 
 }  // namespace shell

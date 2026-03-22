@@ -50,7 +50,7 @@
 - [ ] recent files — `not started`
 - [ ] session restore — `not started`
 - [ ] undo/redo command stack — `not started`
-- [ ] help overlay — `not started`
+- [x] help overlay — `wired`
 
 ## UI Shell
 - [x] dockspace layout — `wired`

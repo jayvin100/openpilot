@@ -7,21 +7,19 @@ After selecting a message, switch between Binary, Signals, and History tabs.
 import pytest
 import time
 
-from ..helpers import DEMO_ROUTE, XvfbCabana  # noqa: TID251
+from ..helpers import DEMO_ROUTE, XvfbCabana, select_first_message, wait_for_demo_route  # noqa: TID251
 
-pytestmark = pytest.mark.skip(reason="workflow validation is not stable enough for this checkpoint")
+pytestmark = pytest.mark.xdist_group("cabana_demo_route")
+WORKFLOW_TIMEOUT = 90
 
 
 class TestTabs:
   def _setup_with_message(self):
     """Launch cabana, maximize, load route, click a message."""
-    c = XvfbCabana(args=[DEMO_ROUTE, "--no-vipc"], timeout=60)
+    c = XvfbCabana(args=[DEMO_ROUTE, "--no-vipc"], timeout=WORKFLOW_TIMEOUT)
     c.start()
-    c.maximize()
-    time.sleep(8)
-    # Click on a message
-    c.click(100, 200)
-    time.sleep(1)
+    wait_for_demo_route(c)
+    select_first_message(c)
     return c
 
   def test_binary_tab(self):

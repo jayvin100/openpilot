@@ -59,7 +59,9 @@ void render() {
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Help")) {
-      if (ImGui::MenuItem("Help", "F1")) {}
+      if (ImGui::MenuItem("Help", "F1")) {
+        cabana::app_state().show_help_overlay = true;
+      }
       if (ImGui::MenuItem("Online Help")) {}
       ImGui::EndMenu();
     }

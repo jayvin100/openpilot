@@ -374,3 +374,27 @@ class XvfbCabana:
 
   def __exit__(self, *args):
     self.kill()
+
+
+def wait_for_demo_route(cabana, settle_seconds=8):
+  """Maximize and allow the demo route UI to populate."""
+  cabana.maximize()
+  time.sleep(settle_seconds)
+
+
+def reset_layout(cabana):
+  """Open View -> Reset Window Layout using screen coordinates."""
+  cabana.focus()
+  cabana.click(76, 10)
+  time.sleep(0.4)
+  cabana.click(96, 58)
+  time.sleep(1.0)
+
+
+def select_first_message(cabana):
+  """Focus the message list and select the first visible row via keyboard."""
+  cabana.focus()
+  cabana.click(120, 86)
+  time.sleep(0.3)
+  cabana.send_key("Down")
+  time.sleep(0.5)

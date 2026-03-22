@@ -8,25 +8,19 @@ then capture the full UI with messages visible.
 import pytest
 import time
 
-from ..helpers import DEMO_ROUTE, XvfbCabana  # noqa: TID251
+from ..helpers import DEMO_ROUTE, XvfbCabana, reset_layout, select_first_message, wait_for_demo_route  # noqa: TID251
 
-pytestmark = pytest.mark.skip(reason="workflow validation is not stable enough for this checkpoint")
+pytestmark = pytest.mark.xdist_group("cabana_demo_route")
+WORKFLOW_TIMEOUT = 90
 
 
 class TestFullUI:
   def _launch_and_reset(self):
     """Launch cabana, maximize, load route, reset window layout."""
-    c = XvfbCabana(args=[DEMO_ROUTE, "--no-vipc"], timeout=60)
+    c = XvfbCabana(args=[DEMO_ROUTE, "--no-vipc"], timeout=WORKFLOW_TIMEOUT)
     c.start()
-    c.maximize()
-    time.sleep(8)
-
-    # Open View menu and click "Reset Window Layout"
-    c.click(75, 8)  # View menu
-    time.sleep(0.5)
-    # "Reset Window Layout" is the last item in the View menu
-    c.click(87, 58)  # Reset Window Layout
-    time.sleep(2)
+    wait_for_demo_route(c)
+    reset_layout(c)
     return c
 
   def test_reset_layout_shows_messages(self):
@@ -41,9 +35,8 @@ class TestFullUI:
 
   def test_view_menu_info(self):
     """View menu shows message count and fingerprint."""
-    with XvfbCabana(args=[DEMO_ROUTE, "--no-vipc"], timeout=60) as c:
-      c.maximize()
-      time.sleep(8)
+    with XvfbCabana(args=[DEMO_ROUTE, "--no-vipc"], timeout=WORKFLOW_TIMEOUT) as c:
+      wait_for_demo_route(c)
 
       # Open View menu
       c.click(75, 8)
@@ -57,10 +50,7 @@ class TestFullUI:
     """After reset, clicking a message in the list shows details."""
     c = self._launch_and_reset()
     try:
-      # After reset, messages should be in the left panel
-      # Click on a message in the list (left side, ~150px in, ~100px down)
-      c.click(150, 100)
-      time.sleep(1)
+      select_first_message(c)
 
       path = c.screenshot("workflow_message_selected.png")
       assert c.is_alive()
@@ -72,9 +62,7 @@ class TestFullUI:
     """Selecting a message shows binary view in the center pane."""
     c = self._launch_and_reset()
     try:
-      # Click on a message
-      c.click(150, 120)
-      time.sleep(1)
+      select_first_message(c)
 
       # Screenshot the detail view
       path = c.screenshot("workflow_binary_view.png")

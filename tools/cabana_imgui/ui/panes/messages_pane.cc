@@ -31,6 +31,16 @@ struct MsgRow {
   double freq;
 };
 
+static int current_visible_index(const std::vector<MsgRow> &rows, const std::vector<int> &visible,
+                                 const MessageId &selected_msg) {
+  for (int i = 0; i < (int)visible.size(); ++i) {
+    if (rows[visible[i]].id == selected_msg) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 void messages() {
   ImGui::Begin("Messages");
 
@@ -143,12 +153,26 @@ void messages() {
         visible.push_back(i);
       }
 
-      // Use clipper to only render visible rows
       auto &st = cabana::app_state();
-      ImGuiListClipper clipper;
-      clipper.Begin((int)visible.size());
-      while (clipper.Step()) {
-        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++) {
+      int scroll_to_visible_row = -1;
+      if (!visible.empty() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+          !ImGui::GetIO().WantTextInput) {
+        auto select_visible = [&](int visible_index) {
+          visible_index = std::clamp(visible_index, 0, (int)visible.size() - 1);
+          st.has_selection = true;
+          st.selected_msg = rows[visible[visible_index]].id;
+          scroll_to_visible_row = visible_index;
+        };
+
+        const int selected_visible = st.has_selection ? current_visible_index(rows, visible, st.selected_msg) : -1;
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+          select_visible(selected_visible == -1 ? 0 : selected_visible + 1);
+        } else if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+          select_visible(selected_visible == -1 ? (int)visible.size() - 1 : selected_visible - 1);
+        }
+      }
+
+      auto render_row = [&](int row) {
           const auto &r = rows[visible[row]];
           ImGui::TableNextRow();
           ImGui::TableNextColumn();
@@ -156,9 +180,14 @@ void messages() {
           // Selectable row
           bool is_selected = st.has_selection && st.selected_msg == r.id;
           if (ImGui::Selectable(r.name.c_str(), is_selected,
-                                ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
+                                ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick,
+                                ImVec2(-FLT_MIN, 0.0f))) {
             st.has_selection = true;
             st.selected_msg = r.id;
+            scroll_to_visible_row = row;
+          }
+          if (scroll_to_visible_row == row) {
+            ImGui::SetScrollHereY(0.35f);
           }
           ImGui::TableNextColumn();
           ImGui::Text("%d", r.id.source);
@@ -168,6 +197,20 @@ void messages() {
           ImGui::Text("%.0f", r.freq);
           ImGui::TableNextColumn();
           ImGui::Text("%u", r.count);
+      };
+
+      // Force one full render pass when keyboard navigation changes selection so the scroll target exists.
+      if (scroll_to_visible_row != -1) {
+        for (int row = 0; row < (int)visible.size(); ++row) {
+          render_row(row);
+        }
+      } else {
+        ImGuiListClipper clipper;
+        clipper.Begin((int)visible.size());
+        while (clipper.Step()) {
+          for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++) {
+            render_row(row);
+          }
         }
       }
     }
