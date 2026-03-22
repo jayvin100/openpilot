@@ -3,16 +3,21 @@
 #include <cstdint>
 #include <memory>
 
-class MapTileManager {
+struct GpsTrace;
+struct RouteBasemap;
+
+class MapDataManager {
 public:
-  MapTileManager();
-  ~MapTileManager();
+  MapDataManager();
+  ~MapDataManager();
 
-  MapTileManager(const MapTileManager &) = delete;
-  MapTileManager &operator=(const MapTileManager &) = delete;
+  MapDataManager(const MapDataManager &) = delete;
+  MapDataManager &operator=(const MapDataManager &) = delete;
 
-  uint32_t textureFor(int z, int x, int y);
   void pump();
+  void ensureTrace(const GpsTrace &trace);
+  bool loading() const;
+  const RouteBasemap *current() const;
 
 private:
   struct Impl;

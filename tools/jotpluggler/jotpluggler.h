@@ -429,7 +429,7 @@ bool menuItem(std::string_view icon_id,
 class AsyncRouteLoader;
 class SidebarCameraFeed;
 class StreamPoller;
-class MapTileManager;
+class MapDataManager;
 
 enum class SessionDataMode : uint8_t {
   Route,
@@ -459,7 +459,7 @@ struct AppSession {
   std::unique_ptr<AsyncRouteLoader> route_loader;
   std::unique_ptr<StreamPoller> stream_poller;
   std::unique_ptr<SidebarCameraFeed> camera_feed;
-  std::unique_ptr<MapTileManager> map_tiles;
+  std::unique_ptr<MapDataManager> map_data;
   bool async_route_loading = false;
   double next_stream_custom_refresh_time = 0.0;
   bool stream_paused = false;

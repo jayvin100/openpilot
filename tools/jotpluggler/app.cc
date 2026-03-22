@@ -215,6 +215,7 @@ bool start_stream_session(AppSession *session,
                           double buffer_seconds,
                           bool preserve_existing_data = false);
 void stop_stream_session(AppSession *session, UiState *state, bool preserve_data = true);
+bool apply_special_item_to_active_pane(AppSession *session, UiState *state, std::string_view item_id);
 
 void start_new_layout(AppSession *session, UiState *state, const std::string &status_text = "New untitled layout") {
   session->layout = make_empty_layout();
@@ -511,8 +512,6 @@ enum class PaneMenuActionKind {
   None,
   OpenAxisLimits,
   OpenCustomSeries,
-  ConvertToMap,
-  ConvertToPlot,
   SplitLeft,
   SplitRight,
   SplitTop,
@@ -540,6 +539,7 @@ struct PaneDropAction {
   int target_pane_index = -1;
   bool from_browser = false;
   std::vector<std::string> browser_paths;
+  std::string special_item_id;
   PaneCurveDragPayload curve_ref;
 };
 
@@ -838,6 +838,40 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     }
     ImGui::Spacing();
 
+    ImGui::SeparatorText("Data");
+    {
+      const ImGuiStyle &style = ImGui::GetStyle();
+      const ImVec2 row_size(std::max(1.0f, ImGui::GetContentRegionAvail().x), ImGui::GetFrameHeight());
+      ImGui::PushID("special_data_map");
+      const bool clicked = ImGui::InvisibleButton("##special_data_row", row_size);
+      const bool hovered = ImGui::IsItemHovered();
+      const bool held = ImGui::IsItemActive();
+      const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+      ImDrawList *draw_list = ImGui::GetWindowDrawList();
+      if (hovered) {
+        const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_HeaderActive : ImGuiCol_HeaderHovered);
+        draw_list->AddRectFilled(rect.Min, rect.Max, bg, 0.0f);
+      }
+      ImGui::RenderTextEllipsis(draw_list,
+                                ImVec2(rect.Min.x + style.FramePadding.x, rect.Min.y + style.FramePadding.y),
+                                ImVec2(rect.Max.x - style.FramePadding.x, rect.Max.y),
+                                rect.Max.x - style.FramePadding.x,
+                                "Map",
+                                nullptr,
+                                nullptr);
+      if (clicked) {
+        apply_special_item_to_active_pane(session, state, "map");
+      }
+      if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+        static constexpr char kMapPayload[] = "map";
+        ImGui::SetDragDropPayload("JOTP_SPECIAL_ITEM", kMapPayload, sizeof(kMapPayload));
+        ImGui::TextUnformatted("Map");
+        ImGui::EndDragDropSource();
+      }
+      ImGui::PopID();
+    }
+    ImGui::Spacing();
+
     ImGui::SeparatorText("Layout");
     const std::vector<std::string> layouts = available_layout_names();
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1017,6 +1051,53 @@ bool app_add_curve_to_active_pane(AppSession *session, UiState *state, const std
     return false;
   }
   return add_path_curve_to_pane(session, state, tab_state->active_pane_index, path);
+}
+
+bool pane_is_empty_for_special_item(const Pane &pane) {
+  return pane.kind == PaneKind::Plot && pane.curves.empty();
+}
+
+bool convert_pane_to_map(WorkspaceTab *tab, TabUiState *tab_state, int pane_index) {
+  if (tab == nullptr || tab_state == nullptr) return false;
+  if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) return false;
+  Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
+  if (pane.kind == PaneKind::Map) {
+    tab_state->active_pane_index = pane_index;
+    return false;
+  }
+  pane.kind = PaneKind::Map;
+  if (pane.title == UNTITLED_PANE_TITLE) {
+    pane.title = "Map";
+  }
+  tab_state->active_pane_index = pane_index;
+  return true;
+}
+
+bool apply_special_item_to_active_pane(AppSession *session, UiState *state, std::string_view item_id) {
+  WorkspaceTab *tab = app_active_tab(&session->layout, *state);
+  TabUiState *tab_state = app_active_tab_state(state);
+  if (tab == nullptr || tab_state == nullptr) return false;
+  if (tab_state->active_pane_index < 0 || tab_state->active_pane_index >= static_cast<int>(tab->panes.size())) {
+    state->status_text = "No active pane";
+    return false;
+  }
+  if (item_id != "map") return false;
+  if (!pane_is_empty_for_special_item(tab->panes[static_cast<size_t>(tab_state->active_pane_index)])) {
+    state->status_text = "Map can only be added to an empty pane";
+    return false;
+  }
+
+  const SketchLayout before_layout = session->layout;
+  if (!convert_pane_to_map(tab, tab_state, tab_state->active_pane_index)) {
+    state->status_text = "Map already shown in pane";
+    return false;
+  }
+  tab_state->map_panes.resize(tab->panes.size());
+  state->undo.push(before_layout);
+  if (mark_layout_dirty(session, state)) {
+    state->status_text = "Map added to active pane";
+  }
+  return true;
 }
 
 bool split_pane(WorkspaceTab *tab, int pane_index, PaneDropZone zone, std::optional<Curve> curve = std::nullopt) {
@@ -2130,18 +2211,6 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
     && pane_index < static_cast<int>(tab.panes.size())
     && !tab.panes[static_cast<size_t>(pane_index)].curves.empty();
   const bool is_map = pane != nullptr && pane->kind == PaneKind::Map;
-  if (action.kind == PaneMenuActionKind::None) {
-    if (is_map) {
-      if (bootstrap_icons::menuItem("", "Convert to Plot Pane")) {
-        action.kind = PaneMenuActionKind::ConvertToPlot;
-      }
-    } else if (bootstrap_icons::menuItem("", "Convert to Map Pane")) {
-      action.kind = PaneMenuActionKind::ConvertToMap;
-    }
-  }
-  if (action.kind != PaneMenuActionKind::None) {
-    ImGui::Separator();
-  }
   if (bootstrap_icons::menuItem("sliders", "Edit Axis Limits...", nullptr, false, !is_map)) {
     action.kind = PaneMenuActionKind::OpenAxisLimits;
   }
@@ -2187,7 +2256,7 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
   return action;
 }
 
-std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_index) {
+std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_index, const Pane &target_pane) {
   if (ImGui::GetDragDropPayload() == nullptr) return std::nullopt;
 
   const ImVec2 window_pos = ImGui::GetWindowPos();
@@ -2246,6 +2315,13 @@ std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_inde
         action.browser_paths = decode_browser_drag_payload(static_cast<const char *>(p->Data));
         return deliver(std::move(action));
       }
+      if (zone.zone == PaneDropZone::Center ? pane_is_empty_for_special_item(target_pane) : true) {
+        if (const ImGuiPayload *p = try_accept("JOTP_SPECIAL_ITEM"); p && p->Delivery) {
+          PaneDropAction action;
+          action.special_item_id = static_cast<const char *>(p->Data);
+          return deliver(std::move(action));
+        }
+      }
       if (const ImGuiPayload *p = try_accept("JOTP_PANE_CURVE"); p && p->Delivery) {
         PaneDropAction action;
         action.curve_ref = *static_cast<const PaneCurveDragPayload *>(p->Data);
@@ -2269,22 +2345,6 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
   bool dock_changed = false;
   bool layout_changed = false;
   switch (action.kind) {
-    case PaneMenuActionKind::ConvertToMap:
-      tab->panes[static_cast<size_t>(pane_index)].kind = PaneKind::Map;
-      if (tab->panes[static_cast<size_t>(pane_index)].title == UNTITLED_PANE_TITLE) {
-        tab->panes[static_cast<size_t>(pane_index)].title = "Map";
-      }
-      layout_changed = true;
-      state->status_text = "Map pane enabled";
-      break;
-    case PaneMenuActionKind::ConvertToPlot:
-      tab->panes[static_cast<size_t>(pane_index)].kind = PaneKind::Plot;
-      if (tab->panes[static_cast<size_t>(pane_index)].title == "Map") {
-        tab->panes[static_cast<size_t>(pane_index)].title = UNTITLED_PANE_TITLE;
-      }
-      layout_changed = true;
-      state->status_text = "Plot pane enabled";
-      break;
     case PaneMenuActionKind::OpenAxisLimits:
       tab_state->active_pane_index = pane_index;
       open_axis_limits_editor(*session, state, pane_index);
@@ -2367,6 +2427,47 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
   WorkspaceTab *tab = app_active_tab(&session->layout, *state);
   TabUiState *tab_state = app_active_tab_state(state);
   if (tab == nullptr || tab_state == nullptr) return false;
+
+  if (!action.special_item_id.empty()) {
+    if (action.special_item_id != "map") {
+      return false;
+    }
+    if (action.zone == PaneDropZone::Center) {
+      if (action.target_pane_index < 0 || action.target_pane_index >= static_cast<int>(tab->panes.size())) {
+        return false;
+      }
+      if (!pane_is_empty_for_special_item(tab->panes[static_cast<size_t>(action.target_pane_index)])) {
+        state->status_text = "Map can only be added to an empty pane";
+        return false;
+      }
+      const SketchLayout before_layout = session->layout;
+      if (!convert_pane_to_map(tab, tab_state, action.target_pane_index)) {
+        state->status_text = "Map already shown in pane";
+        return false;
+      }
+      tab_state->map_panes.resize(tab->panes.size());
+      state->undo.push(before_layout);
+      if (mark_layout_dirty(session, state)) {
+        state->status_text = "Map added to pane";
+      }
+      return true;
+    }
+    const SketchLayout before_layout = session->layout;
+    if (split_pane(tab, action.target_pane_index, action.zone)) {
+      tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+      tab_state->map_panes.resize(tab->panes.size());
+      if (!convert_pane_to_map(tab, tab_state, tab_state->active_pane_index)) {
+        return false;
+      }
+      mark_tab_dock_dirty(state, state->active_tab_index);
+      state->undo.push(before_layout);
+      if (mark_layout_dirty(session, state)) {
+        state->status_text = "Split pane and added map";
+      }
+      return true;
+    }
+    return false;
+  }
 
   if (action.from_browser) {
     if (action.browser_paths.empty()) return false;
@@ -2540,7 +2641,7 @@ void draw_pane_windows(AppSession *session, UiState *state) {
       close_pane_requested = draw_pane_close_button_overlay();
       menu_action = draw_pane_context_menu(*tab, static_cast<int>(i));
       if (pane.kind != PaneKind::Map) {
-        drop_action = draw_pane_drop_target(state->active_tab_index, static_cast<int>(i));
+        drop_action = draw_pane_drop_target(state->active_tab_index, static_cast<int>(i), pane);
       }
     }
     ImGui::End();
@@ -2795,7 +2896,7 @@ int run(const Options &options) {
   GlfwRuntime glfw_runtime(options);
   ImGuiRuntime imgui_runtime(glfw_runtime.window());
   configure_style();
-  session.map_tiles = std::make_unique<MapTileManager>();
+  session.map_data = std::make_unique<MapDataManager>();
   if (session.data_mode == SessionDataMode::Route) {
     session.camera_feed = std::make_unique<SidebarCameraFeed>();
     session.camera_feed->setRouteData(session.route_data);
@@ -2840,7 +2941,7 @@ int run(const Options &options) {
   if (session.stream_poller) {
     session.stream_poller->stop();
   }
-  session.map_tiles.reset();
+  session.map_data.reset();
   session.camera_feed.reset();
   return 0;
   } catch (const std::exception &err) {
