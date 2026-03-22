@@ -1,10 +1,14 @@
 """
-RP2350-CAN: receive CAN messages and control the onboard LED.
+RP2350-CAN: pinball solenoid controller.
 
 CAN protocol:
-  Message ID 0x100, 1 byte payload:
-    bit 0: LED (later: left flipper)
-    bit 1: (later: right flipper)
+  RX - Message ID 0x100 (SOLENOID_CMD), 1 byte payload:
+    bit 0: left flipper solenoid
+    bit 1: right flipper solenoid
+    bit 2: start button solenoid
+
+  TX - Message ID 0x101 (PINBALL_STATE), 1 byte payload:
+    bit 0: heartbeat (toggles each send)
 
 Based on the Waveshare RP2350-CAN demo (XL2515, MCP2515-compatible).
 Flash MicroPython to the RP2350 first, then copy this file as main.py.
@@ -22,8 +26,10 @@ XL2515_INT_PIN = 8
 LED_PIN = 25
 
 # -- CAN protocol --
-CAN_MSG_ID = 0x100
+SOLENOID_CMD_ID = 0x100
+PINBALL_STATE_ID = 0x101
 CAN_RATE = "500KBPS"
+HEARTBEAT_MS = 1000
 
 # -- XL2515 registers (MCP2515-compatible) --
 CANSTAT  = 0x0E
@@ -37,6 +43,9 @@ CANINTF  = 0x2C
 TXB0SIDH = 0x31
 TXB0SIDL = 0x32
 TXB0DLC  = 0x35
+TXB0D0   = 0x36
+
+CAN_RTS_TXB0 = 0x81
 
 RXB0CTRL = 0x60
 RXB0SIDH = 0x61
@@ -121,6 +130,19 @@ class XL2515:
         if (self._read(CANSTAT) & 0xE0) != 0x00:
             self._write(CANCTRL, 0x04)
 
+    def send(self, can_id, data):
+        # Set TX buffer standard ID
+        self._write(TXB0SIDH, (can_id >> 3) & 0xFF)
+        self._write(TXB0SIDL, (can_id << 5) & 0xE0)
+        # Set DLC and data bytes
+        self._write(TXB0DLC, len(data))
+        for i, b in enumerate(data):
+            self._write(TXB0D0 + i, b)
+        # Request to send
+        self.cs(0)
+        self.spi.write(bytes([CAN_RTS_TXB0]))
+        self.cs(1)
+
     def recv(self):
         if not self.recv_flag:
             return None, None
@@ -152,12 +174,23 @@ class XL2515:
 def main():
     led = Pin(LED_PIN, Pin.OUT, value=0)
     can = XL2515(CAN_RATE)
-    print(f"Listening for CAN ID 0x{CAN_MSG_ID:03X} at {CAN_RATE}...")
+    print(f"Listening for CAN ID 0x{SOLENOID_CMD_ID:03X} at {CAN_RATE}...")
+
+    heartbeat = 0
+    last_heartbeat_ms = time.ticks_ms()
 
     while True:
+        # Send heartbeat (PINBALL_STATE) periodically
+        now = time.ticks_ms()
+        if time.ticks_diff(now, last_heartbeat_ms) >= HEARTBEAT_MS:
+            can.send(PINBALL_STATE_ID, bytes([heartbeat & 0x01]))
+            heartbeat ^= 1
+            last_heartbeat_ms = now
+
+        # Receive solenoid commands
         can_id, data = can.recv()
         if can_id is not None and data is not None:
-            if can_id == CAN_MSG_ID and len(data) >= 1:
+            if can_id == SOLENOID_CMD_ID and len(data) >= 1:
                 led.value(data[0] & 0x01)
                 print(f"ID=0x{can_id:03X} data={[hex(b) for b in data]} -> LED={'ON' if data[0] & 1 else 'OFF'}")
             else:
