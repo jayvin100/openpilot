@@ -20,8 +20,8 @@
 
 ## Messages
 - [x] message list filtering — `wired`
-- [ ] message list sorting — `not started`
-- [ ] message visibility behavior — `not started`
+- [x] message list sorting — `wired`
+- [x] message visibility behavior — `wired (show inactive toggle + inactive dimming)`
 - [x] message selection and tab restoration — `wired`
 
 ## Detail View

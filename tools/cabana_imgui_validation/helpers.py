@@ -506,6 +506,16 @@ def wait_for_demo_route(cabana, settle_seconds=8):
   time.sleep(settle_seconds)
 
 
+def wait_for_window_name_contains(cabana, text, timeout=15):
+  """Poll until the main window title contains text."""
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if text in cabana.get_window_name():
+      return
+    time.sleep(0.2)
+  raise TimeoutError(f"window title did not contain {text!r} within {timeout}s")
+
+
 def reset_layout(cabana):
   """Open View -> Reset Window Layout using screen coordinates."""
   cabana.focus()

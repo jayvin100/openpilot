@@ -1,9 +1,11 @@
 #pragma once
 
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "core/app_state.h"
 #include "core/types.h"
 
 namespace cabana {
@@ -45,6 +47,26 @@ public:
   virtual const MessageEventsMap &eventsMap() const = 0;
   virtual const std::vector<const CanEvent *> &allEvents() const = 0;
   virtual const std::vector<const CanEvent *> *events(const MessageId &id) const = 0;
+
+  bool isMessageActive(const MessageId &id) const {
+    if (id.source == std::numeric_limits<uint8_t>::max()) {
+      return false;
+    }
+
+    const auto &msgs = messages();
+    auto it = msgs.find(id);
+    if (it == msgs.end()) {
+      return false;
+    }
+
+    const auto &msg = it->second;
+    const double delta = currentSec() - msg.ts;
+    if (msg.freq < std::numeric_limits<double>::epsilon()) {
+      return delta < 1.5;
+    }
+
+    return delta < (5.0 / msg.freq) + (1.0 / app_state().fps);
+  }
 };
 
 }  // namespace cabana

@@ -1,8 +1,10 @@
 #include "ui/panes/messages_pane.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cstring>
+#include <tuple>
 #include <string>
 #include <vector>
 
@@ -27,9 +29,70 @@ static bool flat_button(const char *label) {
 struct MsgRow {
   MessageId id;
   std::string name;
+  std::string search_text;
   uint32_t count;
   double freq;
 };
+
+enum class MsgSortColumn {
+  Name = 0,
+  Bus,
+  Id,
+  Freq,
+  Count,
+};
+
+std::string lower_copy(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return text;
+}
+
+std::string build_search_text(const MessageId &id, const std::string &name) {
+  char bus[16];
+  char addr[16];
+  snprintf(bus, sizeof(bus), "%u", id.source);
+  snprintf(addr, sizeof(addr), "0x%X", id.address);
+  return lower_copy(name + " " + bus + " " + addr);
+}
+
+bool less_by_column(const MsgRow &lhs, const MsgRow &rhs, MsgSortColumn column) {
+  switch (column) {
+    case MsgSortColumn::Name:
+      return std::tie(lhs.name, lhs.id) < std::tie(rhs.name, rhs.id);
+    case MsgSortColumn::Bus:
+      return std::tie(lhs.id.source, lhs.id.address) < std::tie(rhs.id.source, rhs.id.address);
+    case MsgSortColumn::Id:
+      return std::tie(lhs.id.address, lhs.id.source) < std::tie(rhs.id.address, rhs.id.source);
+    case MsgSortColumn::Freq:
+      return std::tie(lhs.freq, lhs.id) < std::tie(rhs.freq, rhs.id);
+    case MsgSortColumn::Count:
+      return std::tie(lhs.count, lhs.id) < std::tie(rhs.count, rhs.id);
+  }
+  return std::tie(lhs.name, lhs.id) < std::tie(rhs.name, rhs.id);
+}
+
+void rebuild_rows(std::vector<MsgRow> &rows, const std::unordered_map<MessageId, MsgLiveData> &msgs,
+                  cabana::dbc::DbcManager &dbc_mgr) {
+  rows.clear();
+  rows.reserve(msgs.size());
+  for (const auto &[id, m] : msgs) {
+    const char *msg_name = dbc_mgr.msgName(id);
+    std::string name;
+    if (msg_name && *msg_name != '\0') {
+      name = msg_name;
+    } else {
+      char hex[16];
+      snprintf(hex, sizeof(hex), "0x%X", id.address);
+      name = hex;
+    }
+    rows.push_back({.id = id,
+                    .name = name,
+                    .search_text = build_search_text(id, name),
+                    .count = m.count,
+                    .freq = m.freq});
+  }
+}
 
 static int current_visible_index(const std::vector<MsgRow> &rows, const std::vector<int> &visible,
                                  const MessageId &selected_msg) {
@@ -51,6 +114,7 @@ void messages() {
   static int last_msg_count = 0;
   static const cabana::Source *last_src = nullptr;
   static uint64_t last_dbc_revision = 0;
+  static bool show_inactive_messages = true;
 
   if (src) {
     const auto &msgs = src->messages();
@@ -61,31 +125,22 @@ void messages() {
       last_src = src;
       last_dbc_revision = dbc_revision;
       last_msg_count = (int)msgs.size();
-      rows.clear();
-      rows.reserve(msgs.size());
-      for (const auto &[id, m] : msgs) {
-        const char *msg_name = dbc_mgr.msgName(id);
-        std::string name;
-        if (msg_name) {
-          name = msg_name;
-        } else {
-          char hex[16];
-          snprintf(hex, sizeof(hex), "0x%X", id.address);
-          name = hex;
-        }
-        rows.push_back({id, std::move(name), m.count, m.freq});
-      }
-      std::sort(rows.begin(), rows.end(), [](const MsgRow &a, const MsgRow &b) {
-        return a.id < b.id;
-      });
+      rebuild_rows(rows, msgs, dbc_mgr);
     } else {
       // Update counts/freq without rebuilding rows
+      bool needs_rebuild = false;
       for (auto &r : rows) {
         auto it = msgs.find(r.id);
         if (it != msgs.end()) {
           r.count = it->second.count;
           r.freq = it->second.freq;
+        } else {
+          needs_rebuild = true;
+          break;
         }
+      }
+      if (needs_rebuild) {
+        rebuild_rows(rows, msgs, dbc_mgr);
       }
     }
   } else if (last_src != nullptr) {
@@ -96,7 +151,7 @@ void messages() {
   }
 
   // Summary row
-  int total_msgs = (int)rows.size();
+  const int total_msgs = (int)rows.size();
   auto &dbc = cabana::dbc::dbc_manager();
   ImGui::Text("%d Messages", total_msgs);
   ImGui::SameLine();
@@ -115,6 +170,11 @@ void messages() {
   ImGui::SameLine();
   flat_button("Hide Signals");
   ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::Checkbox("Inactive", &show_inactive_messages);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+    ImGui::SetTooltip("Show inactive messages");
+  }
 
   ImGui::Separator();
 
@@ -124,8 +184,8 @@ void messages() {
                         ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                         ImGuiTableFlags_Sortable)) {
     ImGui::TableSetupScrollFreeze(0, 1);
-    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Bus", ImGuiTableColumnFlags_WidthFixed, 28.0f);
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Bus", ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthFixed, 28.0f);
     ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 55.0f);
     ImGui::TableSetupColumn("Freq", ImGuiTableColumnFlags_WidthFixed, 42.0f);
     ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 50.0f);
@@ -149,21 +209,36 @@ void messages() {
       bool has_filter = search[0] != '\0';
       std::string filter_lower;
       if (has_filter) {
-        filter_lower = search;
-        std::transform(filter_lower.begin(), filter_lower.end(), filter_lower.begin(), ::tolower);
+        filter_lower = lower_copy(search);
       }
 
       static std::vector<int> visible;
       visible.clear();
       visible.reserve(rows.size());
       for (int i = 0; i < (int)rows.size(); i++) {
-        if (has_filter) {
-          std::string name_lower = rows[i].name;
-          std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
-          if (name_lower.find(filter_lower) == std::string::npos) continue;
+        if (!show_inactive_messages && src && !src->isMessageActive(rows[i].id)) {
+          continue;
+        }
+        if (has_filter && rows[i].search_text.find(filter_lower) == std::string::npos) {
+          continue;
         }
         visible.push_back(i);
       }
+
+      ImGuiTableSortSpecs *sort_specs = ImGui::TableGetSortSpecs();
+      const MsgSortColumn sort_column = (sort_specs && sort_specs->SpecsCount > 0)
+                                           ? static_cast<MsgSortColumn>(sort_specs->Specs[0].ColumnIndex)
+                                           : MsgSortColumn::Name;
+      const bool ascending = !(sort_specs && sort_specs->SpecsCount > 0 &&
+                               sort_specs->Specs[0].SortDirection == ImGuiSortDirection_Descending);
+      std::stable_sort(visible.begin(), visible.end(), [&](int lhs, int rhs) {
+        const bool less = less_by_column(rows[lhs], rows[rhs], sort_column);
+        const bool greater = less_by_column(rows[rhs], rows[lhs], sort_column);
+        if (less == greater) {
+          return rows[lhs].id < rows[rhs].id;
+        }
+        return ascending ? less : greater;
+      });
 
       auto &st = cabana::app_state();
       int scroll_to_visible_row = -1;
@@ -185,11 +260,16 @@ void messages() {
 
       auto render_row = [&](int row) {
           const auto &r = rows[visible[row]];
+          const bool is_active = src ? src->isMessageActive(r.id) : false;
+          const bool dim_inactive = show_inactive_messages && !is_active;
           ImGui::TableNextRow();
           ImGui::TableNextColumn();
 
           // Selectable row
           bool is_selected = st.has_selection && st.selected_msg == r.id;
+          if (dim_inactive) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+          }
           if (ImGui::Selectable(r.name.c_str(), is_selected,
                                 ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick,
                                 ImVec2(-FLT_MIN, 0.0f))) {
@@ -207,6 +287,9 @@ void messages() {
           ImGui::Text("%.0f", r.freq);
           ImGui::TableNextColumn();
           ImGui::Text("%u", r.count);
+          if (dim_inactive) {
+            ImGui::PopStyleColor();
+          }
       };
 
       // Force one full render pass when keyboard navigation changes selection so the scroll target exists.

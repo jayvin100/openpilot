@@ -259,6 +259,7 @@ void render() {
     return;
   }
 
+  bool submit_requested = false;
   if (ImGui::BeginTabBar("##open_stream_tabs")) {
     if (ImGui::BeginTabItem("Replay")) {
       state.tab = StreamTab::Replay;
@@ -266,12 +267,14 @@ void render() {
         ImGui::SetKeyboardFocusHere();
         state.focus_route = false;
       }
-      ImGui::InputText("Route", state.route, sizeof(state.route));
+      submit_requested |= ImGui::InputText("Route", state.route, sizeof(state.route),
+                                           ImGuiInputTextFlags_EnterReturnsTrue);
       ImGui::SameLine();
       if (ImGui::Button("Demo")) {
         copy_text(state.route, sizeof(state.route), DEMO_ROUTE);
       }
-      ImGui::InputText("Data Dir", state.data_dir, sizeof(state.data_dir));
+      submit_requested |= ImGui::InputText("Data Dir", state.data_dir, sizeof(state.data_dir),
+                                           ImGuiInputTextFlags_EnterReturnsTrue);
       ImGui::Checkbox("Auto Source", &state.replay_auto);
       ImGui::SameLine();
       ImGui::Checkbox("No VIPC", &state.replay_no_vipc);
@@ -348,7 +351,8 @@ void render() {
       ImGui::RadioButton("ZMQ", &device_mode, 1);
       state.device_use_zmq = device_mode == 1;
       ImGui::BeginDisabled(!state.device_use_zmq);
-      ImGui::InputText("ZMQ Address", state.zmq_address, sizeof(state.zmq_address));
+      submit_requested |= ImGui::InputText("ZMQ Address", state.zmq_address, sizeof(state.zmq_address),
+                                           ImGuiInputTextFlags_EnterReturnsTrue);
       ImGui::EndDisabled();
       ImGui::EndTabItem();
     }
@@ -357,12 +361,13 @@ void render() {
   }
 
   ImGui::Separator();
-  ImGui::InputText("DBC File", state.dbc_path, sizeof(state.dbc_path));
+  submit_requested |= ImGui::InputText("DBC File", state.dbc_path, sizeof(state.dbc_path),
+                                       ImGuiInputTextFlags_EnterReturnsTrue);
   if (!state.error.empty()) {
     ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.38f, 1.0f), "%s", state.error.c_str());
   }
 
-  if (ImGui::Button("Open", ImVec2(120, 0))) {
+  if (submit_requested || ImGui::Button("Open", ImVec2(120, 0))) {
     submit_open_stream();
   }
   ImGui::SameLine();
