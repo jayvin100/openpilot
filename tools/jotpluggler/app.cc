@@ -659,6 +659,24 @@ bool split_pane_node(WorkspaceNode *node, int target_pane_index, SplitOrientatio
     return true;
   }
 
+  if (node->orientation == orientation) {
+    for (size_t i = 0; i < node->children.size(); ++i) {
+      WorkspaceNode &child = node->children[i];
+      if (!child.is_pane || child.pane_index != target_pane_index) {
+        continue;
+      }
+
+      WorkspaceNode new_pane;
+      new_pane.is_pane = true;
+      new_pane.pane_index = new_pane_index;
+
+      const auto insert_it = node->children.begin() + static_cast<std::ptrdiff_t>(new_before ? i : i + 1);
+      node->children.insert(insert_it, std::move(new_pane));
+      node->sizes.assign(node->children.size(), 1.0f / static_cast<float>(node->children.size()));
+      return true;
+    }
+  }
+
   for (WorkspaceNode &child : node->children) {
     if (split_pane_node(&child, target_pane_index, orientation, new_before, new_pane_index)) return true;
   }
@@ -2290,10 +2308,10 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
   }
   ImGui::Separator();
   if (action.kind == PaneMenuActionKind::None && bootstrap_icons::menuItem("distribute-horizontal", "Split Left / Right")) {
-    action.kind = PaneMenuActionKind::SplitLeft;
+    action.kind = PaneMenuActionKind::SplitRight;
   } else if (action.kind == PaneMenuActionKind::None
              && bootstrap_icons::menuItem("distribute-vertical", "Split Top / Bottom")) {
-    action.kind = PaneMenuActionKind::SplitTop;
+    action.kind = PaneMenuActionKind::SplitBottom;
   }
   ImGui::Separator();
   if (bootstrap_icons::menuItem("zoom-out", "Zoom Out", nullptr, false, is_plot)) {
@@ -2677,7 +2695,9 @@ void ensure_dockspace(const WorkspaceTab &tab, TabUiState *tab_state, ImVec2 doc
   if (dockspace_size.x <= 0.0f || dockspace_size.y <= 0.0f || tab_state == nullptr) {
     return;
   }
-  if (!tab_state->dock_needs_build) {
+  const bool size_changed = std::abs(tab_state->last_dockspace_size.x - dockspace_size.x) > 1.0f
+                         || std::abs(tab_state->last_dockspace_size.y - dockspace_size.y) > 1.0f;
+  if (!tab_state->dock_needs_build && !size_changed) {
     return;
   }
 
@@ -2688,6 +2708,7 @@ void ensure_dockspace(const WorkspaceTab &tab, TabUiState *tab_state, ImVec2 doc
   build_dock_tree(tab.root, tab, tab_state->runtime_id, dockspace_id);
   ImGui::DockBuilderFinish(dockspace_id);
   tab_state->dock_needs_build = false;
+  tab_state->last_dockspace_size = dockspace_size;
 }
 
 void draw_pane_windows(AppSession *session, UiState *state) {

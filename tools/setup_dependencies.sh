@@ -59,6 +59,7 @@ function install_ubuntu_deps() {
     curl \
     libcurl4-openssl-dev \
     locales \
+    nasm \
     git \
     xvfb
 
@@ -87,6 +88,20 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="04d8", ATTR{idProduct}=="1234", ENV{adb_user}
 EOF
 
     $SUDO udevadm control --reload-rules && $SUDO udevadm trigger || true
+  fi
+}
+
+function install_tool_shims() {
+  local shim_dir="$ROOT/.tools_shims"
+  mkdir -p "$shim_dir"
+
+  if ! command -v ccache >/dev/null 2>&1; then
+    cat >"$shim_dir/ccache" <<'EOF'
+#!/usr/bin/env bash
+exec "$@"
+EOF
+    chmod +x "$shim_dir/ccache"
+    export PATH="$shim_dir:$PATH"
   fi
 }
 
@@ -125,6 +140,8 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
     RC_FILE="$HOME/.bash_profile"
   fi
 fi
+
+install_tool_shims
 
 if [ -f "$ROOT/pyproject.toml" ]; then
   install_python_deps

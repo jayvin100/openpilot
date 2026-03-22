@@ -494,6 +494,7 @@ struct TabUiState {
   bool dock_needs_build = true;
   int active_pane_index = 0;
   int runtime_id = 0;
+  ImVec2 last_dockspace_size = ImVec2(0.0f, 0.0f);
   std::vector<MapPaneState> map_panes;
   std::vector<CameraPaneState> camera_panes;
 };
