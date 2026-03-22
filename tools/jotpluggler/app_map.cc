@@ -4,9 +4,7 @@
 #include <GLFW/glfw3.h>
 
 extern "C" {
-#include <libavformat/avformat.h>
-#include <libavformat/avio.h>
-#include <libavutil/dict.h>
+#include <zstd.h>
 }
 
 #include <array>
@@ -14,6 +12,7 @@ extern "C" {
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -22,9 +21,11 @@ extern "C" {
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "common/util.h"
 #include "third_party/json11/json11.hpp"
 
 namespace fs = std::filesystem;
@@ -34,9 +35,16 @@ namespace {
 constexpr int MAP_MIN_ZOOM = 1;
 constexpr int MAP_MAX_ZOOM = 18;
 constexpr int MAP_SINGLE_POINT_MIN_ZOOM = 14;
+constexpr float MAP_WHEEL_ZOOM_STEP = 0.25f;
 constexpr double MAP_TRACE_PAD_FRAC = 0.45;
 constexpr double MAP_TRACE_MIN_LAT_PAD = 0.01;
 constexpr double MAP_BOUNDS_GRID = 0.005;
+constexpr double MAP_CORRIDOR_LAT_PAD = 0.010;
+constexpr double MAP_CORRIDOR_MIN_STEP_S = 1.5;
+constexpr size_t MAP_CORRIDOR_MAX_BOXES = 36;
+constexpr float MAP_INITIAL_FIT_FILL = 0.88f;
+constexpr float MAP_MIN_ZOOM_FILL = 0.98f;
+constexpr float MAP_EDGE_FADE_FRAC = 0.28f;
 constexpr const char *MAP_QUERY_ENDPOINTS[] = {
   "https://overpass-api.de/api/interpreter",
   "https://overpass.private.coffee/api/interpreter",
@@ -57,11 +65,20 @@ struct GeoBounds {
   }
 };
 
-struct FeatureBounds {
-  double south = 0.0;
-  double west = 0.0;
-  double north = 0.0;
-  double east = 0.0;
+struct ProjectedPoint {
+  float x = 0.0f;
+  float y = 0.0f;
+};
+
+struct ProjectedBounds {
+  float min_x = 0.0f;
+  float min_y = 0.0f;
+  float max_x = 0.0f;
+  float max_y = 0.0f;
+
+  bool valid() const {
+    return max_x >= min_x && max_y >= min_y;
+  }
 };
 
 enum class RoadClass : uint8_t {
@@ -73,18 +90,18 @@ enum class RoadClass : uint8_t {
 
 struct RoadFeature {
   RoadClass road_class = RoadClass::Local;
-  FeatureBounds bounds;
-  std::vector<GeoPoint> points;
+  ProjectedBounds bounds;
+  std::vector<ProjectedPoint> points;
 };
 
 struct WaterLineFeature {
-  FeatureBounds bounds;
-  std::vector<GeoPoint> points;
+  ProjectedBounds bounds;
+  std::vector<ProjectedPoint> points;
 };
 
 struct WaterPolygonFeature {
-  FeatureBounds bounds;
-  std::vector<GeoPoint> ring;
+  ProjectedBounds bounds;
+  std::vector<ProjectedPoint> ring;
 };
 
 }  // namespace
@@ -92,29 +109,35 @@ struct WaterPolygonFeature {
 struct RouteBasemap {
   std::string key;
   GeoBounds bounds;
+  ProjectedBounds projected_bounds;
   std::vector<RoadFeature> roads;
   std::vector<WaterLineFeature> water_lines;
   std::vector<WaterPolygonFeature> water_polygons;
 };
 
+struct MapRequestSpec {
+  std::string key;
+  GeoBounds bounds;
+  std::string query;
+};
+
 namespace {
 
-double lon_to_world_x(double lon, int z) {
-  return (lon + 180.0) / 360.0 * static_cast<double>(1 << z) * 256.0;
+double lon_to_world_x(double lon, double zoom) {
+  return (lon + 180.0) / 360.0 * 256.0 * std::exp2(zoom);
 }
 
-double lat_to_world_y(double lat, int z) {
+double lat_to_world_y(double lat, double zoom) {
   const double lat_rad = lat * M_PI / 180.0;
-  return (1.0 - std::log(std::tan(lat_rad) + 1.0 / std::cos(lat_rad)) / M_PI)
-       / 2.0 * static_cast<double>(1 << z) * 256.0;
+  return (1.0 - std::log(std::tan(lat_rad) + 1.0 / std::cos(lat_rad)) / M_PI) / 2.0 * 256.0 * std::exp2(zoom);
 }
 
-double world_x_to_lon(double x, int z) {
-  return x / (static_cast<double>(1 << z) * 256.0) * 360.0 - 180.0;
+double world_x_to_lon(double x, double zoom) {
+  return x / std::exp2(zoom) / 256.0 * 360.0 - 180.0;
 }
 
-double world_y_to_lat(double y, int z) {
-  const double n = M_PI - (2.0 * M_PI * y) / (static_cast<double>(1 << z) * 256.0);
+double world_y_to_lat(double y, double zoom) {
+  const double n = M_PI - (2.0 * M_PI * (y / std::exp2(zoom))) / 256.0;
   return 180.0 / M_PI * std::atan(std::sinh(n));
 }
 
@@ -134,6 +157,15 @@ double clamp_lon(double lon) {
   return std::clamp(lon, -179.999, 179.999);
 }
 
+float project_lon0(double lon) {
+  return static_cast<float>((lon + 180.0) / 360.0 * 256.0);
+}
+
+float project_lat0(double lat) {
+  const double lat_rad = lat * M_PI / 180.0;
+  return static_cast<float>((1.0 - std::log(std::tan(lat_rad) + 1.0 / std::cos(lat_rad)) / M_PI) / 2.0 * 256.0);
+}
+
 double cos_lat_scale(double lat) {
   return std::max(0.2, std::cos(lat * M_PI / 180.0));
 }
@@ -146,33 +178,41 @@ double quantize_up(double value, double step) {
   return std::ceil(value / step) * step;
 }
 
-FeatureBounds compute_feature_bounds(const std::vector<GeoPoint> &points) {
-  FeatureBounds bounds;
+ProjectedBounds compute_projected_bounds(const std::vector<ProjectedPoint> &points) {
+  ProjectedBounds bounds;
   if (points.empty()) {
     return bounds;
   }
-  bounds.south = bounds.north = points.front().lat;
-  bounds.west = bounds.east = points.front().lon;
-  for (const GeoPoint &point : points) {
-    bounds.south = std::min(bounds.south, point.lat);
-    bounds.north = std::max(bounds.north, point.lat);
-    bounds.west = std::min(bounds.west, point.lon);
-    bounds.east = std::max(bounds.east, point.lon);
+  bounds.min_x = bounds.max_x = points.front().x;
+  bounds.min_y = bounds.max_y = points.front().y;
+  for (const ProjectedPoint &point : points) {
+    bounds.min_x = std::min(bounds.min_x, point.x);
+    bounds.max_x = std::max(bounds.max_x, point.x);
+    bounds.min_y = std::min(bounds.min_y, point.y);
+    bounds.max_y = std::max(bounds.max_y, point.y);
   }
   return bounds;
 }
 
-bool bounds_contains_bounds(const GeoBounds &outer, const GeoBounds &inner) {
-  return outer.valid() && inner.valid()
-      && outer.south <= inner.south
-      && outer.north >= inner.north
-      && outer.west <= inner.west
-      && outer.east >= inner.east;
+ProjectedBounds project_bounds0(const GeoBounds &bounds) {
+  if (!bounds.valid()) {
+    return {};
+  }
+  return ProjectedBounds{
+    .min_x = project_lon0(bounds.west),
+    .min_y = project_lat0(bounds.north),
+    .max_x = project_lon0(bounds.east),
+    .max_y = project_lat0(bounds.south),
+  };
 }
 
-bool feature_intersects_view(const FeatureBounds &feature, const GeoBounds &view) {
-  return !(feature.east < view.west || feature.west > view.east
-        || feature.north < view.south || feature.south > view.north);
+bool feature_intersects_view(const ProjectedBounds &feature, const ProjectedBounds &view, float zoom_scale) {
+  const float min_x = feature.min_x * zoom_scale;
+  const float max_x = feature.max_x * zoom_scale;
+  const float min_y = feature.min_y * zoom_scale;
+  const float max_y = feature.max_y * zoom_scale;
+  return !(max_x < view.min_x || min_x > view.max_x
+        || max_y < view.min_y || min_y > view.max_y);
 }
 
 GeoBounds requested_bounds_for_trace(const GpsTrace &trace) {
@@ -193,27 +233,94 @@ GeoBounds requested_bounds_for_trace(const GpsTrace &trace) {
   return bounds;
 }
 
-GeoBounds view_bounds(double top_left_x, double top_left_y, float width, float height, int zoom) {
-  const double west = world_x_to_lon(top_left_x, zoom);
-  const double east = world_x_to_lon(top_left_x + width, zoom);
-  const double north = world_y_to_lat(top_left_y, zoom);
-  const double south = world_y_to_lat(top_left_y + height, zoom);
+GeoBounds merge_bounds(const GeoBounds &a, const GeoBounds &b) {
+  if (!a.valid()) return b;
+  if (!b.valid()) return a;
   return GeoBounds{
-    .south = std::min(south, north),
-    .west = std::min(west, east),
-    .north = std::max(south, north),
-    .east = std::max(west, east),
+    .south = std::min(a.south, b.south),
+    .west = std::min(a.west, b.west),
+    .north = std::max(a.north, b.north),
+    .east = std::max(a.east, b.east),
   };
 }
 
-int fit_map_zoom_for_bounds(const GeoBounds &bounds, float width, float height) {
+bool bounds_overlap_or_touch(const GeoBounds &a, const GeoBounds &b) {
+  return !(a.east < b.west || b.east < a.west || a.north < b.south || b.north < a.south);
+}
+
+std::vector<GeoBounds> corridor_boxes_for_trace(const GpsTrace &trace) {
+  std::vector<GeoBounds> boxes;
+  if (trace.points.empty()) {
+    return boxes;
+  }
+
+  const double center_lat = map_trace_center_lat(trace);
+  const double lon_pad = MAP_CORRIDOR_LAT_PAD / cos_lat_scale(center_lat);
+  const double total_time = trace.points.back().time - trace.points.front().time;
+  const double target_boxes = std::min<double>(MAP_CORRIDOR_MAX_BOXES, std::max<double>(8.0, total_time / MAP_CORRIDOR_MIN_STEP_S));
+  const size_t stride = std::max<size_t>(1, static_cast<size_t>(std::ceil(trace.points.size() / target_boxes)));
+
+  auto add_box = [&](double lat, double lon) {
+    GeoBounds box{
+      .south = clamp_lat(quantize_down(lat - MAP_CORRIDOR_LAT_PAD, MAP_BOUNDS_GRID)),
+      .west = clamp_lon(quantize_down(lon - lon_pad, MAP_BOUNDS_GRID)),
+      .north = clamp_lat(quantize_up(lat + MAP_CORRIDOR_LAT_PAD, MAP_BOUNDS_GRID)),
+      .east = clamp_lon(quantize_up(lon + lon_pad, MAP_BOUNDS_GRID)),
+    };
+    if (!box.valid()) {
+      return;
+    }
+    for (GeoBounds &existing : boxes) {
+      if (bounds_overlap_or_touch(existing, box)) {
+        existing = merge_bounds(existing, box);
+        return;
+      }
+    }
+    boxes.push_back(box);
+  };
+
+  add_box(trace.points.front().lat, trace.points.front().lon);
+  for (size_t i = stride; i < trace.points.size(); i += stride) {
+    add_box(trace.points[i].lat, trace.points[i].lon);
+  }
+  add_box(trace.points.back().lat, trace.points.back().lon);
+
+  bool merged = true;
+  while (merged) {
+    merged = false;
+    for (size_t i = 0; i < boxes.size() && !merged; ++i) {
+      for (size_t j = i + 1; j < boxes.size(); ++j) {
+        if (bounds_overlap_or_touch(boxes[i], boxes[j])) {
+          boxes[i] = merge_bounds(boxes[i], boxes[j]);
+          boxes.erase(boxes.begin() + static_cast<std::ptrdiff_t>(j));
+          merged = true;
+          break;
+        }
+      }
+    }
+  }
+  return boxes;
+}
+
+ProjectedBounds view_bounds(double top_left_x, double top_left_y, float width, float height) {
+  return ProjectedBounds{
+    .min_x = static_cast<float>(top_left_x),
+    .min_y = static_cast<float>(top_left_y),
+    .max_x = static_cast<float>(top_left_x + width),
+    .max_y = static_cast<float>(top_left_y + height),
+  };
+}
+
+int fit_map_zoom_for_bounds(const GeoBounds &bounds, float width, float height, float fill_fraction) {
   if (!bounds.valid()) {
     return MAP_MIN_ZOOM;
   }
+  const double max_width = std::max(1.0f, width * fill_fraction);
+  const double max_height = std::max(1.0f, height * fill_fraction);
   for (int z = MAP_MAX_ZOOM; z >= MAP_MIN_ZOOM; --z) {
     const double pixel_width = std::abs(lon_to_world_x(bounds.east, z) - lon_to_world_x(bounds.west, z));
     const double pixel_height = std::abs(lat_to_world_y(bounds.south, z) - lat_to_world_y(bounds.north, z));
-    if (pixel_width <= width * 0.84 && pixel_height <= height * 0.84) {
+    if (pixel_width <= max_width && pixel_height <= max_height) {
       return z;
     }
   }
@@ -221,15 +328,16 @@ int fit_map_zoom_for_bounds(const GeoBounds &bounds, float width, float height) 
 }
 
 int fit_map_zoom_for_trace(const GpsTrace &trace, float width, float height) {
-  return fit_map_zoom_for_bounds(requested_bounds_for_trace(trace), width, height);
+  return fit_map_zoom_for_bounds(requested_bounds_for_trace(trace), width, height, MAP_INITIAL_FIT_FILL);
 }
 
 int minimum_allowed_map_zoom(const GeoBounds &bounds, const GpsTrace &trace, ImVec2 size) {
   if (trace.points.size() <= 1) {
     return MAP_SINGLE_POINT_MIN_ZOOM;
   }
-  const int fit_zoom = fit_map_zoom_for_bounds(bounds.valid() ? bounds : requested_bounds_for_trace(trace), size.x, size.y);
-  return std::clamp(fit_zoom - 1, MAP_MIN_ZOOM, MAP_MAX_ZOOM);
+  const int fit_zoom = fit_map_zoom_for_bounds(bounds.valid() ? bounds : requested_bounds_for_trace(trace),
+                                               size.x, size.y, MAP_MIN_ZOOM_FILL);
+  return std::clamp(fit_zoom, MAP_MIN_ZOOM, MAP_MAX_ZOOM);
 }
 
 std::optional<GpsPoint> interpolate_gps(const GpsTrace &trace, double time_value) {
@@ -280,7 +388,7 @@ ImU32 map_timeline_color(TimelineEntry::Type type, float alpha = 1.0f) {
   }
 }
 
-ImVec2 gps_to_screen(double lat, double lon, int zoom, double top_left_x, double top_left_y, const ImVec2 &rect_min) {
+ImVec2 gps_to_screen(double lat, double lon, double zoom, double top_left_x, double top_left_y, const ImVec2 &rect_min) {
   return ImVec2(rect_min.x + static_cast<float>(lon_to_world_x(lon, zoom) - top_left_x),
                 rect_min.y + static_cast<float>(lat_to_world_y(lat, zoom) - top_left_y));
 }
@@ -349,16 +457,57 @@ fs::path basemap_cache_root() {
 
 std::string bounds_key(const GeoBounds &bounds) {
   char buf[128];
-  std::snprintf(buf, sizeof(buf), "v1_%.5f_%.5f_%.5f_%.5f",
+  std::snprintf(buf, sizeof(buf), "v2_%.5f_%.5f_%.5f_%.5f",
                 bounds.south, bounds.west, bounds.north, bounds.east);
   return buf;
 }
 
 fs::path basemap_cache_path(const std::string &key) {
   const uint64_t hash = fnv1a64(key);
-  char buf[24];
-  std::snprintf(buf, sizeof(buf), "%016llx.json", static_cast<unsigned long long>(hash));
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%016llx.bin.zst", static_cast<unsigned long long>(hash));
   return basemap_cache_root() / buf;
+}
+
+uint64_t cache_directory_size_bytes() {
+  uint64_t total = 0;
+  const fs::path root = basemap_cache_root();
+  if (!fs::exists(root)) {
+    return 0;
+  }
+  for (const fs::directory_entry &entry : fs::directory_iterator(root)) {
+    if (entry.is_regular_file()) {
+      total += static_cast<uint64_t>(entry.file_size());
+    }
+  }
+  return total;
+}
+
+size_t cache_directory_file_count() {
+  size_t count = 0;
+  const fs::path root = basemap_cache_root();
+  if (!fs::exists(root)) {
+    return 0;
+  }
+  for (const fs::directory_entry &entry : fs::directory_iterator(root)) {
+    if (entry.is_regular_file()) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+void clear_cache_directory() {
+  const fs::path root = basemap_cache_root();
+  if (!fs::exists(root)) {
+    return;
+  }
+  for (const fs::directory_entry &entry : fs::directory_iterator(root)) {
+    if (entry.is_regular_file()) {
+      std::error_code ec;
+      fs::remove(entry.path(), ec);
+    }
+  }
 }
 
 std::string read_binary_file(const fs::path &path) {
@@ -393,90 +542,289 @@ std::string percent_encode(std::string_view text) {
   return out;
 }
 
-std::string overpass_query(const GeoBounds &bounds) {
+std::string shell_quote(std::string_view text) {
+  std::string out = "'";
+  for (char c : text) {
+    if (c == '\'') {
+      out += "'\\''";
+    } else {
+      out.push_back(c);
+    }
+  }
+  out.push_back('\'');
+  return out;
+}
+
+std::string route_google_maps_url(const GpsTrace &trace) {
+  if (trace.points.size() < 2) return {};
+  auto coord = [](const GpsPoint &p) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.5f,%.5f", p.lat, p.lon);
+    return std::string(buf);
+  };
+  std::string url = "https://www.google.com/maps/dir/?api=1&travelmode=driving&origin="
+                  + coord(trace.points.front()) + "&destination=" + coord(trace.points.back());
+  const size_t n = std::min<size_t>(9, trace.points.size() > 2 ? trace.points.size() - 2 : 0);
+  if (n > 0) {
+    url += "&waypoints=";
+    for (size_t i = 0; i < n; ++i) {
+      if (i) url += "%7C";
+      url += coord(trace.points[1 + ((trace.points.size() - 2) * (i + 1)) / (n + 1)]);
+    }
+  }
+  return url;
+}
+
+void open_external_url(std::string_view url) {
+#ifdef __APPLE__
+  const std::string command = "open " + shell_quote(url) + " &";
+#else
+  const std::string command = "xdg-open " + shell_quote(url) + " >/dev/null 2>&1 &";
+#endif
+  const int ret = std::system(command.c_str());
+  (void)ret;
+}
+
+std::string bbox_string(const GeoBounds &bounds) {
   char bbox[128];
   std::snprintf(bbox, sizeof(bbox), "%.6f,%.6f,%.6f,%.6f",
                 bounds.south, bounds.west, bounds.north, bounds.east);
-  return std::string("[out:json][timeout:25];(")
-       + "way[\"highway\"][\"area\"!=\"yes\"](" + bbox + ");"
-       + "way[\"natural\"=\"water\"](" + bbox + ");"
-       + "way[\"waterway\"=\"riverbank\"](" + bbox + ");"
-       + "way[\"waterway\"~\"river|stream|canal\"](" + bbox + ");"
-       + ");out tags geom;";
+  return bbox;
 }
 
-bool fetch_overpass_json(const GeoBounds &bounds, std::string *out) {
-  static std::once_flag network_once;
-  std::call_once(network_once, []() {
-    avformat_network_init();
-  });
+MapRequestSpec build_request_for_trace(const GpsTrace &trace) {
+  const std::vector<GeoBounds> boxes = corridor_boxes_for_trace(trace);
+  GeoBounds union_bounds;
+  std::string query = "[out:json][timeout:25];(";
+  for (const GeoBounds &box : boxes) {
+    union_bounds = merge_bounds(union_bounds, box);
+    const std::string bbox = bbox_string(box);
+    query += "way[\"highway\"][\"area\"!=\"yes\"](" + bbox + ");";
+    query += "way[\"natural\"=\"water\"](" + bbox + ");";
+    query += "way[\"waterway\"=\"riverbank\"](" + bbox + ");";
+    query += "way[\"waterway\"~\"river|stream|canal\"](" + bbox + ");";
+  }
+  query += ");out tags geom;";
 
-  const std::string body = std::string("data=") + percent_encode(overpass_query(bounds));
-  const std::string headers = "Content-Type: application/x-www-form-urlencoded; charset=UTF-8\r\n"
-                              "User-Agent: jotpluggler-vector-map/1.0\r\n";
+  std::string key = bounds_key(union_bounds);
+  key += ":";
+  key += std::to_string(boxes.size());
+  for (const GeoBounds &box : boxes) {
+    key += ":";
+    key += bbox_string(box);
+  }
+  return MapRequestSpec{
+    .key = std::move(key),
+    .bounds = union_bounds,
+    .query = std::move(query),
+  };
+}
+
+bool fetch_overpass_json(std::string_view query, std::string *out) {
+  const std::string body = std::string("data=") + percent_encode(query);
   for (const char *endpoint : MAP_QUERY_ENDPOINTS) {
-    std::string response;
-    AVDictionary *options = nullptr;
-    av_dict_set(&options, "method", "POST", 0);
-    av_dict_set(&options, "headers", headers.c_str(), 0);
-    av_dict_set(&options, "post_data", body.c_str(), 0);
-    av_dict_set(&options, "send_expect_100", "0", 0);
-    av_dict_set(&options, "timeout", "15000000", 0);
-    AVIOContext *io = nullptr;
-    const int open_err = avio_open2(&io, endpoint, AVIO_FLAG_READ, nullptr, &options);
-    av_dict_free(&options);
-    if (open_err < 0 || io == nullptr) {
-      if (io != nullptr) {
-        avio_close(io);
-      }
-      continue;
-    }
-
-    std::array<uint8_t, 16384> buffer = {};
-    while (true) {
-      const int n = avio_read(io, buffer.data(), static_cast<int>(buffer.size()));
-      if (n > 0) {
-        response.append(reinterpret_cast<const char *>(buffer.data()), static_cast<size_t>(n));
-        continue;
-      }
-      if (n == AVERROR_EOF || n == 0) {
-        break;
-      }
-      response.clear();
-      break;
-    }
-    avio_close(io);
-
+    const std::string command = "curl -fsSL --compressed --connect-timeout 8 --max-time 30 "
+                              "-A 'jotpluggler-vector-map/1.0' "
+                              "-H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' "
+                              "--data-raw " + shell_quote(body) + " "
+                              + shell_quote(endpoint);
+    const std::string response = util::check_output(command);
     if (!response.empty() && response.front() == '{') {
-      *out = std::move(response);
+      *out = response;
       return true;
     }
   }
   return false;
 }
 
-std::string load_overpass_json(const GeoBounds &bounds, const std::string &key) {
-  const fs::path cache_path = basemap_cache_path(key);
-  if (fs::exists(cache_path)) {
-    return read_binary_file(cache_path);
-  }
+std::string load_overpass_json(std::string_view query) {
   std::string response;
-  if (!fetch_overpass_json(bounds, &response)) {
+  if (!fetch_overpass_json(query, &response)) {
     return {};
   }
-  write_binary_file(cache_path, response);
   return response;
 }
 
-std::vector<GeoPoint> geometry_points(const json11::Json &geometry_json) {
-  std::vector<GeoPoint> points;
+template <typename T>
+void append_pod(std::string *out, const T &value) {
+  const size_t start = out->size();
+  out->resize(start + sizeof(T));
+  std::memcpy(out->data() + start, &value, sizeof(T));
+}
+
+template <typename T>
+bool read_pod(std::string_view data, size_t *offset, T *value) {
+  if (*offset + sizeof(T) > data.size()) {
+    return false;
+  }
+  std::memcpy(value, data.data() + *offset, sizeof(T));
+  *offset += sizeof(T);
+  return true;
+}
+
+void append_points(std::string *out, const std::vector<ProjectedPoint> &points) {
+  const uint32_t count = static_cast<uint32_t>(points.size());
+  append_pod(out, count);
+  for (const ProjectedPoint &point : points) {
+    append_pod(out, point.x);
+    append_pod(out, point.y);
+  }
+}
+
+bool read_points(std::string_view data, size_t *offset, std::vector<ProjectedPoint> *points) {
+  uint32_t count = 0;
+  if (!read_pod(data, offset, &count)) {
+    return false;
+  }
+  points->clear();
+  points->reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    ProjectedPoint point;
+    if (!read_pod(data, offset, &point.x) || !read_pod(data, offset, &point.y)) {
+      return false;
+    }
+    points->push_back(point);
+  }
+  return true;
+}
+
+std::string serialize_basemap_payload(const RouteBasemap &basemap) {
+  std::string raw;
+  raw.reserve(1024 + basemap.roads.size() * 48);
+  raw.append("JBM2", 4);
+  append_pod(&raw, basemap.bounds.south);
+  append_pod(&raw, basemap.bounds.west);
+  append_pod(&raw, basemap.bounds.north);
+  append_pod(&raw, basemap.bounds.east);
+
+  const uint32_t road_count = static_cast<uint32_t>(basemap.roads.size());
+  const uint32_t water_line_count = static_cast<uint32_t>(basemap.water_lines.size());
+  const uint32_t water_polygon_count = static_cast<uint32_t>(basemap.water_polygons.size());
+  append_pod(&raw, road_count);
+  append_pod(&raw, water_line_count);
+  append_pod(&raw, water_polygon_count);
+
+  for (const RoadFeature &road : basemap.roads) {
+    const uint8_t kind = static_cast<uint8_t>(road.road_class);
+    append_pod(&raw, kind);
+    append_points(&raw, road.points);
+  }
+  for (const WaterLineFeature &water : basemap.water_lines) {
+    append_points(&raw, water.points);
+  }
+  for (const WaterPolygonFeature &water : basemap.water_polygons) {
+    append_points(&raw, water.ring);
+  }
+  return raw;
+}
+
+std::optional<RouteBasemap> deserialize_basemap_payload(std::string_view raw, const std::string &key) {
+  if (raw.size() < 4 || raw.substr(0, 4) != "JBM2") {
+    return std::nullopt;
+  }
+  size_t offset = 4;
+  RouteBasemap basemap;
+  basemap.key = key;
+  if (!read_pod(raw, &offset, &basemap.bounds.south)
+      || !read_pod(raw, &offset, &basemap.bounds.west)
+      || !read_pod(raw, &offset, &basemap.bounds.north)
+      || !read_pod(raw, &offset, &basemap.bounds.east)) {
+    return std::nullopt;
+  }
+  basemap.projected_bounds = project_bounds0(basemap.bounds);
+
+  uint32_t road_count = 0;
+  uint32_t water_line_count = 0;
+  uint32_t water_polygon_count = 0;
+  if (!read_pod(raw, &offset, &road_count)
+      || !read_pod(raw, &offset, &water_line_count)
+      || !read_pod(raw, &offset, &water_polygon_count)) {
+    return std::nullopt;
+  }
+
+  basemap.roads.reserve(road_count);
+  for (uint32_t i = 0; i < road_count; ++i) {
+    uint8_t kind = 0;
+    std::vector<ProjectedPoint> points;
+    if (!read_pod(raw, &offset, &kind) || !read_points(raw, &offset, &points)) {
+      return std::nullopt;
+    }
+    basemap.roads.push_back(RoadFeature{
+      .road_class = static_cast<RoadClass>(kind),
+      .bounds = compute_projected_bounds(points),
+      .points = std::move(points),
+    });
+  }
+
+  basemap.water_lines.reserve(water_line_count);
+  for (uint32_t i = 0; i < water_line_count; ++i) {
+    std::vector<ProjectedPoint> points;
+    if (!read_points(raw, &offset, &points)) {
+      return std::nullopt;
+    }
+    basemap.water_lines.push_back(WaterLineFeature{
+      .bounds = compute_projected_bounds(points),
+      .points = std::move(points),
+    });
+  }
+
+  basemap.water_polygons.reserve(water_polygon_count);
+  for (uint32_t i = 0; i < water_polygon_count; ++i) {
+    std::vector<ProjectedPoint> ring;
+    if (!read_points(raw, &offset, &ring)) {
+      return std::nullopt;
+    }
+    basemap.water_polygons.push_back(WaterPolygonFeature{
+      .bounds = compute_projected_bounds(ring),
+      .ring = std::move(ring),
+    });
+  }
+  return basemap;
+}
+
+bool save_compressed_basemap(const fs::path &path, const RouteBasemap &basemap) {
+  const std::string raw = serialize_basemap_payload(basemap);
+  const size_t bound = ZSTD_compressBound(raw.size());
+  std::string compressed(bound, '\0');
+  const size_t size = ZSTD_compress(compressed.data(), compressed.size(), raw.data(), raw.size(), 5);
+  if (ZSTD_isError(size)) {
+    return false;
+  }
+  compressed.resize(size);
+  write_binary_file(path, compressed);
+  return true;
+}
+
+std::optional<RouteBasemap> load_compressed_basemap(const fs::path &path, const std::string &key) {
+  const std::string compressed = read_binary_file(path);
+  if (compressed.empty()) {
+    return std::nullopt;
+  }
+  const unsigned long long raw_size = ZSTD_getFrameContentSize(compressed.data(), compressed.size());
+  if (raw_size == ZSTD_CONTENTSIZE_ERROR || raw_size == ZSTD_CONTENTSIZE_UNKNOWN || raw_size > (1ULL << 31)) {
+    return std::nullopt;
+  }
+  std::string raw(static_cast<size_t>(raw_size), '\0');
+  const size_t actual = ZSTD_decompress(raw.data(), raw.size(), compressed.data(), compressed.size());
+  if (ZSTD_isError(actual)) {
+    return std::nullopt;
+  }
+  raw.resize(actual);
+  return deserialize_basemap_payload(raw, key);
+}
+
+std::vector<ProjectedPoint> geometry_points(const json11::Json &geometry_json) {
+  std::vector<ProjectedPoint> points;
   const auto items = geometry_json.array_items();
   points.reserve(items.size());
   for (const json11::Json &point : items) {
     if (!point["lat"].is_number() || !point["lon"].is_number()) {
       continue;
     }
-    points.push_back(GeoPoint{.lat = point["lat"].number_value(), .lon = point["lon"].number_value()});
+    points.push_back(ProjectedPoint{
+      .x = project_lon0(point["lon"].number_value()),
+      .y = project_lat0(point["lat"].number_value()),
+    });
   }
   return points;
 }
@@ -507,13 +855,14 @@ std::optional<RouteBasemap> parse_basemap_json(const std::string &raw, const Geo
   RouteBasemap basemap;
   basemap.key = key;
   basemap.bounds = bounds;
+  basemap.projected_bounds = project_bounds0(bounds);
 
   for (const json11::Json &element : root["elements"].array_items()) {
     if (element["type"].string_value() != "way") {
       continue;
     }
     const json11::Json &tags = element["tags"];
-    const std::vector<GeoPoint> points = geometry_points(element["geometry"]);
+    const std::vector<ProjectedPoint> points = geometry_points(element["geometry"]);
     if (points.size() < 2) {
       continue;
     }
@@ -526,7 +875,7 @@ std::optional<RouteBasemap> parse_basemap_json(const std::string &raw, const Geo
       }
       basemap.roads.push_back(RoadFeature{
         .road_class = *road_class,
-        .bounds = compute_feature_bounds(points),
+        .bounds = compute_projected_bounds(points),
         .points = points,
       });
       continue;
@@ -535,18 +884,18 @@ std::optional<RouteBasemap> parse_basemap_json(const std::string &raw, const Geo
     const std::string natural = tags["natural"].string_value();
     const std::string waterway = tags["waterway"].string_value();
     const bool closed = points.size() >= 4
-                     && std::abs(points.front().lat - points.back().lat) < 1.0e-9
-                     && std::abs(points.front().lon - points.back().lon) < 1.0e-9;
+                     && std::abs(points.front().x - points.back().x) < 1.0e-6f
+                     && std::abs(points.front().y - points.back().y) < 1.0e-6f;
     if ((natural == "water" || waterway == "riverbank") && closed) {
       basemap.water_polygons.push_back(WaterPolygonFeature{
-        .bounds = compute_feature_bounds(points),
+        .bounds = compute_projected_bounds(points),
         .ring = points,
       });
       continue;
     }
     if (waterway == "river" || waterway == "stream" || waterway == "canal") {
       basemap.water_lines.push_back(WaterLineFeature{
-        .bounds = compute_feature_bounds(points),
+        .bounds = compute_projected_bounds(points),
         .points = points,
       });
     }
@@ -568,8 +917,8 @@ constexpr ImU32 MAP_WATER_OUTLINE = IM_COL32(143, 173, 201, 220);
 constexpr ImU32 MAP_WATER_LINE = IM_COL32(156, 186, 214, 205);
 constexpr ImU32 MAP_ROUTE_HALO = IM_COL32(31, 40, 50, 92);
 
-RoadPaint road_paint(RoadClass road_class, int zoom) {
-  const float scale = std::clamp(0.88f + 0.12f * static_cast<float>(zoom - 12), 0.76f, 1.95f);
+RoadPaint road_paint(RoadClass road_class, float zoom) {
+  const float scale = std::clamp(0.88f + 0.12f * (zoom - 12.0f), 0.76f, 1.95f);
   switch (road_class) {
     case RoadClass::Motorway:
       return {
@@ -607,7 +956,7 @@ void clamp_map_center(TabUiState::MapPaneState *map_state, const GeoBounds &boun
   if (!bounds.valid() || size.x <= 1.0f || size.y <= 1.0f) {
     return;
   }
-  const int zoom = map_state->zoom;
+  const double zoom = map_state->zoom;
   const double min_x = lon_to_world_x(bounds.west, zoom);
   const double max_x = lon_to_world_x(bounds.east, zoom);
   const double min_y = lat_to_world_y(bounds.north, zoom);
@@ -643,11 +992,12 @@ void initialize_map_pane_state(TabUiState::MapPaneState *map_state,
   map_state->follow = mode == SessionDataMode::Stream;
   const int min_zoom = minimum_allowed_map_zoom(bounds, trace, size);
   if (mode == SessionDataMode::Stream && cursor_point.has_value()) {
-    map_state->zoom = std::max(16, min_zoom);
+    map_state->zoom = std::max(16.0f, static_cast<float>(min_zoom));
     map_state->center_lat = cursor_point->lat;
     map_state->center_lon = cursor_point->lon;
   } else {
-    map_state->zoom = std::max(fit_map_zoom_for_trace(trace, size.x, size.y), min_zoom);
+    map_state->zoom = std::max(static_cast<float>(fit_map_zoom_for_trace(trace, size.x, size.y)),
+                               static_cast<float>(min_zoom));
     map_state->center_lat = map_trace_center_lat(trace);
     map_state->center_lon = map_trace_center_lon(trace);
   }
@@ -655,8 +1005,8 @@ void initialize_map_pane_state(TabUiState::MapPaneState *map_state,
 }
 
 void draw_feature_polyline(ImDrawList *draw_list,
-                           const std::vector<GeoPoint> &points,
-                           int zoom,
+                           const std::vector<ProjectedPoint> &points,
+                           float zoom_scale,
                            double top_left_x,
                            double top_left_y,
                            const ImVec2 &rect_min,
@@ -668,8 +1018,9 @@ void draw_feature_polyline(ImDrawList *draw_list,
   }
   std::vector<ImVec2> screen;
   screen.reserve(points.size());
-  for (const GeoPoint &point : points) {
-    screen.push_back(gps_to_screen(point.lat, point.lon, zoom, top_left_x, top_left_y, rect_min));
+  for (const ProjectedPoint &point : points) {
+    screen.push_back(ImVec2(rect_min.x + point.x * zoom_scale - static_cast<float>(top_left_x),
+                            rect_min.y + point.y * zoom_scale - static_cast<float>(top_left_y)));
   }
   draw_list->AddPolyline(screen.data(), static_cast<int>(screen.size()), color,
                          closed ? ImDrawFlags_Closed : ImDrawFlags_None, thickness);
@@ -677,7 +1028,7 @@ void draw_feature_polyline(ImDrawList *draw_list,
 
 void draw_water_polygon(ImDrawList *draw_list,
                         const WaterPolygonFeature &feature,
-                        int zoom,
+                        float zoom_scale,
                         double top_left_x,
                         double top_left_y,
                         const ImVec2 &rect_min) {
@@ -686,8 +1037,9 @@ void draw_water_polygon(ImDrawList *draw_list,
   }
   std::vector<ImVec2> screen;
   screen.reserve(feature.ring.size());
-  for (const GeoPoint &point : feature.ring) {
-    screen.push_back(gps_to_screen(point.lat, point.lon, zoom, top_left_x, top_left_y, rect_min));
+  for (const ProjectedPoint &point : feature.ring) {
+    screen.push_back(ImVec2(rect_min.x + point.x * zoom_scale - static_cast<float>(top_left_x),
+                            rect_min.y + point.y * zoom_scale - static_cast<float>(top_left_y)));
   }
   if (screen.size() >= 3 && is_convex_ring(screen)) {
     draw_list->AddConvexPolyFilled(screen.data(), static_cast<int>(screen.size()), MAP_WATER_FILL);
@@ -696,12 +1048,64 @@ void draw_water_polygon(ImDrawList *draw_list,
                          ImDrawFlags_Closed, 1.8f);
 }
 
+void draw_edge_fade(ImDrawList *draw_list,
+                    const GeoBounds &bounds,
+                    double zoom,
+                    double top_left_x,
+                    double top_left_y,
+                    const ImVec2 &rect_min,
+                    const ImVec2 &rect_max) {
+  if (!bounds.valid()) {
+    return;
+  }
+
+  const float west_x = rect_min.x + static_cast<float>(lon_to_world_x(bounds.west, zoom) - top_left_x);
+  const float east_x = rect_min.x + static_cast<float>(lon_to_world_x(bounds.east, zoom) - top_left_x);
+  const float north_y = rect_min.y + static_cast<float>(lat_to_world_y(bounds.north, zoom) - top_left_y);
+  const float south_y = rect_min.y + static_cast<float>(lat_to_world_y(bounds.south, zoom) - top_left_y);
+
+  const float fade_x = std::max(28.0f, (rect_max.x - rect_min.x) * MAP_EDGE_FADE_FRAC);
+  const float fade_y = std::max(28.0f, (rect_max.y - rect_min.y) * MAP_EDGE_FADE_FRAC);
+  const ImU32 solid = MAP_BG_COLOR;
+  const ImU32 clear = IM_COL32(244, 243, 238, 6);
+
+  if (west_x > rect_min.x) {
+    const float x0 = rect_min.x;
+    const float x1 = std::min(rect_max.x, west_x);
+    const float xfade = std::max(x0, x1 - fade_x);
+    draw_list->AddRectFilledMultiColor(ImVec2(x0, rect_min.y), ImVec2(xfade, rect_max.y), solid, solid, solid, solid);
+    draw_list->AddRectFilledMultiColor(ImVec2(xfade, rect_min.y), ImVec2(x1, rect_max.y), solid, clear, clear, solid);
+  }
+  if (east_x < rect_max.x) {
+    const float x0 = std::max(rect_min.x, east_x);
+    const float x1 = rect_max.x;
+    const float xfade = std::min(x1, x0 + fade_x);
+    draw_list->AddRectFilledMultiColor(ImVec2(x0, rect_min.y), ImVec2(xfade, rect_max.y), clear, solid, solid, clear);
+    draw_list->AddRectFilledMultiColor(ImVec2(xfade, rect_min.y), ImVec2(x1, rect_max.y), solid, solid, solid, solid);
+  }
+  if (north_y > rect_min.y) {
+    const float y0 = rect_min.y;
+    const float y1 = std::min(rect_max.y, north_y);
+    const float yfade = std::max(y0, y1 - fade_y);
+    draw_list->AddRectFilledMultiColor(ImVec2(rect_min.x, y0), ImVec2(rect_max.x, yfade), solid, solid, solid, solid);
+    draw_list->AddRectFilledMultiColor(ImVec2(rect_min.x, yfade), ImVec2(rect_max.x, y1), solid, solid, clear, clear);
+  }
+  if (south_y < rect_max.y) {
+    const float y0 = std::max(rect_min.y, south_y);
+    const float y1 = rect_max.y;
+    const float yfade = std::min(y1, y0 + fade_y);
+    draw_list->AddRectFilledMultiColor(ImVec2(rect_min.x, y0), ImVec2(rect_max.x, yfade), clear, clear, solid, solid);
+    draw_list->AddRectFilledMultiColor(ImVec2(rect_min.x, yfade), ImVec2(rect_max.x, y1), solid, solid, solid, solid);
+  }
+}
+
 }  // namespace
 
 struct MapDataManager::Impl {
   struct Request {
     std::string key;
     GeoBounds bounds;
+    std::string query;
   };
 
   Impl() : worker([this]() { run(); }) {}
@@ -721,24 +1125,32 @@ struct MapDataManager::Impl {
     if (trace.points.empty()) {
       return;
     }
-    const GeoBounds wanted = requested_bounds_for_trace(trace);
-    if (!wanted.valid()) {
+    const MapRequestSpec wanted = build_request_for_trace(trace);
+    if (!wanted.bounds.valid()) {
       return;
     }
 
     std::lock_guard<std::mutex> lock(mutex);
-    if (current && bounds_contains_bounds(current->bounds, wanted)) {
+    if (current && current->key == wanted.key) {
       return;
     }
-    if (pending && bounds_contains_bounds(pending->bounds, wanted)) {
+    if (pending && pending->key == wanted.key) {
+      return;
+    }
+
+    if (const auto cached = load_compressed_basemap(basemap_cache_path(wanted.key), wanted.key)) {
+      current = std::make_unique<RouteBasemap>(std::move(*cached));
+      completed.reset();
+      pending.reset();
+      active.reset();
       return;
     }
 
     pending = Request{
-      .key = bounds_key(wanted),
-      .bounds = wanted,
+      .key = wanted.key,
+      .bounds = wanted.bounds,
+      .query = wanted.query,
     };
-    current.reset();
     cv.notify_one();
   }
 
@@ -761,6 +1173,18 @@ struct MapDataManager::Impl {
     return active || pending;
   }
 
+  void clearCache() {
+    std::lock_guard<std::mutex> lock(mutex);
+    clear_cache_directory();
+  }
+
+  MapCacheStats cacheStats() const {
+    return MapCacheStats{
+      .bytes = cache_directory_size_bytes(),
+      .files = cache_directory_file_count(),
+    };
+  }
+
   const RouteBasemap *currentData() const {
     return current.get();
   }
@@ -780,9 +1204,12 @@ struct MapDataManager::Impl {
       }
 
       std::optional<RouteBasemap> parsed;
-      const std::string raw = load_overpass_json(request.bounds, request.key);
+      const std::string raw = load_overpass_json(request.query);
       if (!raw.empty()) {
         parsed = parse_basemap_json(raw, request.bounds, request.key);
+        if (parsed) {
+          save_compressed_basemap(basemap_cache_path(request.key), *parsed);
+        }
       }
 
       {
@@ -824,6 +1251,14 @@ const RouteBasemap *MapDataManager::current() const {
   return impl_->currentData();
 }
 
+void MapDataManager::clearCache() {
+  impl_->clearCache();
+}
+
+MapCacheStats MapDataManager::cacheStats() const {
+  return impl_->cacheStats();
+}
+
 void draw_map_pane(AppSession *session, UiState *state, Pane *, int pane_index) {
   TabUiState *tab_state = app_active_tab_state(state);
   if (tab_state == nullptr || pane_index < 0 || pane_index >= static_cast<int>(tab_state->map_panes.size())) {
@@ -846,6 +1281,7 @@ void draw_map_pane(AppSession *session, UiState *state, Pane *, int pane_index) 
   const ImVec2 rect_min = ImGui::GetCursorScreenPos();
   const ImVec2 size = ImGui::GetContentRegionAvail();
   const ImVec2 input_size(std::max(1.0f, size.x - 22.0f), std::max(1.0f, size.y));
+  ImGui::SetNextItemAllowOverlap();
   ImGui::InvisibleButton("##map_canvas", input_size);
   const ImVec2 rect_max(rect_min.x + size.x, rect_min.y + size.y);
   const float rect_width = rect_max.x - rect_min.x;
@@ -874,7 +1310,7 @@ void draw_map_pane(AppSession *session, UiState *state, Pane *, int pane_index) 
 
   const int min_zoom = minimum_allowed_map_zoom(map_bounds, trace, size);
   if (map_state.follow && cursor_point.has_value()) {
-    const int follow_zoom = std::clamp(map_state.zoom, min_zoom, MAP_MAX_ZOOM);
+    const float follow_zoom = std::clamp(map_state.zoom, static_cast<float>(min_zoom), static_cast<float>(MAP_MAX_ZOOM));
     const double center_x = lon_to_world_x(map_state.center_lon, follow_zoom);
     const double center_y = lat_to_world_y(map_state.center_lat, follow_zoom);
     const double top_left_x = center_x - rect_width * 0.5;
@@ -886,25 +1322,26 @@ void draw_map_pane(AppSession *session, UiState *state, Pane *, int pane_index) 
     }
   }
 
-  map_state.zoom = std::clamp(map_state.zoom, min_zoom, MAP_MAX_ZOOM);
+  map_state.zoom = std::clamp(map_state.zoom, static_cast<float>(min_zoom), static_cast<float>(MAP_MAX_ZOOM));
   clamp_map_center(&map_state, map_bounds, size);
 
-  const int zoom = map_state.zoom;
+  const double zoom = map_state.zoom;
+  const float zoom_scale = static_cast<float>(std::exp2(zoom));
   const double center_x = lon_to_world_x(map_state.center_lon, zoom);
   const double center_y = lat_to_world_y(map_state.center_lat, zoom);
   const double top_left_x = center_x - rect_width * 0.5;
   const double top_left_y = center_y - rect_height * 0.5;
-  const GeoBounds current_view = view_bounds(top_left_x, top_left_y, rect_width, rect_height, zoom);
+  const ProjectedBounds current_view = view_bounds(top_left_x, top_left_y, rect_width, rect_height);
 
   if (basemap != nullptr) {
     for (const WaterPolygonFeature &water : basemap->water_polygons) {
-      if (feature_intersects_view(water.bounds, current_view)) {
-        draw_water_polygon(draw_list, water, zoom, top_left_x, top_left_y, rect_min);
+      if (feature_intersects_view(water.bounds, current_view, zoom_scale)) {
+        draw_water_polygon(draw_list, water, zoom_scale, top_left_x, top_left_y, rect_min);
       }
     }
     for (const WaterLineFeature &water : basemap->water_lines) {
-      if (feature_intersects_view(water.bounds, current_view)) {
-        draw_feature_polyline(draw_list, water.points, zoom, top_left_x, top_left_y, rect_min,
+      if (feature_intersects_view(water.bounds, current_view, zoom_scale)) {
+        draw_feature_polyline(draw_list, water.points, zoom_scale, top_left_x, top_left_y, rect_min,
                               MAP_WATER_LINE, 2.4f);
       }
     }
@@ -916,17 +1353,21 @@ void draw_map_pane(AppSession *session, UiState *state, Pane *, int pane_index) 
       RoadClass::Motorway,
     };
     for (RoadClass road_class : order) {
-      const RoadPaint paint = road_paint(road_class, zoom);
+      const RoadPaint paint = road_paint(road_class, static_cast<float>(zoom));
       for (const RoadFeature &road : basemap->roads) {
-        if (road.road_class != road_class || !feature_intersects_view(road.bounds, current_view)) {
+        if (road.road_class != road_class || !feature_intersects_view(road.bounds, current_view, zoom_scale)) {
           continue;
         }
-        draw_feature_polyline(draw_list, road.points, zoom, top_left_x, top_left_y, rect_min,
+        draw_feature_polyline(draw_list, road.points, zoom_scale, top_left_x, top_left_y, rect_min,
                               paint.casing, paint.casing_width);
-        draw_feature_polyline(draw_list, road.points, zoom, top_left_x, top_left_y, rect_min,
+        draw_feature_polyline(draw_list, road.points, zoom_scale, top_left_x, top_left_y, rect_min,
                               paint.fill, paint.fill_width);
       }
     }
+  }
+
+  if (basemap != nullptr) {
+    draw_edge_fade(draw_list, basemap->bounds, zoom, top_left_x, top_left_y, rect_min, rect_max);
   }
 
   for (size_t i = 1; i < trace.points.size(); ++i) {
@@ -955,11 +1396,31 @@ void draw_map_pane(AppSession *session, UiState *state, Pane *, int pane_index) 
   }
   draw_list->PopClipRect();
 
-  const bool hovered = ImGui::IsItemHovered();
-  const bool double_clicked = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+  const bool canvas_hovered = ImGui::IsItemHovered();
+  const bool double_clicked = canvas_hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+  bool overlay_hovered = false;
+  if (const std::string google_maps_url = route_google_maps_url(trace); !google_maps_url.empty()) {
+    const char *link_icon = bootstrap_icons::glyph("box-arrow-up-right");
+    std::string label = std::string("Google Maps ");
+    label += (link_icon != nullptr && link_icon[0] != '\0') ? link_icon : ">";
+    const ImVec2 text_size = ImGui::CalcTextSize(label.c_str());
+    const ImVec2 button_size(text_size.x + 20.0f, text_size.y + 10.0f);
+    const ImVec2 button_pos(rect_max.x - button_size.x - 28.0f, rect_min.y + 10.0f);
+    ImGui::SetCursorScreenPos(button_pos);
+    ImGui::SetNextItemAllowOverlap();
+    if (ImGui::Button("##open_google_maps", button_size)) {
+      open_external_url(google_maps_url);
+      state->status_text = "Opened Google Maps";
+    }
+    overlay_hovered = ImGui::IsItemHovered();
+    draw_list->AddText(ImVec2(button_pos.x + 10.0f, button_pos.y + (button_size.y - text_size.y) * 0.5f),
+                       ImGui::GetColorU32(ImGuiCol_Text), label.c_str());
+  }
+  const bool hovered = canvas_hovered && !overlay_hovered;
   if (hovered && ImGui::GetIO().MouseWheel != 0.0f) {
-    const int next_zoom = std::clamp(zoom + (ImGui::GetIO().MouseWheel > 0.0f ? 1 : -1), min_zoom, MAP_MAX_ZOOM);
-    if (next_zoom != zoom) {
+    const float next_zoom = std::clamp(static_cast<float>(zoom) + ImGui::GetIO().MouseWheel * MAP_WHEEL_ZOOM_STEP,
+                                       static_cast<float>(min_zoom), static_cast<float>(MAP_MAX_ZOOM));
+    if (std::abs(next_zoom - zoom) > 1.0e-4f) {
       const ImVec2 mouse = ImGui::GetIO().MousePos;
       const double mouse_world_x = top_left_x + (mouse.x - rect_min.x);
       const double mouse_world_y = top_left_y + (mouse.y - rect_min.y);

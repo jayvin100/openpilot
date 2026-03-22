@@ -836,6 +836,41 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       }
       ImGui::EndCombo();
     }
+    if (session->map_data) {
+      const auto format_bytes = [](uint64_t bytes) {
+        char buf[64];
+        if (bytes >= (1ULL << 30)) {
+          std::snprintf(buf, sizeof(buf), "%.1f GiB", static_cast<double>(bytes) / static_cast<double>(1ULL << 30));
+        } else if (bytes >= (1ULL << 20)) {
+          std::snprintf(buf, sizeof(buf), "%.1f MiB", static_cast<double>(bytes) / static_cast<double>(1ULL << 20));
+        } else if (bytes >= (1ULL << 10)) {
+          std::snprintf(buf, sizeof(buf), "%.1f KiB", static_cast<double>(bytes) / static_cast<double>(1ULL << 10));
+        } else {
+          std::snprintf(buf, sizeof(buf), "%llu B", static_cast<unsigned long long>(bytes));
+        }
+        return std::string(buf);
+      };
+      const MapCacheStats cache = session->map_data->cacheStats();
+      ImGui::TextDisabled("Map cache: %s in %zu file%s",
+                          format_bytes(cache.bytes).c_str(),
+                          cache.files,
+                          cache.files == 1 ? "" : "s");
+      const bool has_trace = !session->route_data.gps_trace.points.empty();
+      const float cache_button_gap = ImGui::GetStyle().ItemSpacing.x;
+      const float cache_row_width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+      const float cache_button_width = std::max(1.0f, (cache_row_width - cache_button_gap) * 0.5f);
+      ImGui::BeginDisabled(!has_trace);
+      if (ImGui::Button("Preload Map", ImVec2(cache_button_width, 0.0f))) {
+        session->map_data->ensureTrace(session->route_data.gps_trace);
+        state->status_text = "Started map preload";
+      }
+      ImGui::SameLine(0.0f, cache_button_gap);
+      ImGui::EndDisabled();
+      if (ImGui::Button("Clear Cache", ImVec2(cache_button_width, 0.0f))) {
+        session->map_data->clearCache();
+        state->status_text = "Cleared map cache";
+      }
+    }
     ImGui::Spacing();
 
     ImGui::SeparatorText("Data");
@@ -1125,9 +1160,7 @@ bool close_pane(WorkspaceTab *tab, int pane_index) {
     return false;
   }
   if (tab->panes.size() <= 1) {
-    Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
-    pane.curves.clear();
-    pane.title = UNTITLED_PANE_TITLE;
+    tab->panes[static_cast<size_t>(pane_index)] = make_empty_pane();
     return true;
   }
   if (remove_pane_node(&tab->root, pane_index)) return false;
@@ -1718,39 +1751,31 @@ bool build_curve_series(const AppSession &session,
   return prepared->xs.size() > 1 && prepared->xs.size() == prepared->ys.size();
 }
 
-bool draw_close_icon_button(const char *id, bool draw_icon, ImVec2 size = ImVec2(16.0f, 16.0f)) {
-  const bool clicked = ImGui::InvisibleButton(id, size);
-  const bool hovered = ImGui::IsItemHovered();
-  const bool held = ImGui::IsItemActive();
-  if (draw_icon || hovered || held) {
-    ImDrawList *draw_list = ImGui::GetWindowDrawList();
-    const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    const float pad = 4.5f;
-    const ImU32 color = hovered || held
-      ? ImGui::GetColorU32(color_rgb(72, 79, 88))
-      : ImGui::GetColorU32(color_rgb(138, 146, 156));
-    draw_list->AddLine(ImVec2(rect.Min.x + pad, rect.Min.y + pad),
-                       ImVec2(rect.Max.x - pad, rect.Max.y - pad),
-                       color,
-                       1.5f);
-    draw_list->AddLine(ImVec2(rect.Min.x + pad, rect.Max.y - pad),
-                       ImVec2(rect.Max.x - pad, rect.Min.y + pad),
-                       color,
-                       1.5f);
-  }
-  return clicked;
-}
-
 bool draw_pane_close_button_overlay() {
   const ImVec2 window_pos = ImGui::GetWindowPos();
   const ImVec2 content_min = ImGui::GetWindowContentRegionMin();
   const ImVec2 content_max = ImGui::GetWindowContentRegionMax();
-  const ImVec2 button_pos(window_pos.x + content_max.x - 18.0f, window_pos.y + content_min.y + 2.0f);
-  ImGui::SetCursorScreenPos(button_pos);
-  ImGui::PushID("pane_close_overlay");
-  const bool clicked = draw_close_icon_button("##pane_close", true, ImVec2(16.0f, 16.0f));
-  ImGui::PopID();
-  return clicked;
+  const ImRect rect(ImVec2(window_pos.x + content_max.x - 18.0f, window_pos.y + content_min.y + 2.0f),
+                    ImVec2(window_pos.x + content_max.x - 2.0f, window_pos.y + content_min.y + 18.0f));
+  const bool hovered = ImGui::IsMouseHoveringRect(rect.Min, rect.Max, false);
+  const bool held = hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+  if (hovered) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+  }
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  const float pad = 4.5f;
+  const ImU32 color = hovered || held
+    ? ImGui::GetColorU32(color_rgb(72, 79, 88))
+    : ImGui::GetColorU32(color_rgb(138, 146, 156));
+  draw_list->AddLine(ImVec2(rect.Min.x + pad, rect.Min.y + pad),
+                     ImVec2(rect.Max.x - pad, rect.Max.y - pad),
+                     color,
+                     1.5f);
+  draw_list->AddLine(ImVec2(rect.Min.x + pad, rect.Max.y - pad),
+                     ImVec2(rect.Max.x - pad, rect.Min.y + pad),
+                     color,
+                     1.5f);
+  return hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 }
 
 void draw_pane_frame_overlay() {

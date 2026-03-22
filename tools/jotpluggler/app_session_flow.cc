@@ -357,6 +357,30 @@ std::string route_connect_url(const RouteIdentifier &route_id) {
                           : "https://connect.comma.ai/" + route_id.canonical();
 }
 
+std::string route_google_maps_url(const GpsTrace &trace) {
+  if (trace.points.size() < 2) {
+    return {};
+  }
+  auto coord = [](const GpsPoint &p) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.5f,%.5f", p.lat, p.lon);
+    return std::string(buf);
+  };
+  const std::string prefix = "https://www.google.com/maps/dir/?api=1&travelmode=driving&origin="
+                           + coord(trace.points.front()) + "&destination=" + coord(trace.points.back());
+  for (size_t n = std::min<size_t>(9, trace.points.size() > 2 ? trace.points.size() - 2 : 0); ; --n) {
+    std::string url = prefix;
+    if (n > 0) {
+      url += "&waypoints=";
+      for (size_t i = 0; i < n; ++i) {
+        if (i) url += "%7C";
+        url += coord(trace.points[1 + ((trace.points.size() - 2) * (i + 1)) / (n + 1)]);
+      }
+    }
+    if (url.size() <= 1900 || n == 0) return url;
+  }
+}
+
 void open_external_url(std::string_view url) {
 #ifdef __APPLE__
   const std::string command = "open " + shell_quote(url) + " &";
@@ -552,7 +576,6 @@ void draw_route_info_popup(AppSession *session, UiState *state, ImVec2 anchor) {
   const char *link_icon = bootstrap_icons::glyph("box-arrow-up-right");
   if (copy_icon[0] == '\0') copy_icon = "C";
   if (link_icon[0] == '\0') link_icon = ">";
-
   if (draw_popup_icon_button("##copy_route", copy_icon, ImVec2(34.0f, 26.0f), "Copy route")) {
     ImGui::SetClipboardText(session->route_id.canonical().c_str());
     state->status_text = "Copied route to clipboard";

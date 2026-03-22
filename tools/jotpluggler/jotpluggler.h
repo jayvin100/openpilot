@@ -470,7 +470,7 @@ struct TabUiState {
   struct MapPaneState {
     bool initialized = false;
     bool follow = false;
-    int zoom = 1;
+    float zoom = 1.0f;
     double center_lat = 0.0;
     double center_lon = 0.0;
   };
