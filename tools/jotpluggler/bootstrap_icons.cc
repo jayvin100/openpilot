@@ -1,6 +1,5 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
-
 namespace bootstrap_icons {
 namespace {
 namespace fs = std::filesystem;
@@ -11,7 +10,7 @@ struct IconEntry {
 };
 
 // Sorted by id for binary search
-constexpr std::array<IconEntry, 15> kIcons = {{
+constexpr std::array<IconEntry, 15> ICONS = {{
   {"arrow-down-up",         "\xef\x84\xa7"},  // U+F127
   {"arrow-left-right",      "\xef\x84\xab"},  // U+F12B
   {"bar-chart",             "\xef\x85\xbe"},  // U+F17E
@@ -39,7 +38,7 @@ fs::path font_dir() {
 
 }  // namespace
 
-void load_font(float size) {
+void loadFont(float size) {
   const fs::path ttf = font_dir() / "bootstrap-icons.ttf";
   if (!fs::exists(ttf)) {
     return;
@@ -54,17 +53,17 @@ void load_font(float size) {
 }
 
 const char *glyph(std::string_view icon_id) {
-  auto it = std::lower_bound(kIcons.begin(), kIcons.end(), icon_id,
+  auto it = std::lower_bound(ICONS.begin(), ICONS.end(), icon_id,
                              [](const IconEntry &e, std::string_view id) {
                                return std::string_view(e.id) < id;
                              });
-  if (it != kIcons.end() && icon_id == it->id) {
+  if (it != ICONS.end() && icon_id == it->id) {
     return it->utf8;
   }
   return "";
 }
 
-bool menu_item(std::string_view icon_id,
+bool menuItem(std::string_view icon_id,
                const char *label,
                const char *shortcut,
                bool selected,

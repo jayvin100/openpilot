@@ -1,10 +1,8 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
-
 #include <cmath>
 #include <cstdio>
 #include <ctime>
-
 
 namespace {
 
@@ -13,14 +11,14 @@ struct LevelOption {
   int value;
 };
 
-constexpr std::array<LevelOption, 5> kLevelOptions = {{
+constexpr std::array<LevelOption, 5> LEVEL_OPTIONS = {{
   {"DEBUG", 10},
   {"INFO", 20},
   {"WARNING", 30},
   {"ERROR", 40},
   {"CRITICAL", 50},
 }};
-constexpr uint32_t kAllLevelMask = (1u << kLevelOptions.size()) - 1u;
+constexpr uint32_t ALL_LEVEL_MASK = (1u << LEVEL_OPTIONS.size()) - 1u;
 
 bool log_matches_search(const LogEntry &entry, std::string_view query) {
   if (query.empty()) {
@@ -156,7 +154,7 @@ const char *time_mode_label(LogTimeMode mode) {
 }
 
 std::string level_filter_label(uint32_t mask) {
-  if (mask == kAllLevelMask) {
+  if (mask == ALL_LEVEL_MASK) {
     return "All levels";
   }
   if (mask == 0b11110) {
@@ -174,12 +172,12 @@ std::string level_filter_label(uint32_t mask) {
 
   int enabled_count = 0;
   const char *last_label = "None";
-  for (size_t i = 0; i < kLevelOptions.size(); ++i) {
+  for (size_t i = 0; i < LEVEL_OPTIONS.size(); ++i) {
     if ((mask & (1u << i)) == 0) {
       continue;
     }
     ++enabled_count;
-    last_label = kLevelOptions[i].label;
+    last_label = LEVEL_OPTIONS[i].label;
   }
   if (enabled_count == 0) {
     return "None";
@@ -330,14 +328,14 @@ void draw_logs_tab(AppSession *session, UiState *state) {
   ImGui::SetNextItemWidth(110.0f);
   const std::string levels_label = level_filter_label(logs_state.enabled_levels_mask);
   if (ImGui::BeginCombo("##logs_level", levels_label.c_str())) {
-    bool all_levels = logs_state.enabled_levels_mask == kAllLevelMask;
+    bool all_levels = logs_state.enabled_levels_mask == ALL_LEVEL_MASK;
     if (ImGui::Checkbox("All levels", &all_levels)) {
-      logs_state.enabled_levels_mask = all_levels ? kAllLevelMask : 0u;
+      logs_state.enabled_levels_mask = all_levels ? ALL_LEVEL_MASK : 0u;
     }
     ImGui::Separator();
-    for (size_t i = 0; i < kLevelOptions.size(); ++i) {
+    for (size_t i = 0; i < LEVEL_OPTIONS.size(); ++i) {
       bool enabled = (logs_state.enabled_levels_mask & (1u << i)) != 0;
-      if (ImGui::Checkbox(kLevelOptions[i].label, &enabled)) {
+      if (ImGui::Checkbox(LEVEL_OPTIONS[i].label, &enabled)) {
         if (enabled) {
           logs_state.enabled_levels_mask |= (1u << i);
         } else {

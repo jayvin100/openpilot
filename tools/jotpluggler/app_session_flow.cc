@@ -11,7 +11,7 @@ void apply_route_data(AppSession *session, UiState *state, RouteData route_data)
   rebuild_browser_nodes(session, state);
   refresh_all_custom_curves(session, state);
   if (session->camera_feed) {
-    session->camera_feed->set_route_data(session->route_data);
+    session->camera_feed->setRouteData(session->route_data);
   }
   state->has_shared_range = false;
   state->has_tracker_time = false;
@@ -55,7 +55,7 @@ void ensure_shared_range(UiState *state, const AppSession &session) {
   }
 
   if (session.data_mode == SessionDataMode::Stream) {
-    const double target_span = std::max(kMinHorizontalZoomSeconds, session.stream_buffer_seconds);
+    const double target_span = std::max(MIN_HORIZONTAL_ZOOM_SECONDS, session.stream_buffer_seconds);
     if (session.route_data.has_time_range) {
       state->x_view_max = state->route_x_max;
       state->x_view_min = state->x_view_max - target_span;
@@ -103,7 +103,7 @@ void clamp_shared_range(UiState *state, const AppSession &session) {
   if (!state->has_shared_range) {
     return;
   }
-  const double min_span = kMinHorizontalZoomSeconds;
+  const double min_span = MIN_HORIZONTAL_ZOOM_SECONDS;
   double span = state->x_view_max - state->x_view_min;
   if (span < min_span) {
     const double center = 0.5 * (state->x_view_min + state->x_view_max);
@@ -156,8 +156,8 @@ void update_follow_range(UiState *state, const AppSession &session) {
     return;
   }
   const double span = session.data_mode == SessionDataMode::Stream
-    ? std::max(kMinHorizontalZoomSeconds, session.stream_buffer_seconds)
-    : std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
+    ? std::max(MIN_HORIZONTAL_ZOOM_SECONDS, session.stream_buffer_seconds)
+    : std::max(MIN_HORIZONTAL_ZOOM_SECONDS, state->x_view_max - state->x_view_min);
   const double route_span = state->route_x_max - state->route_x_min;
   if (route_span <= 0.0) {
     return;
@@ -182,7 +182,7 @@ void advance_playback(UiState *state, const AppSession &session) {
     }
   }
 
-  const double span = std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
+  const double span = std::max(MIN_HORIZONTAL_ZOOM_SECONDS, state->x_view_max - state->x_view_min);
   if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
     state->x_view_min = state->tracker_time - span * 0.5;
     state->x_view_max = state->tracker_time + span * 0.5;

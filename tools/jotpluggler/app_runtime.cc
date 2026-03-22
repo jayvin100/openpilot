@@ -26,7 +26,6 @@
 
 #include "system/camerad/cameras/nv12_info.h"
 
-
 namespace {
 
 std::string normalize_stream_address(std::string address) {
@@ -425,12 +424,12 @@ struct StreamPoller::Impl {
                                                    size / sizeof(capnp::word));
               capnp::FlatArrayMessageReader event_reader(data);
               const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-              accumulator.append_event(event.which(), data);
+              accumulator.appendEvent(event.which(), data);
               received_messages.fetch_add(1);
             }
           }
 
-          StreamExtractBatch batch = accumulator.take_batch();
+          StreamExtractBatch batch = accumulator.takeBatch();
           if (!batch.series.empty() || !batch.logs.empty() || !batch.enum_info.empty()
               || !batch.car_fingerprint.empty() || !batch.dbc_name.empty()) {
             std::lock_guard<std::mutex> lock(mutex);
@@ -448,7 +447,7 @@ struct StreamPoller::Impl {
     });
   }
 
-  void set_paused(bool paused_value) {
+  void setPaused(bool paused_value) {
     paused.store(paused_value);
     if (paused_value) {
       std::lock_guard<std::mutex> lock(mutex);
@@ -567,8 +566,8 @@ void StreamPoller::start(const std::string &address,
   impl_->start(address, buffer_seconds, dbc_name, time_offset);
 }
 
-void StreamPoller::set_paused(bool paused) {
-  impl_->set_paused(paused);
+void StreamPoller::setPaused(bool paused) {
+  impl_->setPaused(paused);
 }
 
 void StreamPoller::stop() {
@@ -619,7 +618,7 @@ struct SidebarCameraFeed::Impl {
     destroy_texture();
   }
 
-  void set_route_data(const RouteData &route_data) {
+  void setRouteData(const RouteData &route_data) {
     destroy_texture();
     {
       std::lock_guard<std::mutex> lock(mutex);
@@ -910,8 +909,8 @@ SidebarCameraFeed::SidebarCameraFeed()
 
 SidebarCameraFeed::~SidebarCameraFeed() = default;
 
-void SidebarCameraFeed::set_route_data(const RouteData &route_data) {
-  impl_->set_route_data(route_data);
+void SidebarCameraFeed::setRouteData(const RouteData &route_data) {
+  impl_->setRouteData(route_data);
 }
 
 void SidebarCameraFeed::update(double tracker_time) {

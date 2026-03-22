@@ -17,9 +17,9 @@
 #include <unordered_map>
 #include <vector>
 
-// ---------------------------------------------------------------------------
+// *****
 // app options & entry point
-// ---------------------------------------------------------------------------
+// *****
 
 struct Options {
   std::string layout;
@@ -37,9 +37,9 @@ struct Options {
 
 int run(const Options &options);
 
-// ---------------------------------------------------------------------------
+// *****
 // sketch layout & route data
-// ---------------------------------------------------------------------------
+// *****
 
 struct PlotRange {
   bool valid = false;
@@ -207,12 +207,12 @@ public:
   StreamAccumulator(const StreamAccumulator &) = delete;
   StreamAccumulator &operator=(const StreamAccumulator &) = delete;
 
-  void set_dbc_name(const std::string &dbc_name);
-  void append_event(cereal::Event::Which which, kj::ArrayPtr<const capnp::word> data);
-  StreamExtractBatch take_batch();
-  const std::string &car_fingerprint() const;
+  void setDbcName(const std::string &dbc_name);
+  void appendEvent(cereal::Event::Which which, kj::ArrayPtr<const capnp::word> data);
+  StreamExtractBatch takeBatch();
+  const std::string &carFingerprint() const;
   const std::string &dbc_name() const;
-  std::optional<double> time_offset() const;
+  std::optional<double> timeOffset() const;
 
 private:
   struct Impl;
@@ -227,9 +227,9 @@ RouteData load_route_data(const std::string &route_name,
                           const std::string &dbc_name = {},
                           const RouteLoadProgressCallback &progress = {});
 
-// ---------------------------------------------------------------------------
+// *****
 // dbc_core
-// ---------------------------------------------------------------------------
+// *****
 
 namespace dbc_core {
 
@@ -274,31 +274,31 @@ public:
   explicit Database(const std::filesystem::path &path);
 
   const Message *message(uint32_t address) const;
-  std::vector<std::string> enum_names(const Signal &signal) const;
+  std::vector<std::string> enumNames(const Signal &signal) const;
 
 private:
   void parse(const std::string &content, const std::string &filename);
-  void parse_bo(const std::string &line, int line_number, Message **current_message);
-  void parse_sg(const std::string &line, int line_number, Message *current_message);
-  void parse_val(const std::string &line, int line_number);
+  void parseBo(const std::string &line, int line_number, Message **current_message);
+  void parseSg(const std::string &line, int line_number, Message *current_message);
+  void parseVal(const std::string &line, int line_number);
   void finalize();
 
   std::unordered_map<uint32_t, Message> messages_;
 };
 
-std::optional<double> signal_value(const Signal &signal, const Message &message, const uint8_t *data, size_t data_size);
+std::optional<double> signalValue(const Signal &signal, const Message &message, const uint8_t *data, size_t data_size);
 
 }  // namespace dbc_core
 
-// ---------------------------------------------------------------------------
+// *****
 // bootstrap_icons
-// ---------------------------------------------------------------------------
+// *****
 
 namespace bootstrap_icons {
 
-void load_font(float size);
+void loadFont(float size);
 const char *glyph(std::string_view icon_id);
-bool menu_item(std::string_view icon_id,
+bool menuItem(std::string_view icon_id,
                const char *label,
                const char *shortcut = nullptr,
                bool selected = false,
@@ -306,9 +306,9 @@ bool menu_item(std::string_view icon_id,
 
 }  // namespace bootstrap_icons
 
-// ---------------------------------------------------------------------------
+// *****
 // app session, UI state, & internal API
-// ---------------------------------------------------------------------------
+// *****
 
 class AsyncRouteLoader;
 class SidebarCameraFeed;
@@ -581,9 +581,9 @@ std::optional<double> app_sample_xy_value_at_time(const std::vector<double> &xs,
                                                    double tm);
 void save_layout_json(const SketchLayout &layout, const std::filesystem::path &path);
 
-// ---------------------------------------------------------------------------
+// *****
 // browser
-// ---------------------------------------------------------------------------
+// *****
 
 void rebuild_route_index(AppSession *session);
 void rebuild_browser_nodes(AppSession *session, UiState *state);
@@ -602,24 +602,24 @@ void draw_browser_node(AppSession *session,
                        const std::string &filter,
                        const std::vector<std::string> &visible_paths);
 
-// ---------------------------------------------------------------------------
+// *****
 // custom series
-// ---------------------------------------------------------------------------
+// *****
 
 void open_custom_series_editor(UiState *state, const std::string &preferred_source = {});
 std::string preferred_custom_series_source(const Pane &pane);
 void refresh_all_custom_curves(AppSession *session, UiState *state);
 void draw_custom_series_editor(AppSession *session, UiState *state);
 
-// ---------------------------------------------------------------------------
+// *****
 // logs
-// ---------------------------------------------------------------------------
+// *****
 
 void draw_logs_tab(AppSession *session, UiState *state);
 
-// ---------------------------------------------------------------------------
+// *****
 // runtime (GLFW, async loaders, streaming, camera)
-// ---------------------------------------------------------------------------
+// *****
 
 struct GLFWwindow;
 
@@ -710,7 +710,7 @@ public:
              double buffer_seconds,
              const std::string &dbc_name,
              std::optional<double> time_offset = std::nullopt);
-  void set_paused(bool paused);
+  void setPaused(bool paused);
   void stop();
   StreamPollSnapshot snapshot() const;
   bool consume(StreamExtractBatch *batch, std::string *error_text);
@@ -728,7 +728,7 @@ public:
   SidebarCameraFeed(const SidebarCameraFeed &) = delete;
   SidebarCameraFeed &operator=(const SidebarCameraFeed &) = delete;
 
-  void set_route_data(const RouteData &route_data);
+  void setRouteData(const RouteData &route_data);
   void update(double tracker_time);
   void draw(float width, bool loading);
 

@@ -10,7 +10,7 @@ std::string dbc_combo_label(const AppSession &session) {
 
 void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *state) {
   ImGui::SetNextWindowPos(ImVec2(ui.content_x, ui.status_bar_y));
-  ImGui::SetNextWindowSize(ImVec2(ui.content_w, kStatusBarHeight));
+  ImGui::SetNextWindowSize(ImVec2(ui.content_w, STATUS_BAR_HEIGHT));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 5.0f));
   ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(247, 248, 250));
   ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(188, 193, 199));
@@ -34,7 +34,7 @@ void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *st
                             &state->route_x_min,
                             &state->route_x_max,
                             "%.3f")) {
-      const double span = std::max(kMinHorizontalZoomSeconds, state->x_view_max - state->x_view_min);
+      const double span = std::max(MIN_HORIZONTAL_ZOOM_SECONDS, state->x_view_max - state->x_view_min);
       if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
         state->x_view_min = state->tracker_time - span * 0.5;
         state->x_view_max = state->tracker_time + span * 0.5;
@@ -70,8 +70,8 @@ void draw_sidebar_resizer(const UiMetrics &ui, UiState *state) {
       ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     }
     if (ImGui::IsItemActive()) {
-      const float max_width = std::min(kSidebarMaxWidth, ui.width * 0.6f);
-      state->sidebar_width = std::clamp(ImGui::GetIO().MousePos.x, kSidebarMinWidth, max_width);
+      const float max_width = std::min(SIDEBAR_MAX_WIDTH, ui.width * 0.6f);
+      state->sidebar_width = std::clamp(ImGui::GetIO().MousePos.x, SIDEBAR_MIN_WIDTH, max_width);
     }
 
     ImDrawList *draw_list = ImGui::GetWindowDrawList();

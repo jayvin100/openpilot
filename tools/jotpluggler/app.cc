@@ -29,14 +29,14 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr const char *kUntitledPaneTitle = "...";
+constexpr const char *UNTITLED_PANE_TITLE = "...";
 
-constexpr float kSidebarWidth = 320.0f;
-constexpr float kSidebarMinWidth = 220.0f;
-constexpr float kSidebarMaxWidth = 520.0f;
-constexpr float kStatusBarHeight = 38.0f;
-constexpr double kMinHorizontalZoomSeconds = 2.0;
-constexpr double kPlotYPadFraction = 0.4;
+constexpr float SIDEBAR_WIDTH = 320.0f;
+constexpr float SIDEBAR_MIN_WIDTH = 220.0f;
+constexpr float SIDEBAR_MAX_WIDTH = 520.0f;
+constexpr float STATUS_BAR_HEIGHT = 38.0f;
+constexpr double MIN_HORIZONTAL_ZOOM_SECONDS = 2.0;
+constexpr double PLOT_Y_PAD_FRACTION = 0.4;
 ImFont *g_ui_font = nullptr;
 ImFont *g_mono_font = nullptr;
 
@@ -44,7 +44,7 @@ struct UiMetrics {
   float width = 0.0f;
   float height = 0.0f;
   float top_offset = 0.0f;
-  float sidebar_width = kSidebarWidth;
+  float sidebar_width = SIDEBAR_WIDTH;
   float content_x = 0.0f;
   float content_y = 0.0f;
   float content_w = 0.0f;
@@ -272,7 +272,7 @@ void configure_style() {
       io.FontDefault = font;
     }
   }
-  bootstrap_icons::load_font(16.0f);
+  bootstrap_icons::loadFont(16.0f);
   if (g_mono_font == nullptr && mono_font_path.has_value()) {
     g_mono_font = io.Fonts->AddFontFromFileTTF(mono_font_path->c_str(), 15.75f, &font_cfg);
   }
@@ -361,12 +361,12 @@ UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset, float sidebar
   ui.width = size.x;
   ui.height = size.y;
   ui.top_offset = top_offset;
-  ui.sidebar_width = std::clamp(sidebar_width, kSidebarMinWidth, std::min(kSidebarMaxWidth, size.x * 0.6f));
+  ui.sidebar_width = std::clamp(sidebar_width, SIDEBAR_MIN_WIDTH, std::min(SIDEBAR_MAX_WIDTH, size.x * 0.6f));
   ui.content_x = ui.sidebar_width;
   ui.content_y = top_offset;
   ui.content_w = std::max(1.0f, size.x - ui.content_x);
-  ui.content_h = std::max(1.0f, size.y - ui.content_y - kStatusBarHeight);
-  ui.status_bar_y = std::max(0.0f, size.y - kStatusBarHeight);
+  ui.content_h = std::max(1.0f, size.y - ui.content_y - STATUS_BAR_HEIGHT);
+  ui.status_bar_y = std::max(0.0f, size.y - STATUS_BAR_HEIGHT);
   return ui;
 }
 
@@ -454,7 +454,7 @@ TabUiState *active_tab_state(UiState *state) {
 }
 
 std::string pane_window_name(int tab_runtime_id, int pane_index, const Pane &pane) {
-  const char *title = pane.title.empty() ? kUntitledPaneTitle : pane.title.c_str();
+  const char *title = pane.title.empty() ? UNTITLED_PANE_TITLE : pane.title.c_str();
   char buf[256];
   std::snprintf(buf, sizeof(buf), "%s##tab%d_pane%d", title, tab_runtime_id, pane_index);
   return buf;
@@ -654,7 +654,7 @@ bool split_pane_node(WorkspaceNode *node, int target_pane_index, SplitOrientatio
   return false;
 }
 
-Pane make_empty_pane(const std::string &title = kUntitledPaneTitle) {
+Pane make_empty_pane(const std::string &title = UNTITLED_PANE_TITLE) {
   Pane pane;
   pane.title = title;
   return pane;
@@ -737,7 +737,7 @@ bool mark_layout_dirty(AppSession *session, UiState *state) {
 }
 
 std::array<uint8_t, 3> next_curve_color(const Pane &pane) {
-  static constexpr std::array<std::array<uint8_t, 3>, 10> kPalette = {{
+  static constexpr std::array<std::array<uint8_t, 3>, 10> PALETTE = {{
     {35, 107, 180},
     {220, 82, 52},
     {67, 160, 71},
@@ -749,7 +749,7 @@ std::array<uint8_t, 3> next_curve_color(const Pane &pane) {
     {197, 90, 17},
     {96, 125, 139},
   }};
-  return kPalette[pane.curves.size() % kPalette.size()];
+  return PALETTE[pane.curves.size() % PALETTE.size()];
 }
 
 const RouteSeries *find_route_series(const AppSession &session, const std::string &path);
@@ -1057,7 +1057,7 @@ bool close_pane(WorkspaceTab *tab, int pane_index) {
   if (tab->panes.size() <= 1) {
     Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
     pane.curves.clear();
-    pane.title = kUntitledPaneTitle;
+    pane.title = UNTITLED_PANE_TITLE;
     return true;
   }
   if (remove_pane_node(&tab->root, pane_index)) {
@@ -1075,7 +1075,7 @@ void clear_pane(WorkspaceTab *tab, int pane_index) {
   }
   Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
   pane.curves.clear();
-  pane.title = kUntitledPaneTitle;
+  pane.title = UNTITLED_PANE_TITLE;
 }
 
 void create_runtime_tab(SketchLayout *layout, UiState *state) {
@@ -1553,7 +1553,7 @@ PlotBounds compute_plot_bounds(const Pane &pane,
     min_value = 0.0;
     max_value = 1.0;
   }
-  ensure_non_degenerate_range(&min_value, &max_value, kPlotYPadFraction, 0.1);
+  ensure_non_degenerate_range(&min_value, &max_value, PLOT_Y_PAD_FRACTION, 0.1);
   if (pane.range.has_y_limit_min) {
     min_value = pane.range.y_limit_min;
   }
@@ -1757,7 +1757,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
     ImPlot::SetupAxisLinks(ImAxis_X1, &state->x_view_min, &state->x_view_max);
     if (state->route_x_max > state->route_x_min) {
       const double x_constraint_min = session.data_mode == SessionDataMode::Stream
-        ? state->route_x_min - std::max(kMinHorizontalZoomSeconds, session.stream_buffer_seconds)
+        ? state->route_x_min - std::max(MIN_HORIZONTAL_ZOOM_SECONDS, session.stream_buffer_seconds)
         : state->route_x_min;
       ImPlot::SetupAxisLimitsConstraints(ImAxis_X1, x_constraint_min, state->route_x_max);
     }
@@ -1820,44 +1820,44 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
   const bool has_curves = pane_index >= 0
     && pane_index < static_cast<int>(tab.panes.size())
     && !tab.panes[static_cast<size_t>(pane_index)].curves.empty();
-  if (bootstrap_icons::menu_item("sliders", "Edit Axis Limits...")) {
+  if (bootstrap_icons::menuItem("sliders", "Edit Axis Limits...")) {
     action.kind = PaneMenuActionKind::OpenAxisLimits;
   }
-  bootstrap_icons::menu_item("palette", "Edit Curve Style...", nullptr, false, false);
+  bootstrap_icons::menuItem("palette", "Edit Curve Style...", nullptr, false, false);
   if (action.kind == PaneMenuActionKind::None
-      && bootstrap_icons::menu_item("plus-slash-minus", "Apply filter to data...", nullptr, false, has_curves)) {
+      && bootstrap_icons::menuItem("plus-slash-minus", "Apply filter to data...", nullptr, false, has_curves)) {
     action.kind = PaneMenuActionKind::OpenCustomSeries;
   }
   ImGui::Separator();
-  if (action.kind == PaneMenuActionKind::None && bootstrap_icons::menu_item("distribute-horizontal", "Split Left / Right")) {
+  if (action.kind == PaneMenuActionKind::None && bootstrap_icons::menuItem("distribute-horizontal", "Split Left / Right")) {
     action.kind = PaneMenuActionKind::SplitLeft;
   } else if (action.kind == PaneMenuActionKind::None
-             && bootstrap_icons::menu_item("distribute-vertical", "Split Top / Bottom")) {
+             && bootstrap_icons::menuItem("distribute-vertical", "Split Top / Bottom")) {
     action.kind = PaneMenuActionKind::SplitTop;
   }
   ImGui::Separator();
-  if (bootstrap_icons::menu_item("zoom-out", "Zoom Out")) {
+  if (bootstrap_icons::menuItem("zoom-out", "Zoom Out")) {
     action.kind = PaneMenuActionKind::ResetView;
-  } else if (bootstrap_icons::menu_item("arrow-left-right", "Zoom Out Horizontally")) {
+  } else if (bootstrap_icons::menuItem("arrow-left-right", "Zoom Out Horizontally")) {
     action.kind = PaneMenuActionKind::ResetHorizontal;
-  } else if (bootstrap_icons::menu_item("arrow-down-up", "Zoom Out Vertically")) {
+  } else if (bootstrap_icons::menuItem("arrow-down-up", "Zoom Out Vertically")) {
     action.kind = PaneMenuActionKind::ResetVertical;
   }
   ImGui::Separator();
-  if (bootstrap_icons::menu_item("trash", "Remove ALL curves")) {
+  if (bootstrap_icons::menuItem("trash", "Remove ALL curves")) {
     action.kind = PaneMenuActionKind::Clear;
   }
   ImGui::Separator();
-  bootstrap_icons::menu_item("arrow-left-right", "Flip Horizontal Axis", nullptr, false, false);
-  bootstrap_icons::menu_item("arrow-down-up", "Flip Vertical Axis", nullptr, false, false);
+  bootstrap_icons::menuItem("arrow-left-right", "Flip Horizontal Axis", nullptr, false, false);
+  bootstrap_icons::menuItem("arrow-down-up", "Flip Vertical Axis", nullptr, false, false);
   ImGui::Separator();
-  bootstrap_icons::menu_item("files", "Copy", nullptr, false, false);
-  bootstrap_icons::menu_item("clipboard2", "Paste", nullptr, false, false);
-  bootstrap_icons::menu_item("file-earmark-image", "Copy image to clipboard", nullptr, false, false);
-  bootstrap_icons::menu_item("save", "Save plot to file", nullptr, false, false);
-  bootstrap_icons::menu_item("bar-chart", "Show data statistics", nullptr, false, false);
+  bootstrap_icons::menuItem("files", "Copy", nullptr, false, false);
+  bootstrap_icons::menuItem("clipboard2", "Paste", nullptr, false, false);
+  bootstrap_icons::menuItem("file-earmark-image", "Copy image to clipboard", nullptr, false, false);
+  bootstrap_icons::menuItem("save", "Save plot to file", nullptr, false, false);
+  bootstrap_icons::menuItem("bar-chart", "Show data statistics", nullptr, false, false);
   ImGui::Separator();
-  if (bootstrap_icons::menu_item("x-square", "Close Pane")) {
+  if (bootstrap_icons::menuItem("x-square", "Close Pane")) {
     action.kind = PaneMenuActionKind::Close;
   }
   ImGui::EndPopup();
@@ -2433,7 +2433,7 @@ int run_app(const Options &options) {
   configure_style();
   if (session.data_mode == SessionDataMode::Route) {
     session.camera_feed = std::make_unique<SidebarCameraFeed>();
-    session.camera_feed->set_route_data(session.route_data);
+    session.camera_feed->setRouteData(session.route_data);
   }
 
   if (session.async_route_loading) {

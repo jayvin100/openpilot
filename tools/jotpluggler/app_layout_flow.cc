@@ -83,7 +83,7 @@ void rebuild_session_route_data(AppSession *session, UiState *state,
 
 void stop_stream_session(AppSession *session, UiState *state, bool preserve_data) {
   if (preserve_data && session->stream_poller && session->data_mode == SessionDataMode::Stream) {
-    session->stream_poller->set_paused(true);
+    session->stream_poller->setPaused(true);
   } else if (session->stream_poller) {
     session->stream_poller->stop();
   }
@@ -114,7 +114,7 @@ bool start_stream_session(AppSession *session,
     if (preserve_existing_data && session->stream_poller) {
       StreamPollSnapshot snapshot = session->stream_poller->snapshot();
       if (snapshot.active) {
-        session->stream_poller->set_paused(false);
+        session->stream_poller->setPaused(false);
         sync_route_buffers(state, *session);
         sync_stream_buffers(state, *session);
         state->follow_latest = true;

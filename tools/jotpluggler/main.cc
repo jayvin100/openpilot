@@ -5,7 +5,7 @@
 
 namespace {
 
-constexpr const char *kDemoRoute = "5beb9b58bd12b691/0000010a--a51155e496";
+constexpr const char *DEMO_ROUTE = "5beb9b58bd12b691/0000010a--a51155e496";
 
 void print_usage(const char *argv0) {
   std::cerr
@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
     if (arg == "--layout") {
       options.layout = require_value("--layout");
     } else if (arg == "--demo") {
-      options.route_name = kDemoRoute;
+      options.route_name = DEMO_ROUTE;
     } else if (arg == "--data-dir") {
       options.data_dir = require_value("--data-dir");
     } else if (arg == "--stream") {

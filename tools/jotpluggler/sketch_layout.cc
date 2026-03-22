@@ -88,7 +88,7 @@ struct SchemaIndex {
   static const SchemaIndex &instance();
 };
 
-constexpr size_t kInvalidDynamicSlot = std::numeric_limits<size_t>::max();
+constexpr size_t INVALID_DYNAMIC_SLOT = std::numeric_limits<size_t>::max();
 
 struct SeriesAccumulator {
   explicit SeriesAccumulator(size_t fixed_count = 0) : fixed_series(fixed_count) {}
@@ -1133,9 +1133,9 @@ RouteSeries *ensure_list_scalar_series(const std::string &base_path, size_t inde
   auto [it, _] = series->list_scalar_slots.try_emplace(base_path);
   std::vector<size_t> &slots = it->second;
   if (slots.size() <= index) {
-    slots.resize(index + 1, kInvalidDynamicSlot);
+    slots.resize(index + 1, INVALID_DYNAMIC_SLOT);
   }
-  if (slots[index] == kInvalidDynamicSlot) {
+  if (slots[index] == INVALID_DYNAMIC_SLOT) {
     slots[index] = ensure_dynamic_slot(base_path + "/" + std::to_string(index), series);
   }
   return &series->dynamic_series[slots[index]];
@@ -1270,14 +1270,14 @@ void append_event_fast(cereal::Event::Which which,
       const size_t data_size = dat_reader.size();
       const std::string base_path = "/" + service.service_name + "/" + std::to_string(bus) + "/" + message->name;
       for (const dbc_core::Signal &signal : message->signals) {
-        std::optional<double> value = dbc_core::signal_value(signal, *message, raw, data_size);
+        std::optional<double> value = dbc_core::signalValue(signal, *message, raw, data_size);
         if (!value.has_value()) {
           continue;
         }
         const std::string path = base_path + "/" + signal.name;
         append_dynamic_scalar_point(path, tm, *value, series);
         if (series->enum_info.find(path) == series->enum_info.end()) {
-          std::vector<std::string> enum_names = can_dbc->enum_names(signal);
+          std::vector<std::string> enum_names = can_dbc->enumNames(signal);
           if (!enum_names.empty()) {
             series->enum_info.emplace(path, EnumInfo{.names = std::move(enum_names)});
           }
@@ -1807,12 +1807,12 @@ StreamAccumulator::StreamAccumulator(const std::string &dbc_name, std::optional<
 
 StreamAccumulator::~StreamAccumulator() = default;
 
-void StreamAccumulator::set_dbc_name(const std::string &dbc_name) {
+void StreamAccumulator::setDbcName(const std::string &dbc_name) {
   impl_->manual_dbc_name = dbc_name;
   impl_->refresh_dbc();
 }
 
-void StreamAccumulator::append_event(cereal::Event::Which which, kj::ArrayPtr<const capnp::word> data) {
+void StreamAccumulator::appendEvent(cereal::Event::Which which, kj::ArrayPtr<const capnp::word> data) {
   capnp::FlatArrayMessageReader event_reader(data);
   const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
   const double boot_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
@@ -1838,7 +1838,7 @@ void StreamAccumulator::append_event(cereal::Event::Which which, kj::ArrayPtr<co
   append_log_event(which, event, *impl_->time_offset, &impl_->logs, &impl_->last_alert_key);
 }
 
-StreamExtractBatch StreamAccumulator::take_batch() {
+StreamExtractBatch StreamAccumulator::takeBatch() {
   StreamExtractBatch batch;
   batch.car_fingerprint = impl_->car_fingerprint;
   batch.dbc_name = impl_->detected_dbc_name;
@@ -1859,7 +1859,7 @@ StreamExtractBatch StreamAccumulator::take_batch() {
   return batch;
 }
 
-const std::string &StreamAccumulator::car_fingerprint() const {
+const std::string &StreamAccumulator::carFingerprint() const {
   return impl_->car_fingerprint;
 }
 
@@ -1867,7 +1867,7 @@ const std::string &StreamAccumulator::dbc_name() const {
   return impl_->detected_dbc_name;
 }
 
-std::optional<double> StreamAccumulator::time_offset() const {
+std::optional<double> StreamAccumulator::timeOffset() const {
   return impl_->time_offset;
 }
 
@@ -1919,5 +1919,4 @@ const std::vector<std::string> &available_dbc_names() {
   static const std::vector<std::string> names = available_dbc_names_impl();
   return names;
 }
-
 

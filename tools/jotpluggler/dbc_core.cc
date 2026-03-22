@@ -25,7 +25,7 @@ void update_msb_lsb(Signal *signal) {
   }
 }
 
-double raw_signal_value(const Signal &signal, const uint8_t *data, size_t data_size) {
+double raw_signalValue(const Signal &signal, const uint8_t *data, size_t data_size) {
   const int msb_byte = signal.msb / 8;
   if (msb_byte >= static_cast<int>(data_size)) {
     return 0.0;
@@ -79,7 +79,7 @@ const Message *Database::message(uint32_t address) const {
   return it == messages_.end() ? nullptr : &it->second;
 }
 
-std::vector<std::string> Database::enum_names(const Signal &signal) const {
+std::vector<std::string> Database::enumNames(const Signal &signal) const {
   if (signal.value_descriptions.empty()) {
     return {};
   }
@@ -113,20 +113,20 @@ void Database::parse(const std::string &content, const std::string &filename) {
       continue;
     }
     if (line.rfind("BO_ ", 0) == 0) {
-      parse_bo(line, line_number, &current_message);
+      parseBo(line, line_number, &current_message);
     } else if (line.rfind("SG_ ", 0) == 0) {
       if (current_message == nullptr) {
         parse_error(filename, line_number, "Signal without current message", line);
       }
-      parse_sg(line, line_number, current_message);
+      parseSg(line, line_number, current_message);
     } else if (line.rfind("VAL_ ", 0) == 0) {
-      parse_val(line, line_number);
+      parseVal(line, line_number);
     }
   }
   finalize();
 }
 
-void Database::parse_bo(const std::string &line, int line_number, Message **current_message) {
+void Database::parseBo(const std::string &line, int line_number, Message **current_message) {
   static const std::regex pattern(R"(^BO_\s+(\w+)\s+(\w+)\s*:\s*(\w+)\s+(\w+)\s*$)");
   std::smatch match;
   if (!std::regex_match(line, match, pattern)) {
@@ -142,7 +142,7 @@ void Database::parse_bo(const std::string &line, int line_number, Message **curr
   *current_message = &message;
 }
 
-void Database::parse_sg(const std::string &line, int line_number, Message *current_message) {
+void Database::parseSg(const std::string &line, int line_number, Message *current_message) {
   static const std::regex multiplex_pattern(R"(^SG_\s+(\w+)\s+(\w+)\s*:\s*(\d+)\|(\d+)@(\d)([+-])\s+\(([0-9.+\-eE]+),([0-9.+\-eE]+)\)\s+\[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\]\s+\"(.*)\"\s+(.*)$)");
   static const std::regex normal_pattern(R"(^SG_\s+(\w+)\s*:\s*(\d+)\|(\d+)@(\d)([+-])\s+\(([0-9.+\-eE]+),([0-9.+\-eE]+)\)\s+\[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\]\s+\"(.*)\"\s+(.*)$)");
 
@@ -177,7 +177,7 @@ void Database::parse_sg(const std::string &line, int line_number, Message *curre
   current_message->signals.push_back(std::move(signal));
 }
 
-void Database::parse_val(const std::string &line, int line_number) {
+void Database::parseVal(const std::string &line, int line_number) {
   static const std::regex prefix(R"(^VAL_\s+(\w+)\s+(\w+)\s+(.*);$)");
   std::smatch match;
   if (!std::regex_match(line, match, prefix)) {
@@ -229,15 +229,15 @@ void Database::finalize() {
   }
 }
 
-std::optional<double> signal_value(const Signal &signal, const Message &message, const uint8_t *data, size_t data_size) {
+std::optional<double> signalValue(const Signal &signal, const Message &message, const uint8_t *data, size_t data_size) {
   if (signal.multiplexor_index >= 0) {
     const Signal &multiplexor = message.signals[static_cast<size_t>(signal.multiplexor_index)];
-    const double mux_value = raw_signal_value(multiplexor, data, data_size);
+    const double mux_value = raw_signalValue(multiplexor, data, data_size);
     if (std::llround(mux_value) != signal.multiplex_value) {
       return std::nullopt;
     }
   }
-  return raw_signal_value(signal, data, data_size);
+  return raw_signalValue(signal, data, data_size);
 }
 
 }  // namespace dbc_core

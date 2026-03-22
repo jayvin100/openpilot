@@ -1,6 +1,5 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
-
 #include "imgui_internal.h"
 
 #include <cmath>
@@ -9,7 +8,7 @@
 
 namespace {
 
-constexpr float kBrowserValueWidth = 88.0f;
+constexpr float BROWSER_VALUE_WIDTH = 88.0f;
 
 bool path_matches_filter(const std::string &path, const std::string &lower_filter) {
   if (lower_filter.empty()) {
@@ -398,7 +397,7 @@ void draw_browser_node(AppSession *session,
     }
 
     const float value_right = rect.Max.x - style.FramePadding.x;
-    const float value_left = value_right - (value_text.empty() ? 0.0f : kBrowserValueWidth);
+    const float value_left = value_right - (value_text.empty() ? 0.0f : BROWSER_VALUE_WIDTH);
     const float label_left = rect.Min.x + style.FramePadding.x;
     const float label_right = value_text.empty()
       ? rect.Max.x - style.FramePadding.x
