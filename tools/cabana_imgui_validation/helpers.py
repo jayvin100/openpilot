@@ -47,6 +47,7 @@ FILE_MENU_MANAGE_DBCS = (60, 124)
 FILE_MENU_OPENDBC_SUBMENU = (132, 160)
 FILE_MENU_OPENDBC_SUBMENU_X = 290
 TOOLS_MENU = (102, 12)
+TOOLS_MENU_FIND_SIGNAL = (100, 28)
 TOOLS_MENU_FIND_SIMILAR_BITS = (100, 44)
 TOOLS_MENU_ROUTE_INFO = (100, 68)
 EDIT_MENU = (38, 12)
@@ -62,6 +63,8 @@ MANAGE_DBC_MODAL_COPY_X = 1095
 MANAGE_DBC_MODAL_REMOVE_BUS_X = 1197
 MANAGE_DBC_MODAL_ROW_Y0 = 496
 MANAGE_DBC_MODAL_ROW_STEP = 40
+FIND_SIGNAL_FIND_BUTTON = (550, 394)
+FIND_SIGNAL_CREATE_BUTTON = (1075, 394)
 
 
 class XvfbCabana:
@@ -798,6 +801,29 @@ def open_find_similar_bits_window(cabana):
   time.sleep(0.4)
   cabana.click(*TOOLS_MENU_FIND_SIMILAR_BITS)
   time.sleep(1.0)
+
+
+def open_find_signal_window(cabana):
+  """Use Tools -> Find Signal."""
+  cabana.focus()
+  cabana.click(*TOOLS_MENU)
+  time.sleep(0.4)
+  cabana.click(*TOOLS_MENU_FIND_SIGNAL)
+  time.sleep(1.0)
+
+
+def run_find_signal_search(cabana):
+  """Click the primary Find button in the Find Signal tool."""
+  cabana.focus()
+  cabana.click(*FIND_SIGNAL_FIND_BUTTON)
+  time.sleep(1.5)
+
+
+def create_signal_from_find_signal(cabana):
+  """Click Create Signal for the selected Find Signal result."""
+  cabana.focus()
+  cabana.click(*FIND_SIGNAL_CREATE_BUTTON)
+  time.sleep(1.5)
 
 
 def open_route_info_window(cabana):

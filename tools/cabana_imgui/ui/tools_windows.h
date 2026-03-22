@@ -3,6 +3,7 @@
 namespace cabana {
 namespace tools_windows {
 
+void requestFindSignal();
 void requestFindSimilarBits();
 void requestRouteInfo();
 void render();

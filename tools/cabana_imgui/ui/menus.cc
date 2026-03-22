@@ -299,7 +299,9 @@ void render() {
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Tools")) {
-      ImGui::MenuItem("Find Signal", nullptr, false, false);
+      if (ImGui::MenuItem("Find Signal")) {
+        cabana::tools_windows::requestFindSignal();
+      }
       if (ImGui::MenuItem("Find Similar Bits")) {
         cabana::tools_windows::requestFindSimilarBits();
       }
