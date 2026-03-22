@@ -5,6 +5,7 @@
 
 struct GLFWwindow;
 
+#include "core/types.h"
 #include "sources/replay_source.h"
 
 struct ReplayLoadState;
@@ -18,8 +19,11 @@ public:
   void openRoute(const std::string &route);
   void closeRoute();
   bool openDbcFile(const std::string &path);
-  bool saveDbc();
-  bool saveDbcAs(const std::string &path);
+  bool openDbcFile(const std::string &path, const SourceSet &sources);
+  void closeDbcs(const SourceSet &sources);
+  void closeDbcEverywhere(int source);
+  bool saveDbc(int source = -1);
+  bool saveDbcAs(const std::string &path, int source = -1);
 
   cabana::ReplaySource *source() { return source_.get(); }
   bool videoEnabled() const;
@@ -28,6 +32,7 @@ private:
   bool parseArgs(int argc, char *argv[]);
   void beginReplayLoad();
   void pollReplayLoad();
+  void openConfiguredDbcs();
 
   GLFWwindow *window = nullptr;
   std::unique_ptr<cabana::ReplaySource> source_;

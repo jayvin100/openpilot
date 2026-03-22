@@ -15,7 +15,7 @@
 - [x] manual DBC open/save/save-as — `wired`
 - [ ] manual DBC new file — `not started`
 - [ ] DBC clipboard import/export — `not started`
-- [ ] DBC management per bus/source — `not started`
+- [x] DBC management per bus/source — `wired`
 - [x] route metadata and fingerprint display — `wired`
 
 ## Messages
@@ -48,14 +48,14 @@
 
 ## App State
 - [x] settings persistence — `partial (chart state + dock layout + selection/detail/dbc recents)`
-- [x] recent files/state — `partial (recent routes + recent dbc files)`
-- [x] session restore — `partial (chart tabs + dock layout + selected message + detail tab + last route/dbc)`
+- [x] recent files/state — `partial (recent routes + recent dbc files + per-source dbc assignments)`
+- [x] session restore — `partial (chart tabs + dock layout + selected message + detail tab + last route + per-source dbc assignments)`
 - [x] undo/redo command stack — `wired for DBC message/signal edit flows`
 - [x] help overlay — `wired`
 
 ## UI Shell
 - [x] dockspace layout — `wired`
-- [x] menu bar (File, Edit, View, Tools, Help) — `partial (DBC file flows + edit message/add signal + layout/help)`
+- [x] menu bar (File, Edit, View, Tools, Help) — `partial (DBC file flows + per-source DBC management + edit message/add signal + layout/help)`
 - [x] messages pane — `wired`
 - [x] detail pane with tabs — `wired`
 - [x] charts pane — `wired`

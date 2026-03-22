@@ -1,5 +1,10 @@
 #include "ui/menus.h"
 
+#include <filesystem>
+#include <set>
+#include <string>
+#include <vector>
+
 #include "imgui.h"
 
 #include "app/application.h"
@@ -12,12 +17,118 @@
 namespace cabana {
 namespace menus {
 
+namespace {
+
+bool show_manage_dbcs_modal = false;
+
+std::vector<int> available_buses() {
+  std::set<int> buses;
+
+  if (auto *application = app(); application && application->source()) {
+    for (const auto &[id, _] : application->source()->messages()) {
+      if (id.source < 64) {
+        buses.insert(id.source);
+      }
+    }
+  }
+
+  for (const auto &[source, _] : cabana::app_state().active_dbc_files) {
+    if (source >= 0 && source < 64) {
+      buses.insert(source);
+    }
+  }
+
+  return {buses.begin(), buses.end()};
+}
+
+std::string dbc_menu_label(const cabana::dbc::DbcFile *dbc_file) {
+  if (!dbc_file) {
+    return "No DBC loaded";
+  }
+  if (dbc_file->filename().empty()) {
+    return "untitled.dbc";
+  }
+  return std::filesystem::path(dbc_file->filename()).filename().string();
+}
+
+void render_manage_dbcs_modal(Application *application) {
+  auto &dbc = cabana::dbc::dbc_manager();
+  const auto buses = available_buses();
+
+  if (show_manage_dbcs_modal) {
+    ImGui::OpenPopup("Manage DBC Files");
+    show_manage_dbcs_modal = false;
+  }
+
+  ImGui::SetNextWindowSize(ImVec2(760, 0), ImGuiCond_Appearing);
+  if (!ImGui::BeginPopupModal("Manage DBC Files", nullptr,
+                              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    return;
+  }
+
+  if (buses.empty()) {
+    ImGui::TextDisabled("No CAN buses detected yet.");
+  } else {
+    for (int bus : buses) {
+      const auto sources = cabana::dbc::groupedSourcesForBus(bus);
+      const auto *dbc_file = dbc.findDbcFile((uint8_t)bus);
+      const std::string file_label = dbc_menu_label(dbc_file);
+      const std::string source_label = dbc_file ? cabana::dbc::sourceSetLabel(dbc.sources(dbc_file)) : std::string();
+
+      ImGui::PushID(bus);
+      ImGui::Text("Bus %d", bus);
+      ImGui::SameLine();
+      ImGui::TextDisabled("%s", file_label.c_str());
+      if (!source_label.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)", source_label.c_str());
+      }
+
+      if (ImGui::Button("Open DBC...", ImVec2(110, 0))) {
+        cabana::file_dialogs::requestOpenDbc(sources);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      ImGui::BeginDisabled(!dbc_file);
+      if (ImGui::Button("Save", ImVec2(72, 0)) && application) {
+        application->saveDbc(bus);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Save As", ImVec2(88, 0))) {
+        cabana::file_dialogs::requestSaveDbcAs(bus);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Remove Bus", ImVec2(104, 0)) && application) {
+        application->closeDbcs(sources);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Remove All", ImVec2(104, 0)) && application) {
+        application->closeDbcEverywhere(bus);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndDisabled();
+      ImGui::Separator();
+      ImGui::PopID();
+    }
+  }
+
+  if (ImGui::Button("Close", ImVec2(96, 0))) {
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+}
+
+}  // namespace
+
 void render() {
   auto &st = cabana::app_state();
   auto *application = app();
   auto &dbc = cabana::dbc::dbc_manager();
   auto &commands = cabana::command_stack();
-  const bool has_dbc = dbc.dbc() != nullptr;
+  const bool has_dbc = dbc.hasAnyDbc();
 
   if (ImGui::BeginMenuBar()) {
     if (ImGui::BeginMenu("File")) {
@@ -32,8 +143,8 @@ void render() {
       if (ImGui::MenuItem("Open DBC File...", "Ctrl+O")) {
         cabana::file_dialogs::requestOpenDbc();
       }
-      if (ImGui::BeginMenu("Manage DBC Files")) {
-        ImGui::EndMenu();
+      if (ImGui::MenuItem("Manage DBC Files...")) {
+        show_manage_dbcs_modal = true;
       }
       if (ImGui::BeginMenu("Open Recent")) {
         bool added = false;
@@ -125,6 +236,8 @@ void render() {
     }
     ImGui::EndMenuBar();
   }
+
+  render_manage_dbcs_modal(application);
 }
 
 }  // namespace menus

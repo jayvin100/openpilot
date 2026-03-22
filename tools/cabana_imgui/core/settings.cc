@@ -102,6 +102,16 @@ json11::Json serializeStringArray(const std::vector<std::string> &values) {
   return items;
 }
 
+json11::Json serializeDbcAssignments(const std::map<int, std::string> &assignments) {
+  json11::Json::object object;
+  for (const auto &[source, path] : assignments) {
+    if (!path.empty()) {
+      object[std::to_string(source)] = path;
+    }
+  }
+  return object;
+}
+
 const char *detailTabName(DetailTab tab) {
   switch (tab) {
     case DetailTab::Binary: return "binary";
@@ -125,6 +135,20 @@ void parseStringArray(const json11::Json &json, std::vector<std::string> &target
     const std::string value = item.string_value();
     if (!value.empty()) {
       target.push_back(value);
+    }
+  }
+}
+
+void parseDbcAssignments(const json11::Json &json, std::map<int, std::string> &target) {
+  if (!json.is_object()) return;
+  target.clear();
+  for (const auto &[key, value] : json.object_items()) {
+    if (!value.is_string() || value.string_value().empty()) {
+      continue;
+    }
+    try {
+      target[std::stoi(key)] = value.string_value();
+    } catch (...) {
     }
   }
 }
@@ -246,6 +270,14 @@ bool load(AppState &state) {
     state.active_dbc_file = active_dbc_it->second.string_value();
   }
 
+  auto active_dbcs_it = object.find("active_dbc_files");
+  if (active_dbcs_it != object.end()) {
+    parseDbcAssignments(active_dbcs_it->second, state.active_dbc_files);
+  }
+  if (state.active_dbc_files.empty() && !state.active_dbc_file.empty()) {
+    state.active_dbc_files[-1] = state.active_dbc_file;
+  }
+
   auto recent_dbc_it = object.find("recent_dbc_files");
   if (recent_dbc_it != object.end()) {
     parseStringArray(recent_dbc_it->second, state.recent_dbc_files);
@@ -309,6 +341,7 @@ bool save(const AppState &state) {
     {"selected_message", state.has_selection ? state.selected_msg.toString() : std::string()},
     {"current_detail_tab", detailTabName(state.current_detail_tab)},
     {"active_dbc_file", state.active_dbc_file},
+    {"active_dbc_files", serializeDbcAssignments(state.active_dbc_files)},
     {"recent_dbc_files", serializeStringArray(state.recent_dbc_files)},
     {"recent_routes", serializeStringArray(state.recent_routes)},
     {"chart_range_sec", state.chart_range_sec},

@@ -89,6 +89,67 @@ void AppState::rememberRecentDbc(const std::string &path) {
   markSettingsDirty();
 }
 
+void AppState::setDbcAssignments(const SourceSet &sources, const std::string &path) {
+  if (path.empty()) return;
+  for (int source : sources) {
+    active_dbc_files[source] = path;
+  }
+  active_dbc_file = path;
+  markSettingsDirty();
+}
+
+void AppState::clearDbcAssignments(const SourceSet &sources) {
+  bool changed = false;
+  for (int source : sources) {
+    changed = active_dbc_files.erase(source) > 0 || changed;
+  }
+  if (!changed) return;
+
+  if (active_dbc_files.empty()) {
+    active_dbc_file.clear();
+  } else if (!active_dbc_file.empty()) {
+    bool still_assigned = std::any_of(active_dbc_files.begin(), active_dbc_files.end(), [&](const auto &entry) {
+      return entry.second == active_dbc_file;
+    });
+    if (!still_assigned) {
+      active_dbc_file = active_dbc_files.begin()->second;
+    }
+  }
+  markSettingsDirty();
+}
+
+void AppState::clearDbcFileAssignments(const std::string &path) {
+  if (path.empty()) return;
+
+  bool changed = false;
+  for (auto it = active_dbc_files.begin(); it != active_dbc_files.end(); ) {
+    if (it->second == path) {
+      it = active_dbc_files.erase(it);
+      changed = true;
+    } else {
+      ++it;
+    }
+  }
+  if (!changed) return;
+
+  if (active_dbc_file == path) {
+    active_dbc_file = active_dbc_files.empty() ? std::string() : active_dbc_files.begin()->second;
+  }
+  markSettingsDirty();
+}
+
+std::string AppState::dbcPathForSource(int source) const {
+  auto it = active_dbc_files.find(source);
+  if (it != active_dbc_files.end()) {
+    return it->second;
+  }
+  it = active_dbc_files.find(-1);
+  if (it != active_dbc_files.end()) {
+    return it->second;
+  }
+  return active_dbc_file;
+}
+
 void AppState::rememberRecentRoute(const std::string &route) {
   if (route.empty()) return;
   push_recent(recent_routes, route);

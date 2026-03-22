@@ -22,7 +22,7 @@ namespace {
 constexpr int kMaxPlotPoints = 1500;
 
 static const cabana::dbc::Signal *find_signal(const ChartSignalRef &ref) {
-  const auto *msg = cabana::dbc::dbc_manager().msg(ref.msg_id.address);
+  const auto *msg = cabana::dbc::dbc_manager().msg(ref.msg_id);
   if (!msg) return nullptr;
   auto it = std::find_if(msg->signals.begin(), msg->signals.end(), [&](const auto &sig) {
     return sig.name == ref.signal_name;

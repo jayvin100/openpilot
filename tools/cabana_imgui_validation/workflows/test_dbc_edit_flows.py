@@ -20,6 +20,7 @@ from ..helpers import (  # noqa: TID251
   open_add_signal_via_menu,
   open_edit_message_via_menu,
   open_dbc_path,
+  redo_via_menu,
   reset_layout,
   save_current_dbc,
   save_dbc_as_path,
@@ -99,9 +100,7 @@ class TestDbcEditFlows:
         undo_text = output_path.read_text()
         assert "CABANA_UNDO_MSG" not in undo_text
 
-        cabana.focus()
-        cabana.send_key("ctrl+y")
-        time.sleep(1.0)
+        redo_via_menu(cabana)
         save_current_dbc(cabana)
         redo_text = output_path.read_text()
         assert re.search(r"BO_ \d+ CABANA_UNDO_MSG:", redo_text)

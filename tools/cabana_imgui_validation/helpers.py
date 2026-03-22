@@ -39,10 +39,16 @@ FILE_MENU = (15, 12)
 FILE_MENU_SAVE = (60, 199)
 FILE_MENU_SAVE_AS = (60, 215)
 FILE_MENU_EXIT = (30, 295)
+FILE_MENU_MANAGE_DBCS = (60, 124)
 EDIT_MENU = (38, 12)
 EDIT_MENU_UNDO = (78, 28)
+EDIT_MENU_REDO = (78, 44)
 EDIT_MENU_EDIT_MESSAGE = (80, 60)
 EDIT_MENU_ADD_SIGNAL = (80, 76)
+MANAGE_DBC_MODAL_OPEN_X = 764
+MANAGE_DBC_MODAL_REMOVE_BUS_X = 1049
+MANAGE_DBC_MODAL_ROW_Y0 = 510
+MANAGE_DBC_MODAL_ROW_STEP = 40
 
 
 class XvfbCabana:
@@ -535,6 +541,34 @@ def save_current_dbc(cabana):
   time.sleep(1.2)
 
 
+def open_manage_dbc_for_bus_path(cabana, path, bus_index=0):
+  """Use File -> Manage DBC Files -> Bus N -> Open DBC."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_MANAGE_DBCS)
+  time.sleep(0.8)
+  cabana.click(MANAGE_DBC_MODAL_OPEN_X, MANAGE_DBC_MODAL_ROW_Y0 + bus_index * MANAGE_DBC_MODAL_ROW_STEP)
+  time.sleep(0.8)
+  cabana.send_key("ctrl+a")
+  time.sleep(0.1)
+  cabana.type_text(path)
+  time.sleep(0.3)
+  cabana.send_key("Return")
+  time.sleep(1.2)
+
+
+def remove_manage_dbc_from_bus(cabana, bus_index=0):
+  """Use File -> Manage DBC Files -> Bus N -> Remove Bus."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_MANAGE_DBCS)
+  time.sleep(0.8)
+  cabana.click(MANAGE_DBC_MODAL_REMOVE_BUS_X, MANAGE_DBC_MODAL_ROW_Y0 + bus_index * MANAGE_DBC_MODAL_ROW_STEP)
+  time.sleep(0.8)
+
+
 def open_add_signal_via_menu(cabana):
   """Use the real Edit -> Add Signal flow to open the signal editor."""
   cabana.focus()
@@ -559,6 +593,15 @@ def undo_via_menu(cabana):
   cabana.click(*EDIT_MENU)
   time.sleep(0.4)
   cabana.click(*EDIT_MENU_UNDO)
+  time.sleep(0.8)
+
+
+def redo_via_menu(cabana):
+  """Use the real Edit -> Redo flow."""
+  cabana.focus()
+  cabana.click(*EDIT_MENU)
+  time.sleep(0.4)
+  cabana.click(*EDIT_MENU_REDO)
   time.sleep(0.8)
 
 

@@ -163,7 +163,7 @@ double default_signal_max(int size) {
 
 void request_message_editor(const MessageId &msg_id, const MsgLiveData &live) {
   auto &dbc_mgr = cabana::dbc::dbc_manager();
-  auto *msg = dbc_mgr.msg(msg_id.address);
+  auto *msg = dbc_mgr.msg(msg_id);
   g_message_editor = {};
   g_message_editor.request_open = true;
   g_message_editor.focus_name = true;
@@ -171,7 +171,7 @@ void request_message_editor(const MessageId &msg_id, const MsgLiveData &live) {
   g_message_editor.existing = msg != nullptr;
   g_message_editor.size = msg ? static_cast<int>(msg->size) : std::max(1, (int)live.dat.size());
   copy_to_buffer(g_message_editor.name, sizeof(g_message_editor.name),
-                 msg ? msg->name : dbc_mgr.nextMessageName(msg_id.address));
+                 msg ? msg->name : dbc_mgr.nextMessageName(msg_id));
   copy_to_buffer(g_message_editor.transmitter, sizeof(g_message_editor.transmitter),
                  msg ? msg->transmitter : "XXX");
   copy_to_buffer(g_message_editor.comment, sizeof(g_message_editor.comment),
@@ -181,7 +181,7 @@ void request_message_editor(const MessageId &msg_id, const MsgLiveData &live) {
 void request_signal_editor_add(const MessageId &msg_id, int data_size) {
   auto &st = cabana::app_state();
   auto &dbc_mgr = cabana::dbc::dbc_manager();
-  auto *msg = dbc_mgr.msg(msg_id.address);
+  auto *msg = dbc_mgr.msg(msg_id);
 
   g_signal_editor = {};
   g_signal_editor.request_open = true;
@@ -194,7 +194,7 @@ void request_signal_editor_add(const MessageId &msg_id, int data_size) {
   g_signal_editor.is_little_endian = st.has_bit_selection ? st.bit_selection_little_endian : true;
   g_signal_editor.max = default_signal_max(g_signal_editor.size);
   copy_to_buffer(g_signal_editor.name, sizeof(g_signal_editor.name),
-                 dbc_mgr.nextSignalName(msg_id.address));
+                 dbc_mgr.nextSignalName(msg_id));
 }
 
 void request_signal_editor_edit(const MessageId &msg_id, const cabana::dbc::Signal &signal, int data_size) {
@@ -235,7 +235,7 @@ bool submit_message_editor() {
     g_message_editor.error = "Node must be empty or a valid DBC identifier.";
     return false;
   }
-  if (dbc_mgr.messageNameExists(name, g_message_editor.msg_id.address)) {
+  if (dbc_mgr.messageNameExists(name, g_message_editor.msg_id, g_message_editor.msg_id.address)) {
     g_message_editor.error = "Message name already exists in the loaded DBC.";
     return false;
   }
@@ -244,7 +244,7 @@ bool submit_message_editor() {
     return false;
   }
 
-  if (const auto *msg = dbc_mgr.msg(g_message_editor.msg_id.address)) {
+  if (const auto *msg = dbc_mgr.msg(g_message_editor.msg_id)) {
     int required_bits = 0;
     for (const auto &signal : msg->signals) {
       required_bits = std::max(required_bits, signal_highest_bit(signal) + 1);
@@ -257,7 +257,7 @@ bool submit_message_editor() {
 
   const char *label = g_message_editor.existing ? "Edit Message" : "Create Message";
   if (!apply_dbc_edit_command(label, [&]() {
-        return dbc_mgr.updateMessage(g_message_editor.msg_id.address, name, g_message_editor.size,
+        return dbc_mgr.updateMessage(g_message_editor.msg_id, name, g_message_editor.size,
                                      transmitter, comment);
       })) {
     g_message_editor.error = "Failed to update the message definition.";
@@ -268,7 +268,7 @@ bool submit_message_editor() {
 
 bool submit_signal_editor() {
   auto &dbc_mgr = cabana::dbc::dbc_manager();
-  auto *msg = dbc_mgr.msg(g_signal_editor.msg_id.address);
+  auto *msg = dbc_mgr.msg(g_signal_editor.msg_id);
   const std::string name = trim_copy(g_signal_editor.name);
   const std::string unit = trim_copy(g_signal_editor.unit);
   const std::string comment = trim_copy(g_signal_editor.comment);
@@ -335,9 +335,9 @@ bool submit_signal_editor() {
   if (!apply_dbc_edit_command(label, [&]() {
         bool ok = false;
         if (g_signal_editor.mode == SignalEditorState::Mode::Add) {
-          ok = dbc_mgr.addSignal(g_signal_editor.msg_id.address, signal);
+          ok = dbc_mgr.addSignal(g_signal_editor.msg_id, signal);
         } else {
-          ok = dbc_mgr.updateSignal(g_signal_editor.msg_id.address, g_signal_editor.original_name, signal);
+          ok = dbc_mgr.updateSignal(g_signal_editor.msg_id, g_signal_editor.original_name, signal);
         }
         if (!ok) {
           return false;
@@ -512,7 +512,7 @@ ImU32 byte_color(uint8_t val) {
 
 void render_binary_view(const MessageId &id, const uint8_t *data, int data_size) {
   auto &st = cabana::app_state();
-  auto *msg = cabana::dbc::dbc_manager().msg(id.address);
+  auto *msg = cabana::dbc::dbc_manager().msg(id);
 
   if (msg) {
     if (st.has_bit_selection) {
@@ -612,7 +612,7 @@ void render_binary_view(const MessageId &id, const uint8_t *data, int data_size)
 }
 
 void render_signal_list(const MessageId &id, const uint8_t *data, int data_size) {
-  auto *msg = cabana::dbc::dbc_manager().msg(id.address);
+  auto *msg = cabana::dbc::dbc_manager().msg(id);
   auto &st = cabana::app_state();
   if (!msg || msg->signals.empty()) {
     if (msg) {
@@ -715,7 +715,7 @@ void render_signal_list(const MessageId &id, const uint8_t *data, int data_size)
 
   if (!signal_to_remove.empty()) {
     apply_dbc_edit_command("Remove Signal", [&]() {
-      if (!cabana::dbc::dbc_manager().removeSignal(id.address, signal_to_remove)) {
+      if (!cabana::dbc::dbc_manager().removeSignal(id, signal_to_remove)) {
         return false;
       }
       st.removeSignalFromCharts(id, signal_to_remove);
@@ -756,7 +756,7 @@ void render_history_view(const MessageId &id, cabana::ReplaySource *src) {
     return;
   }
 
-  const auto *dbc_msg = cabana::dbc::dbc_manager().msg(id.address);
+  const auto *dbc_msg = cabana::dbc::dbc_manager().msg(id);
   const bool has_signals = dbc_msg && !dbc_msg->signals.empty();
   static bool hex_mode = false;
   if (has_signals) {
@@ -835,7 +835,7 @@ bool canEditSelectedMessage() {
 
 bool canAddSignalToSelectedMessage() {
   if (!canEditSelectedMessage()) return false;
-  return cabana::dbc::dbc_manager().msg(cabana::app_state().selected_msg.address) != nullptr;
+  return cabana::dbc::dbc_manager().msg(cabana::app_state().selected_msg) != nullptr;
 }
 
 void requestEditSelectedMessage() {
@@ -893,7 +893,7 @@ void detail() {
   const uint8_t *data = live.dat.empty() ? nullptr : live.dat.data();
   const int data_size = (int)live.dat.size();
 
-  auto *dbc_msg = cabana::dbc::dbc_manager().msg(id.address);
+  auto *dbc_msg = cabana::dbc::dbc_manager().msg(id);
 
   if (dbc_msg) {
     ImFont *bold = cabana::theme::font_bold();
@@ -931,14 +931,14 @@ void detail() {
 
   if (remove_message) {
     if (apply_dbc_edit_command("Remove Message", [&]() {
-          if (!cabana::dbc::dbc_manager().removeMessage(id.address)) {
+          if (!cabana::dbc::dbc_manager().removeMessage(id)) {
             return false;
           }
           st.removeChartsForMessage(id);
           st.clearBitSelection();
           return true;
         })) {
-      dbc_msg = cabana::dbc::dbc_manager().msg(id.address);
+      dbc_msg = cabana::dbc::dbc_manager().msg(id);
     }
   }
 

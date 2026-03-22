@@ -50,25 +50,21 @@ void messages() {
   static std::vector<MsgRow> rows;
   static int last_msg_count = 0;
   static const cabana::ReplaySource *last_src = nullptr;
-  static std::string last_dbc_name;
   static uint64_t last_dbc_revision = 0;
 
   if (src) {
     const auto &msgs = src->messages();
     auto &dbc_mgr = cabana::dbc::dbc_manager();
-    const std::string loaded_dbc_name = dbc_mgr.loadedName();
     const uint64_t dbc_revision = dbc_mgr.revision();
 
-    if (src != last_src || loaded_dbc_name != last_dbc_name || dbc_revision != last_dbc_revision ||
-        (int)msgs.size() != last_msg_count) {
+    if (src != last_src || dbc_revision != last_dbc_revision || (int)msgs.size() != last_msg_count) {
       last_src = src;
-      last_dbc_name = loaded_dbc_name;
       last_dbc_revision = dbc_revision;
       last_msg_count = (int)msgs.size();
       rows.clear();
       rows.reserve(msgs.size());
       for (const auto &[id, m] : msgs) {
-        const char *msg_name = dbc_mgr.msgName(id.address);
+        const char *msg_name = dbc_mgr.msgName(id);
         std::string name;
         if (msg_name) {
           name = msg_name;
@@ -96,7 +92,6 @@ void messages() {
     rows.clear();
     last_msg_count = 0;
     last_src = nullptr;
-    last_dbc_name.clear();
     last_dbc_revision = 0;
   }
 

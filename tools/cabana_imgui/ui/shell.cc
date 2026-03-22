@@ -142,7 +142,7 @@ void render() {
     cabana::file_dialogs::requestOpenDbc();
   }
   if (!io.WantTextInput && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
-    if (cabana::dbc::dbc_manager().dbc()) {
+    if (cabana::dbc::dbc_manager().hasAnyDbc()) {
       if (io.KeyShift || cabana::dbc::dbc_manager().loadedName().empty()) {
         cabana::file_dialogs::requestSaveDbcAs();
       } else if (app()) {

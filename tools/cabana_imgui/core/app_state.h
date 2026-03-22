@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -76,6 +77,7 @@ struct AppState {
 
   // Persisted recent state
   std::string active_dbc_file;
+  std::map<int, std::string> active_dbc_files;
   std::vector<std::string> recent_dbc_files;
   std::vector<std::string> recent_routes;
 
@@ -93,6 +95,10 @@ struct AppState {
   void clearBitSelection();
   void setCurrentDetailTab(DetailTab tab);
   void rememberRecentDbc(const std::string &path);
+  void setDbcAssignments(const SourceSet &sources, const std::string &path);
+  void clearDbcAssignments(const SourceSet &sources);
+  void clearDbcFileAssignments(const std::string &path);
+  std::string dbcPathForSource(int source) const;
   void rememberRecentRoute(const std::string &route);
   ChartTabState &ensureChartTab();
   ChartTabState *activeChartTab();
