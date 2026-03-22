@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <getopt.h>
+#include <mutex>
 #include <thread>
 
 #include "imgui.h"
@@ -26,8 +27,19 @@ Application::~Application() { shutdown(); }
 static Application *s_app = nullptr;
 Application *app() { return s_app; }
 
+struct ReplayLoadState {
+  std::mutex lock;
+  std::atomic<bool> done = false;
+  std::unique_ptr<cabana::ReplaySource> source;
+  std::string error;
+};
+
 static void glfw_error_callback(int error, const char *description) {
   fprintf(stderr, "GLFW Error %d: %s\n", error, description);
+}
+
+static std::string window_title(const std::string &route) {
+  return route.empty() ? "Cabana" : ("Cabana - " + route);
 }
 
 bool Application::parseArgs(int argc, char *argv[]) {
@@ -80,8 +92,8 @@ bool Application::init(int argc, char *argv[]) {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-  const char *title = route_.empty() ? "Cabana" : route_.c_str();
-  window = glfwCreateWindow(1600, 900, title, nullptr, nullptr);
+  std::string title = window_title(route_);
+  window = glfwCreateWindow(1600, 900, title.c_str(), nullptr, nullptr);
   if (!window) {
     fprintf(stderr, "Failed to create GLFW window\n");
     glfwTerminate();
@@ -124,23 +136,15 @@ bool Application::init(int argc, char *argv[]) {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 130");
 
-  // Load route if specified
-  if (!route_.empty()) {
-    source_ = std::make_unique<cabana::ReplaySource>();
-    if (source_->load(route_, data_dir_, replay_flags_, auto_source_)) {
-      source_->start();
-      auto &st = cabana::app_state();
-      st.route_name = source_->routeName();
-      st.car_fingerprint = source_->carFingerprint();
+  auto &st = cabana::app_state();
+  st.route_name.clear();
+  st.car_fingerprint.clear();
+  st.route_loading = false;
+  st.route_load_error.clear();
 
-      // Auto-load DBC from fingerprint or CLI arg
-      if (!dbc_file_.empty()) {
-        cabana::dbc::dbc_manager().loadFromFile(dbc_file_);
-      }
-      // Fingerprint may not be available yet — will be loaded on first poll
-    } else {
-      source_.reset();
-    }
+  // Kick route loading to a background thread so the first frame appears immediately.
+  if (!route_.empty()) {
+    beginReplayLoad();
   }
 
   return true;
@@ -153,6 +157,7 @@ int Application::run() {
   while (!glfwWindowShouldClose(window) && !st.quit_requested) {
     double frame_start = glfwGetTime();
     glfwPollEvents();
+    pollReplayLoad();
 
     // Keyboard shortcuts
     if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Q)) {
@@ -211,7 +216,69 @@ int Application::run() {
   return 0;
 }
 
+void Application::beginReplayLoad() {
+  auto &st = cabana::app_state();
+  st.route_name = route_;
+  st.car_fingerprint.clear();
+  st.route_loading = true;
+  st.route_load_error.clear();
+
+  auto load_state = std::make_shared<ReplayLoadState>();
+  replay_load_state_ = load_state;
+
+  const std::string route = route_;
+  const std::string data_dir = data_dir_;
+  const uint32_t replay_flags = replay_flags_;
+  const bool auto_source = auto_source_;
+
+  std::thread([load_state, route, data_dir, replay_flags, auto_source]() {
+    auto source = std::make_unique<cabana::ReplaySource>();
+    const bool ok = source->load(route, data_dir, replay_flags, auto_source);
+
+    std::lock_guard lk(load_state->lock);
+    if (ok) {
+      load_state->source = std::move(source);
+    } else {
+      load_state->error = "Failed to load route";
+    }
+    load_state->done.store(true);
+  }).detach();
+}
+
+void Application::pollReplayLoad() {
+  if (!replay_load_state_ || !replay_load_state_->done.load()) {
+    return;
+  }
+
+  auto &st = cabana::app_state();
+
+  {
+    std::lock_guard lk(replay_load_state_->lock);
+    if (replay_load_state_->source) {
+      source_ = std::move(replay_load_state_->source);
+      source_->start();
+
+      st.route_name = source_->routeName();
+      st.car_fingerprint = source_->carFingerprint();
+      st.route_load_error.clear();
+
+      if (!dbc_file_.empty()) {
+        cabana::dbc::dbc_manager().loadFromFile(dbc_file_);
+      }
+
+      std::string title = window_title(st.route_name);
+      glfwSetWindowTitle(window, title.c_str());
+    } else if (!replay_load_state_->error.empty()) {
+      st.route_load_error = replay_load_state_->error;
+    }
+  }
+
+  st.route_loading = false;
+  replay_load_state_.reset();
+}
+
 void Application::shutdown() {
+  replay_load_state_.reset();
   source_.reset();
 
   ImGui_ImplOpenGL3_Shutdown();

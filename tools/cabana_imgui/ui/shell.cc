@@ -69,6 +69,36 @@ static void render_status_bar() {
   ImGui::PopStyleVar(3);
 }
 
+static void render_route_load_overlay() {
+  auto &st = cabana::app_state();
+  if (!st.route_loading && st.route_load_error.empty()) {
+    return;
+  }
+
+  ImGuiViewport *viewport = ImGui::GetMainViewport();
+  ImVec2 center = viewport->GetCenter();
+  ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowBgAlpha(0.92f);
+
+  ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                           ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                           ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoNav;
+
+  if (ImGui::Begin("##RouteLoadOverlay", nullptr, flags)) {
+    if (st.route_loading) {
+      ImGui::TextUnformatted("Loading route...");
+      if (!st.route_name.empty()) {
+        ImGui::TextDisabled("%s", st.route_name.c_str());
+      }
+    } else {
+      ImGui::TextUnformatted("Route load failed");
+      ImGui::Separator();
+      ImGui::TextWrapped("%s", st.route_load_error.c_str());
+    }
+  }
+  ImGui::End();
+}
+
 void render() {
   ImGuiViewport *viewport = ImGui::GetMainViewport();
 
@@ -110,6 +140,7 @@ void render() {
 
   // Status bar
   render_status_bar();
+  render_route_load_overlay();
 }
 
 }  // namespace shell

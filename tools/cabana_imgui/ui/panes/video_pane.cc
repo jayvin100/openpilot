@@ -35,7 +35,12 @@ void video() {
   } else {
     ImGui::TextUnformatted("ROUTE:");
     ImGui::SameLine();
-    ImGui::TextDisabled("(no route loaded)");
+    ImGui::TextDisabled(st.route_loading ? "(loading route...)" : "(no route loaded)");
+  }
+
+  if (!st.route_load_error.empty()) {
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.85f, 0.35f, 0.35f, 1.0f), "load failed");
   }
 
   ImGui::Separator();

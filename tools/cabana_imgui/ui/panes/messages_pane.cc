@@ -109,7 +109,14 @@ void messages() {
     if (rows.empty()) {
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
-      ImGui::TextDisabled("(no stream loaded)");
+      const auto &st = cabana::app_state();
+      if (st.route_loading) {
+        ImGui::TextDisabled("(loading route...)");
+      } else if (!st.route_load_error.empty()) {
+        ImGui::TextDisabled("(route load failed)");
+      } else {
+        ImGui::TextDisabled("(no stream loaded)");
+      }
     } else {
       // Build filtered indices once per frame
       bool has_filter = search[0] != '\0';

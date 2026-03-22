@@ -14,6 +14,8 @@ struct AppState {
   // Route info (set after load)
   std::string route_name;
   std::string car_fingerprint;
+  bool route_loading = false;
+  std::string route_load_error;
   double current_sec = 0;
   double min_sec = 0;
   double max_sec = 0;

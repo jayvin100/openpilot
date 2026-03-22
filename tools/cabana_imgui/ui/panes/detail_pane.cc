@@ -15,6 +15,7 @@ namespace cabana {
 namespace panes {
 
 static void render_splash() {
+  auto &st = cabana::app_state();
   ImVec2 avail = ImGui::GetContentRegionAvail();
   float cx = avail.x * 0.5f;
   float cy = avail.y * 0.38f;
@@ -33,7 +34,9 @@ static void render_splash() {
 
   ImGui::Spacing();
   {
-    const char *sub = "<-Select a message to view details";
+    const char *sub = st.route_loading ? "Loading route data..." :
+                     !st.route_load_error.empty() ? "Route load failed" :
+                     "<-Select a message to view details";
     float sw = ImGui::CalcTextSize(sub).x;
     ImGui::SetCursorPosX(cx - sw * 0.5f);
     ImGui::TextDisabled("%s", sub);

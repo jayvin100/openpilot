@@ -7,6 +7,8 @@ struct GLFWwindow;
 
 #include "sources/replay_source.h"
 
+struct ReplayLoadState;
+
 class Application {
 public:
   ~Application();
@@ -18,9 +20,12 @@ public:
 
 private:
   bool parseArgs(int argc, char *argv[]);
+  void beginReplayLoad();
+  void pollReplayLoad();
 
   GLFWwindow *window = nullptr;
   std::unique_ptr<cabana::ReplaySource> source_;
+  std::shared_ptr<ReplayLoadState> replay_load_state_;
 
   // CLI args
   std::string route_;

@@ -11,13 +11,7 @@ import pytest
 
 from ..helpers import DEMO_ROUTE, XvfbCabana  # noqa: TID251
 
-pytestmark = [
-  pytest.mark.xdist_group("cabana_demo_route"),
-  pytest.mark.xfail(
-    reason="route-backed startup does not yet surface a window within the validation timeout",
-    strict=True,
-  ),
-]
+pytestmark = pytest.mark.xdist_group("cabana_demo_route")
 
 
 class TestDemoRoute:
