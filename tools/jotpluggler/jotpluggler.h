@@ -407,6 +407,50 @@ struct AxisLimitsEditorState {
   double y_max = 1.0;
 };
 
+struct UndoStack {
+  static constexpr size_t kMaxHistory = 50;
+
+  std::vector<SketchLayout> history;
+  int position = -1;
+
+  void reset(const SketchLayout &layout) {
+    history.clear();
+    history.push_back(layout);
+    position = 0;
+  }
+
+  void push(const SketchLayout &layout) {
+    if (position < 0) {
+      reset(layout);
+      return;
+    }
+    if (position + 1 < static_cast<int>(history.size())) {
+      history.resize(static_cast<size_t>(position + 1));
+    }
+    history.push_back(layout);
+    if (history.size() > kMaxHistory) {
+      history.erase(history.begin());
+    }
+    position = static_cast<int>(history.size()) - 1;
+  }
+
+  bool can_undo() const {
+    return position > 0;
+  }
+
+  bool can_redo() const {
+    return position >= 0 && position + 1 < static_cast<int>(history.size());
+  }
+
+  const SketchLayout &undo() {
+    return history[static_cast<size_t>(--position)];
+  }
+
+  const SketchLayout &redo() {
+    return history[static_cast<size_t>(++position)];
+  }
+};
+
 struct UiState {
   bool open_open_route = false;
   bool open_stream = false;
@@ -458,6 +502,7 @@ struct UiState {
   AxisLimitsEditorState axis_limits;
   CustomSeriesEditorState custom_series;
   LogsUiState logs;
+  UndoStack undo;
 };
 
 // inline helpers

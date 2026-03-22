@@ -208,6 +208,7 @@ void start_new_layout(AppSession *session, UiState *state, const std::string &st
   session->layout = make_empty_layout();
   session->layout_path.clear();
   session->autosave_path.clear();
+  state->undo.reset(session->layout);
   state->layout_dirty = false;
   state->status_text = status_text;
   state->tabs.clear();
@@ -902,9 +903,11 @@ bool add_path_curve_to_pane(AppSession *session, UiState *state, int pane_index,
     state->status_text = "No active pane";
     return false;
   }
+  const SketchLayout before_layout = session->layout;
   const bool inserted = add_curve_to_pane(tab, pane_index, make_curve_for_path(tab->panes[static_cast<size_t>(pane_index)], path));
   bool autosave_ok = true;
   if (inserted) {
+    state->undo.push(before_layout);
     autosave_ok = mark_layout_dirty(session, state);
   }
   if (autosave_ok) {
@@ -922,6 +925,7 @@ int add_path_curves_to_pane(AppSession *session, UiState *state, int pane_index,
 
   int inserted_count = 0;
   int duplicate_count = 0;
+  const SketchLayout before_layout = session->layout;
   for (const std::string &path : paths) {
     if (app_find_route_series(*session, path) == nullptr) continue;
     if (add_curve_to_pane(tab, pane_index, make_curve_for_path(tab->panes[static_cast<size_t>(pane_index)], path))) {
@@ -932,6 +936,7 @@ int add_path_curves_to_pane(AppSession *session, UiState *state, int pane_index,
   }
 
   if (inserted_count > 0) {
+    state->undo.push(before_layout);
     if (mark_layout_dirty(session, state)) {
       state->status_text = inserted_count == 1
         ? "Added " + paths.front()
@@ -1099,7 +1104,9 @@ void draw_inline_tab_editor(AppSession *session, UiState *state, const ImRect &t
   if (escape) {
     cancel_rename_tab(state);
   } else if (submitted || deactivated) {
+    const SketchLayout before_layout = session->layout;
     rename_runtime_tab(&session->layout, state);
+    state->undo.push(before_layout);
     mark_layout_dirty(session, state);
   }
 }
@@ -1557,6 +1564,7 @@ bool apply_axis_limits_editor(AppSession *session, UiState *state) {
     return false;
   }
 
+  const SketchLayout before_layout = session->layout;
   state->has_shared_range = true;
   state->x_view_min = editor.x_min;
   state->x_view_max = editor.x_max;
@@ -1582,6 +1590,7 @@ bool apply_axis_limits_editor(AppSession *session, UiState *state) {
   pane.range.bottom = bounds.y_min;
   pane.range.top = bounds.y_max;
 
+  state->undo.push(before_layout);
   const bool ok = mark_layout_dirty(session, state);
   if (ok) {
     state->status_text = "Axis limits updated";
@@ -1832,6 +1841,7 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
   if (tab == nullptr || tab_state == nullptr) return false;
 
   const int original_pane_count = static_cast<int>(tab->panes.size());
+  const SketchLayout before_layout = session->layout;
   bool dock_changed = false;
   bool layout_changed = false;
   switch (action.kind) {
@@ -1901,6 +1911,7 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
   }
   bool autosave_ok = true;
   if (layout_changed) {
+    state->undo.push(before_layout);
     autosave_ok = mark_layout_dirty(session, state);
   }
   if (autosave_ok) {
@@ -1923,11 +1934,21 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
       }
       return inserted_count > 0;
     }
+    const SketchLayout before_layout = session->layout;
     if (split_pane(tab, action.target_pane_index, action.zone)) {
       tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
-      const int inserted_count = add_path_curves_to_pane(session, state, tab_state->active_pane_index, action.browser_paths);
+      int inserted_count = 0;
+      for (const std::string &path : action.browser_paths) {
+        if (app_find_route_series(*session, path) == nullptr) continue;
+        if (add_curve_to_pane(tab, tab_state->active_pane_index,
+                              make_curve_for_path(tab->panes[static_cast<size_t>(tab_state->active_pane_index)], path))) {
+          ++inserted_count;
+        }
+      }
       mark_tab_dock_dirty(state, state->active_tab_index);
       if (inserted_count > 0) {
+        state->undo.push(before_layout);
+        mark_layout_dirty(session, state);
         state->status_text = inserted_count == 1
           ? "Split pane and added " + action.browser_paths.front()
           : "Split pane and added " + std::to_string(inserted_count) + " curves";
@@ -1955,9 +1976,11 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
   const Curve curve = source_pane.curves[static_cast<size_t>(action.curve_ref.curve_index)];
 
   if (action.zone == PaneDropZone::Center) {
+    const SketchLayout before_layout = session->layout;
     const bool inserted = add_curve_to_pane(tab, action.target_pane_index, curve);
     tab_state->active_pane_index = action.target_pane_index;
     if (inserted) {
+      state->undo.push(before_layout);
       if (mark_layout_dirty(session, state)) {
         state->status_text = "Added " + app_curve_display_name(curve);
       }
@@ -1966,9 +1989,11 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
     }
     return true;
   }
+  const SketchLayout before_layout = session->layout;
   if (split_pane(tab, action.target_pane_index, action.zone, curve)) {
     tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
     mark_tab_dock_dirty(state, state->active_tab_index);
+    state->undo.push(before_layout);
     if (mark_layout_dirty(session, state)) {
       state->status_text = "Split pane and added " + app_curve_display_name(curve);
     }
@@ -2231,7 +2256,9 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
       }
 
       if (state->request_new_tab || pending_action == TabActionKind::New) {
+        const SketchLayout before_layout = session->layout;
         create_runtime_tab(&session->layout, state);
+        state->undo.push(before_layout);
         mark_layout_dirty(session, state);
         state->request_new_tab = false;
       } else if (pending_action == TabActionKind::Rename) {
@@ -2240,14 +2267,18 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
         if (pending_tab_index >= 0) {
           request_tab_selection(state, pending_tab_index);
         }
+        const SketchLayout before_layout = session->layout;
         duplicate_runtime_tab(&session->layout, state);
+        state->undo.push(before_layout);
         mark_layout_dirty(session, state);
         state->request_duplicate_tab = false;
       } else if (state->request_close_tab || pending_action == TabActionKind::Close) {
         if (pending_tab_index >= 0) {
           request_tab_selection(state, pending_tab_index);
         }
+        const SketchLayout before_layout = session->layout;
         close_runtime_tab(&session->layout, state);
+        state->undo.push(before_layout);
         mark_layout_dirty(session, state);
         state->request_close_tab = false;
       }
@@ -2286,6 +2317,7 @@ int run(const Options &options) {
     session.layout = load_sketch_layout(session.autosave_path);
     ui_state.layout_dirty = true;
   }
+  ui_state.undo.reset(session.layout);
   sync_ui_state(&ui_state, session.layout);
   sync_route_buffers(&ui_state, session);
   sync_stream_buffers(&ui_state, session);
@@ -2345,5 +2377,3 @@ int run(const Options &options) {
     return 1;
   }
 }
-
-

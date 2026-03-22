@@ -6,6 +6,15 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   } else {
     clamp_shared_range(state, *session);
   }
+  const bool ctrl = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+  const bool shift = ImGui::GetIO().KeyShift;
+  if (!ImGui::GetIO().WantTextInput && ctrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+    if (shift) {
+      apply_redo(session, state);
+    } else {
+      apply_undo(session, state);
+    }
+  }
   if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
     step_tracker(state, -1.0);
   }

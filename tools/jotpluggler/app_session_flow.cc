@@ -18,6 +18,35 @@ void apply_route_data(AppSession *session, UiState *state, RouteData route_data)
   reset_shared_range(state, *session);
 }
 
+bool restore_undo_layout(AppSession *session, UiState *state, const SketchLayout &layout, const char *status_text) {
+  session->layout = layout;
+  cancel_rename_tab(state);
+  state->custom_series.request_select = false;
+  state->active_tab_index = std::clamp(layout.current_tab_index, 0, std::max(0, static_cast<int>(layout.tabs.size()) - 1));
+  state->requested_tab_index = state->active_tab_index;
+  sync_ui_state(state, session->layout);
+  mark_all_docks_dirty(state);
+  const bool autosave_ok = autosave_layout(session, state);
+  if (autosave_ok) {
+    state->status_text = status_text;
+  }
+  return autosave_ok;
+}
+
+bool apply_undo(AppSession *session, UiState *state) {
+  if (!state->undo.can_undo()) {
+    return false;
+  }
+  return restore_undo_layout(session, state, state->undo.undo(), "Undo");
+}
+
+bool apply_redo(AppSession *session, UiState *state) {
+  if (!state->undo.can_redo()) {
+    return false;
+  }
+  return restore_undo_layout(session, state, state->undo.redo(), "Redo");
+}
+
 std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab &tab) {
   bool found = false;
   double min_value = 0.0;
@@ -214,6 +243,13 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
   float height = ImGui::GetFrameHeight();
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("File")) {
+      if (ImGui::MenuItem("Undo", "Ctrl+Z", false, state->undo.can_undo())) {
+        apply_undo(session, state);
+      }
+      if (ImGui::MenuItem("Redo", "Ctrl+Shift+Z", false, state->undo.can_redo())) {
+        apply_redo(session, state);
+      }
+      ImGui::Separator();
       if (ImGui::MenuItem("Open Route...")) {
         state->open_open_route = true;
       }

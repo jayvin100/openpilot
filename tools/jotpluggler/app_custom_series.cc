@@ -521,6 +521,7 @@ bool apply_custom_series_editor(AppSession *session, UiState *state) {
 
   try {
     PythonEvalResult result = evaluate_custom_python_series(*session, spec);
+    const SketchLayout before_layout = session->layout;
     Pane &pane = tab->panes[static_cast<size_t>(tab_state->active_pane_index)];
     editor.preview_label = editor.name;
     editor.preview_xs = result.xs;
@@ -529,6 +530,7 @@ bool apply_custom_series_editor(AppSession *session, UiState *state) {
     const bool inserted = upsert_custom_curve_in_pane(tab,
                                                       tab_state->active_pane_index,
                                                       make_custom_curve(pane, editor.name, spec, std::move(result)));
+    state->undo.push(before_layout);
     state->status_text = inserted ? "Created custom series " + editor.name
                                   : "Updated custom series " + editor.name;
     return true;
@@ -783,4 +785,3 @@ void draw_custom_series_editor(AppSession *session, UiState *state) {
     ImGui::EndTabBar();
   }
 }
-
