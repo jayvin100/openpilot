@@ -153,6 +153,14 @@ void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch 
     session->route_data.has_time_range = true;
   }
 
+  if (new_paths
+      || std::find(touched_paths.begin(), touched_paths.end(), "/gpsLocationExternal/latitude") != touched_paths.end()
+      || std::find(touched_paths.begin(), touched_paths.end(), "/gpsLocationExternal/longitude") != touched_paths.end()
+      || std::find(touched_paths.begin(), touched_paths.end(), "/gpsLocationExternal/hasFix") != touched_paths.end()
+      || std::find(touched_paths.begin(), touched_paths.end(), "/gpsLocationExternal/bearingDeg") != touched_paths.end()) {
+    rebuild_gps_trace(&session->route_data);
+  }
+
   if (latest_time.has_value() && layout_has_custom_curves(session->layout)
       && *latest_time >= session->next_stream_custom_refresh_time) {
     refresh_all_custom_curves(session, state);

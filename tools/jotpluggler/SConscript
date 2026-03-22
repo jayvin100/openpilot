@@ -24,6 +24,7 @@ jot_sources = [
   "app_custom_series.cc",
   "app_layout_io.cc",
   "app_logs.cc",
+  "app_map.cc",
   "app_runtime.cc",
   "bootstrap_icons.cc",
   "dbc_core.cc",

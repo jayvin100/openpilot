@@ -76,7 +76,13 @@ struct Curve {
   std::vector<double> ys;
 };
 
+enum class PaneKind : uint8_t {
+  Plot,
+  Map,
+};
+
 struct Pane {
+  PaneKind kind = PaneKind::Plot;
   std::string title;
   PlotRange range;
   std::vector<Curve> curves;
@@ -169,6 +175,22 @@ struct TimelineEntry {
   Type type = Type::None;
 };
 
+struct GpsPoint {
+  double time = 0.0;
+  double lat = 0.0;
+  double lon = 0.0;
+  float bearing = 0.0f;
+  TimelineEntry::Type type = TimelineEntry::Type::None;
+};
+
+struct GpsTrace {
+  std::vector<GpsPoint> points;
+  double min_lat = 0.0;
+  double max_lat = 0.0;
+  double min_lon = 0.0;
+  double max_lon = 0.0;
+};
+
 enum class LogSelector : uint8_t {
   Auto,
   RLog,
@@ -236,6 +258,7 @@ struct RouteData {
   std::vector<std::string> paths;
   std::vector<std::string> roots;
   CameraFeedIndex road_camera;
+  GpsTrace gps_trace;
   std::vector<LogEntry> logs;
   std::vector<TimelineEntry> timeline;
   std::unordered_map<std::string, EnumInfo> enum_info;
@@ -316,6 +339,7 @@ RouteData load_route_data(const std::string &route_name,
                           const std::string &dbc_name = {},
                           const RouteLoadProgressCallback &progress = {});
 RouteIdentifier parse_route_identifier(std::string_view route_name);
+void rebuild_gps_trace(RouteData *route_data);
 
 // *****
 // dbc_core
@@ -405,6 +429,7 @@ bool menuItem(std::string_view icon_id,
 class AsyncRouteLoader;
 class SidebarCameraFeed;
 class StreamPoller;
+class MapTileManager;
 
 enum class SessionDataMode : uint8_t {
   Route,
@@ -434,6 +459,7 @@ struct AppSession {
   std::unique_ptr<AsyncRouteLoader> route_loader;
   std::unique_ptr<StreamPoller> stream_poller;
   std::unique_ptr<SidebarCameraFeed> camera_feed;
+  std::unique_ptr<MapTileManager> map_tiles;
   bool async_route_loading = false;
   double next_stream_custom_refresh_time = 0.0;
   bool stream_paused = false;
@@ -441,9 +467,18 @@ struct AppSession {
 };
 
 struct TabUiState {
+  struct MapPaneState {
+    bool initialized = false;
+    bool follow = false;
+    int zoom = 1;
+    double center_lat = 0.0;
+    double center_lon = 0.0;
+  };
+
   bool dock_needs_build = true;
   int active_pane_index = 0;
   int runtime_id = 0;
+  std::vector<MapPaneState> map_panes;
 };
 
 struct CustomSeriesEditorState {
@@ -764,6 +799,12 @@ void draw_custom_series_editor(AppSession *session, UiState *state);
 // *****
 
 void draw_logs_tab(AppSession *session, UiState *state);
+
+// *****
+// map
+// *****
+
+void draw_map_pane(AppSession *session, UiState *state, Pane *pane, int pane_index);
 
 // *****
 // runtime (GLFW, async loaders, streaming, camera)

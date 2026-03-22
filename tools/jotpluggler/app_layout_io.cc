@@ -60,6 +60,9 @@ json11::Json workspace_node_to_json(const WorkspaceNode &node, const WorkspaceTa
     json11::Json::object obj = {
       {"title", pane.title.empty() ? std::string("...") : pane.title},
     };
+    if (pane.kind == PaneKind::Map) {
+      obj["kind"] = "map";
+    }
     if (pane.range.valid) {
       obj["range"] = json11::Json::object{
         {"left", pane.range.left}, {"right", pane.range.right},
@@ -122,4 +125,3 @@ void save_layout_json(const SketchLayout &layout, const fs::path &path) {
   if (!out) throw std::runtime_error("Failed to open layout for writing: " + path.string());
   out << root.dump() << "\n";
 }
-

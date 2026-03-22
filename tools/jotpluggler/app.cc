@@ -1,4 +1,5 @@
 #include "tools/jotpluggler/jotpluggler.h"
+#include "tools/jotpluggler/app_map.h"
 #include "imgui_impl_glfw.h"
 
 #include "imgui_internal.h"
@@ -414,6 +415,7 @@ void sync_ui_state(UiState *state, const SketchLayout &layout) {
       state->tabs[i].runtime_id = state->next_tab_runtime_id++;
     }
     const int pane_count = static_cast<int>(layout.tabs[i].panes.size());
+    state->tabs[i].map_panes.resize(static_cast<size_t>(std::max(0, pane_count)));
     state->tabs[i].active_pane_index = pane_count <= 0
       ? 0
       : std::clamp(state->tabs[i].active_pane_index, 0, pane_count - 1);
@@ -461,7 +463,7 @@ TabUiState *app_active_tab_state(UiState *state) {
 std::string pane_window_name(int tab_runtime_id, int pane_index, const Pane &pane) {
   const char *title = pane.title.empty() ? UNTITLED_PANE_TITLE : pane.title.c_str();
   char buf[256];
-  std::snprintf(buf, sizeof(buf), "%s##tab%d_pane%d", title, tab_runtime_id, pane_index);
+  std::snprintf(buf, sizeof(buf), "%s###tab%d_pane%d", title, tab_runtime_id, pane_index);
   return buf;
 }
 
@@ -509,6 +511,8 @@ enum class PaneMenuActionKind {
   None,
   OpenAxisLimits,
   OpenCustomSeries,
+  ConvertToMap,
+  ConvertToPlot,
   SplitLeft,
   SplitRight,
   SplitTop,
@@ -729,6 +733,17 @@ bool mark_layout_dirty(AppSession *session, UiState *state) {
   return autosave_layout(session, state);
 }
 
+bool active_tab_has_map_pane(const SketchLayout &layout) {
+  if (layout.tabs.empty()) {
+    return false;
+  }
+  const int tab_index = std::clamp(layout.current_tab_index, 0, static_cast<int>(layout.tabs.size()) - 1);
+  const WorkspaceTab &tab = layout.tabs[static_cast<size_t>(tab_index)];
+  return std::any_of(tab.panes.begin(), tab.panes.end(), [](const Pane &pane) {
+    return pane.kind == PaneKind::Map;
+  });
+}
+
 std::array<uint8_t, 3> app_next_curve_color(const Pane &pane) {
   static constexpr std::array<std::array<uint8_t, 3>, 10> PALETTE = {{
     {35, 107, 180},
@@ -917,6 +932,12 @@ bool add_curve_to_pane(WorkspaceTab *tab, int pane_index, Curve curve) {
     return false;
   }
   Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
+  if (pane.kind == PaneKind::Map) {
+    pane.kind = PaneKind::Plot;
+    if (pane.title == "Map") {
+      pane.title = UNTITLED_PANE_TITLE;
+    }
+  }
   for (Curve &existing : pane.curves) {
     const bool same_named_curve = !curve.name.empty() && existing.name == curve.name;
     const bool same_unnamed_curve = curve.name.empty() && existing.name.empty() && existing.label == curve.label;
@@ -2102,15 +2123,31 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
 
   PaneMenuAction action;
   action.pane_index = pane_index;
+  const Pane *pane = pane_index >= 0 && pane_index < static_cast<int>(tab.panes.size())
+    ? &tab.panes[static_cast<size_t>(pane_index)]
+    : nullptr;
   const bool has_curves = pane_index >= 0
     && pane_index < static_cast<int>(tab.panes.size())
     && !tab.panes[static_cast<size_t>(pane_index)].curves.empty();
-  if (bootstrap_icons::menuItem("sliders", "Edit Axis Limits...")) {
+  const bool is_map = pane != nullptr && pane->kind == PaneKind::Map;
+  if (action.kind == PaneMenuActionKind::None) {
+    if (is_map) {
+      if (bootstrap_icons::menuItem("", "Convert to Plot Pane")) {
+        action.kind = PaneMenuActionKind::ConvertToPlot;
+      }
+    } else if (bootstrap_icons::menuItem("", "Convert to Map Pane")) {
+      action.kind = PaneMenuActionKind::ConvertToMap;
+    }
+  }
+  if (action.kind != PaneMenuActionKind::None) {
+    ImGui::Separator();
+  }
+  if (bootstrap_icons::menuItem("sliders", "Edit Axis Limits...", nullptr, false, !is_map)) {
     action.kind = PaneMenuActionKind::OpenAxisLimits;
   }
-  bootstrap_icons::menuItem("palette", "Edit Curve Style...", nullptr, false, false);
+  bootstrap_icons::menuItem("palette", "Edit Curve Style...", nullptr, false, false && !is_map);
   if (action.kind == PaneMenuActionKind::None
-      && bootstrap_icons::menuItem("plus-slash-minus", "Apply filter to data...", nullptr, false, has_curves)) {
+      && bootstrap_icons::menuItem("plus-slash-minus", "Apply filter to data...", nullptr, false, has_curves && !is_map)) {
     action.kind = PaneMenuActionKind::OpenCustomSeries;
   }
   ImGui::Separator();
@@ -2121,15 +2158,15 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
     action.kind = PaneMenuActionKind::SplitTop;
   }
   ImGui::Separator();
-  if (bootstrap_icons::menuItem("zoom-out", "Zoom Out")) {
+  if (bootstrap_icons::menuItem("zoom-out", "Zoom Out", nullptr, false, !is_map)) {
     action.kind = PaneMenuActionKind::ResetView;
-  } else if (bootstrap_icons::menuItem("arrow-left-right", "Zoom Out Horizontally")) {
+  } else if (bootstrap_icons::menuItem("arrow-left-right", "Zoom Out Horizontally", nullptr, false, !is_map)) {
     action.kind = PaneMenuActionKind::ResetHorizontal;
-  } else if (bootstrap_icons::menuItem("arrow-down-up", "Zoom Out Vertically")) {
+  } else if (bootstrap_icons::menuItem("arrow-down-up", "Zoom Out Vertically", nullptr, false, !is_map)) {
     action.kind = PaneMenuActionKind::ResetVertical;
   }
   ImGui::Separator();
-  if (bootstrap_icons::menuItem("trash", "Remove ALL curves")) {
+  if (bootstrap_icons::menuItem("trash", "Remove ALL curves", nullptr, false, !is_map)) {
     action.kind = PaneMenuActionKind::Clear;
   }
   ImGui::Separator();
@@ -2232,6 +2269,22 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
   bool dock_changed = false;
   bool layout_changed = false;
   switch (action.kind) {
+    case PaneMenuActionKind::ConvertToMap:
+      tab->panes[static_cast<size_t>(pane_index)].kind = PaneKind::Map;
+      if (tab->panes[static_cast<size_t>(pane_index)].title == UNTITLED_PANE_TITLE) {
+        tab->panes[static_cast<size_t>(pane_index)].title = "Map";
+      }
+      layout_changed = true;
+      state->status_text = "Map pane enabled";
+      break;
+    case PaneMenuActionKind::ConvertToPlot:
+      tab->panes[static_cast<size_t>(pane_index)].kind = PaneKind::Plot;
+      if (tab->panes[static_cast<size_t>(pane_index)].title == "Map") {
+        tab->panes[static_cast<size_t>(pane_index)].title = UNTITLED_PANE_TITLE;
+      }
+      layout_changed = true;
+      state->status_text = "Plot pane enabled";
+      break;
     case PaneMenuActionKind::OpenAxisLimits:
       tab_state->active_pane_index = pane_index;
       open_axis_limits_editor(*session, state, pane_index);
@@ -2298,6 +2351,7 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
   if (dock_changed) {
     mark_tab_dock_dirty(state, state->active_tab_index);
   }
+  tab_state->map_panes.resize(tab->panes.size());
   bool autosave_ok = true;
   if (layout_changed) {
     state->undo.push(before_layout);
@@ -2326,6 +2380,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
     const SketchLayout before_layout = session->layout;
     if (split_pane(tab, action.target_pane_index, action.zone)) {
       tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+      tab_state->map_panes.resize(tab->panes.size());
       int inserted_count = 0;
       for (const std::string &path : action.browser_paths) {
         if (app_find_route_series(*session, path) == nullptr) continue;
@@ -2381,6 +2436,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
   const SketchLayout before_layout = session->layout;
   if (split_pane(tab, action.target_pane_index, action.zone, curve)) {
     tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
+    tab_state->map_panes.resize(tab->panes.size());
     mark_tab_dock_dirty(state, state->active_tab_index);
     state->undo.push(before_layout);
     if (mark_layout_dirty(session, state)) {
@@ -2475,11 +2531,17 @@ void draw_pane_windows(AppSession *session, UiState *state) {
           || (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && ImGui::IsMouseClicked(0))) {
         tab_state->active_pane_index = static_cast<int>(i);
       }
-      draw_plot(*session, &pane, state);
+      if (pane.kind == PaneKind::Map) {
+        draw_map_pane(session, state, &pane, static_cast<int>(i));
+      } else {
+        draw_plot(*session, &pane, state);
+      }
       draw_pane_frame_overlay();
       close_pane_requested = draw_pane_close_button_overlay();
       menu_action = draw_pane_context_menu(*tab, static_cast<int>(i));
-      drop_action = draw_pane_drop_target(state->active_tab_index, static_cast<int>(i));
+      if (pane.kind != PaneKind::Map) {
+        drop_action = draw_pane_drop_target(state->active_tab_index, static_cast<int>(i));
+      }
     }
     ImGui::End();
     ImGui::PopStyleVar();
@@ -2733,6 +2795,7 @@ int run(const Options &options) {
   GlfwRuntime glfw_runtime(options);
   ImGuiRuntime imgui_runtime(glfw_runtime.window());
   configure_style();
+  session.map_tiles = std::make_unique<MapTileManager>();
   if (session.data_mode == SessionDataMode::Route) {
     session.camera_feed = std::make_unique<SidebarCameraFeed>();
     session.camera_feed->setRouteData(session.route_data);
@@ -2748,12 +2811,16 @@ int run(const Options &options) {
 
   const bool should_capture = !options.output_path.empty();
   const fs::path output_path = should_capture ? fs::path(options.output_path) : fs::path();
+  const bool capture_has_map = should_capture && active_tab_has_map_pane(session.layout);
   if (options.show) {
     bool captured = false;
+    const auto capture_ready_at = std::chrono::steady_clock::now() + (capture_has_map ? std::chrono::milliseconds(1800)
+                                                                                      : std::chrono::milliseconds(0));
     while (!glfwWindowShouldClose(glfw_runtime.window())) {
-      const fs::path *capture_path = (!captured && should_capture) ? &output_path : nullptr;
+      const bool capture_ready = std::chrono::steady_clock::now() >= capture_ready_at;
+      const fs::path *capture_path = (!captured && should_capture && capture_ready) ? &output_path : nullptr;
       render_frame(glfw_runtime.window(), &session, &ui_state, capture_path);
-      captured = captured || should_capture;
+      captured = captured || capture_path != nullptr;
     }
   } else {
     render_frame(glfw_runtime.window(), &session, &ui_state, nullptr);
@@ -2761,12 +2828,19 @@ int run(const Options &options) {
       for (int i = 0; i < 3; ++i) {
         render_frame(glfw_runtime.window(), &session, &ui_state, nullptr);
       }
+      if (capture_has_map) {
+        for (int i = 0; i < 18; ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          render_frame(glfw_runtime.window(), &session, &ui_state, nullptr);
+        }
+      }
       render_frame(glfw_runtime.window(), &session, &ui_state, &output_path);
     }
   }
   if (session.stream_poller) {
     session.stream_poller->stop();
   }
+  session.map_tiles.reset();
   session.camera_feed.reset();
   return 0;
   } catch (const std::exception &err) {

@@ -819,6 +819,9 @@ std::string pane_title(const json11::Json &dock_area_node) {
 
 Pane parse_dock_area(const json11::Json &dock_area_node) {
   Pane pane;
+  if (dock_area_node["kind"].string_value() == "map") {
+    pane.kind = PaneKind::Map;
+  }
   pane.range = parse_range(dock_area_node);
   const json11::Json &curves_node = dock_area_node["curves"];
   if (curves_node.is_array()) {
@@ -1463,6 +1466,7 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list,
   route_data.enum_info = std::move(enum_info);
   route_data.car_fingerprint = std::move(car_fingerprint);
   route_data.dbc_name = std::move(dbc_name);
+  rebuild_gps_trace(&route_data);
   route_data.roots = collect_route_roots_for_paths(route_data.paths);
   return route_data;
 }
@@ -1475,6 +1479,104 @@ const RouteSeries *find_route_series(const RouteData &route_data, std::string_vi
   if (it == route_data.series.end() || it->path != path) return nullptr;
   return &(*it);
 }
+
+std::optional<double> sample_series_at_time(const RouteSeries &series, double tm) {
+  if (series.times.empty() || series.times.size() != series.values.size()) {
+    return std::nullopt;
+  }
+  if (tm <= series.times.front()) {
+    return series.values.front();
+  }
+  if (tm >= series.times.back()) {
+    return series.values.back();
+  }
+  auto upper = std::lower_bound(series.times.begin(), series.times.end(), tm);
+  if (upper == series.times.begin()) {
+    return series.values.front();
+  }
+  if (upper == series.times.end()) {
+    return series.values.back();
+  }
+  const size_t upper_index = static_cast<size_t>(std::distance(series.times.begin(), upper));
+  const size_t lower_index = upper_index - 1;
+  const double t0 = series.times[lower_index];
+  const double t1 = series.times[upper_index];
+  const double v0 = series.values[lower_index];
+  const double v1 = series.values[upper_index];
+  if (t1 <= t0) {
+    return v0;
+  }
+  const double alpha = (tm - t0) / (t1 - t0);
+  return v0 + (v1 - v0) * alpha;
+}
+
+TimelineEntry::Type timeline_type_at_time(const std::vector<TimelineEntry> &timeline, double tm) {
+  for (const TimelineEntry &entry : timeline) {
+    if (tm >= entry.start_time && tm <= entry.end_time) {
+      return entry.type;
+    }
+  }
+  return TimelineEntry::Type::None;
+}
+
+}  // namespace
+
+void rebuild_gps_trace(RouteData *route_data) {
+  route_data->gps_trace = {};
+  const RouteSeries *latitude = find_route_series(*route_data, "/gpsLocationExternal/latitude");
+  const RouteSeries *longitude = find_route_series(*route_data, "/gpsLocationExternal/longitude");
+  const RouteSeries *has_fix = find_route_series(*route_data, "/gpsLocationExternal/hasFix");
+  if (latitude == nullptr || longitude == nullptr || has_fix == nullptr) {
+    return;
+  }
+
+  const RouteSeries *bearing = find_route_series(*route_data, "/gpsLocationExternal/bearingDeg");
+  size_t count = std::min({latitude->times.size(), latitude->values.size(),
+                           longitude->times.size(), longitude->values.size(),
+                           has_fix->times.size(), has_fix->values.size()});
+  if (count == 0) {
+    return;
+  }
+
+  bool found = false;
+  route_data->gps_trace.points.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    if (has_fix->values[i] < 0.5) {
+      continue;
+    }
+    const double lat = latitude->values[i];
+    const double lon = longitude->values[i];
+    if (!std::isfinite(lat) || !std::isfinite(lon)) {
+      continue;
+    }
+    const double tm = latitude->times[i];
+    const float bearing_value = bearing != nullptr
+      ? static_cast<float>(sample_series_at_time(*bearing, tm).value_or(0.0))
+      : 0.0f;
+    route_data->gps_trace.points.push_back(GpsPoint{
+      .time = tm,
+      .lat = lat,
+      .lon = lon,
+      .bearing = bearing_value,
+      .type = timeline_type_at_time(route_data->timeline, tm),
+    });
+    if (!found) {
+      route_data->gps_trace.min_lat = route_data->gps_trace.max_lat = lat;
+      route_data->gps_trace.min_lon = route_data->gps_trace.max_lon = lon;
+      found = true;
+    } else {
+      route_data->gps_trace.min_lat = std::min(route_data->gps_trace.min_lat, lat);
+      route_data->gps_trace.max_lat = std::max(route_data->gps_trace.max_lat, lat);
+      route_data->gps_trace.min_lon = std::min(route_data->gps_trace.min_lon, lon);
+      route_data->gps_trace.max_lon = std::max(route_data->gps_trace.max_lon, lon);
+    }
+  }
+  if (!found) {
+    route_data->gps_trace = {};
+  }
+}
+
+namespace {
 
 void build_road_camera_index(const std::map<int, SegmentLogs> &segments, RouteData *route_data) {
   route_data->road_camera = {};
