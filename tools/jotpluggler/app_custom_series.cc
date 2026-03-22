@@ -1,4 +1,4 @@
-#include "tools/jotpluggler/app_custom_series.h"
+#include "tools/jotpluggler/jotpluggler.h"
 
 #include "imgui.h"
 #include "implot.h"
@@ -23,7 +23,6 @@
 
 #include "third_party/json11/json11.hpp"
 
-namespace jotpluggler {
 namespace fs = std::filesystem;
 
 namespace {
@@ -861,4 +860,3 @@ void draw_custom_series_editor(AppSession *session, UiState *state) {
   }
 }
 
-}  // namespace jotpluggler

@@ -1,4 +1,4 @@
-#include "tools/jotpluggler/dbc_core.h"
+#include "tools/jotpluggler/jotpluggler.h"
 
 #include <algorithm>
 #include <cctype>
@@ -10,7 +10,7 @@
 #include <string_view>
 #include <tuple>
 
-namespace jotpluggler::dbc_core {
+namespace dbc_core {
 
 namespace {
 
@@ -158,7 +158,6 @@ void Database::parse_bo(const std::string &line, int line_number, Message **curr
 }
 
 void Database::parse_sg(const std::string &line, int line_number, Message *current_message) {
-  static const std::regex base_pattern(R"(^SG_\s+(\w+)\s*:\s*(\d+)\|(\d+)@(\d)([+-])\s+\(([0-9.+\-eE]+),([0-9.+\-eE]+)\)\s+\(([0-9.+\-eE]+),([0-9.+\-eE]+)\)$)");
   static const std::regex multiplex_pattern(R"(^SG_\s+(\w+)\s+(\w+)\s*:\s*(\d+)\|(\d+)@(\d)([+-])\s+\(([0-9.+\-eE]+),([0-9.+\-eE]+)\)\s+\[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\]\s+\"(.*)\"\s+(.*)$)");
   static const std::regex normal_pattern(R"(^SG_\s+(\w+)\s*:\s*(\d+)\|(\d+)@(\d)([+-])\s+\(([0-9.+\-eE]+),([0-9.+\-eE]+)\)\s+\[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\]\s+\"(.*)\"\s+(.*)$)");
 
@@ -256,4 +255,4 @@ std::optional<double> signal_value(const Signal &signal, const Message &message,
   return raw_signal_value(signal, data, data_size);
 }
 
-}  // namespace jotpluggler::dbc_core
+}  // namespace dbc_core

@@ -1,6 +1,5 @@
-#include "tools/jotpluggler/app_browser.h"
+#include "tools/jotpluggler/jotpluggler.h"
 
-#include "tools/jotpluggler/app_custom_series.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -12,7 +11,6 @@
 #include <string_view>
 #include <unordered_set>
 
-namespace jotpluggler {
 namespace {
 
 constexpr float kBrowserValueWidth = 88.0f;
@@ -195,83 +193,6 @@ void prune_browser_selection(UiState *state, const std::vector<std::string> &vis
   }
 }
 
-BrowserSeriesDisplayInfo compute_browser_display_info_impl(const AppSession &session, const RouteSeries &series) {
-  const bool enum_like = session.route_data.enum_info.find(series.path) != session.route_data.enum_info.end();
-  BrowserSeriesDisplayInfo info;
-  if (series.values.empty()) {
-    return info;
-  }
-  const size_t sample_limit = 128;
-  const size_t step = std::max<size_t>(1, series.values.size() / sample_limit);
-  double peak_abs = 0.0;
-  bool integer_like = enum_like;
-  std::vector<int> unique_levels;
-  unique_levels.reserve(8);
-  for (size_t i = 0; i < series.values.size(); i += step) {
-    const double value = series.values[i];
-    if (!std::isfinite(value)) {
-      continue;
-    }
-    peak_abs = std::max(peak_abs, std::abs(value));
-    const double rounded = std::round(value);
-    if (std::abs(value - rounded) > 1.0e-6) {
-      integer_like = false;
-      continue;
-    }
-    const int level = static_cast<int>(rounded);
-    if (std::find(unique_levels.begin(), unique_levels.end(), level) == unique_levels.end()) {
-      unique_levels.push_back(level);
-      if (unique_levels.size() > 8) {
-        integer_like = false;
-      }
-    }
-  }
-
-  info.integer_like = integer_like;
-  if (integer_like || enum_like) {
-    info.decimals = 0;
-    return info;
-  }
-  if (peak_abs >= 1000.0) {
-    info.decimals = 0;
-  } else if (peak_abs >= 100.0) {
-    info.decimals = 1;
-  } else if (peak_abs >= 10.0) {
-    info.decimals = 2;
-  } else if (peak_abs >= 0.01) {
-    info.decimals = 3;
-  } else {
-    info.decimals = 4;
-  }
-  return info;
-}
-
-std::string format_display_value_impl(double display_value,
-                                      const BrowserSeriesDisplayInfo &display_info,
-                                      const EnumInfo *enum_info) {
-  if (!std::isfinite(display_value)) {
-    return {};
-  }
-  if (enum_info != nullptr) {
-    const int idx = static_cast<int>(std::llround(display_value));
-    if (idx >= 0 && std::abs(display_value - static_cast<double>(idx)) < 0.01
-        && static_cast<size_t>(idx) < enum_info->names.size()
-        && !enum_info->names[static_cast<size_t>(idx)].empty()) {
-      return enum_info->names[static_cast<size_t>(idx)];
-    }
-  }
-
-  char buf[64] = {};
-  if (display_info.integer_like) {
-    std::snprintf(buf, sizeof(buf), "%.0f", std::round(display_value));
-  } else if (std::abs(display_value) < 1.0e-6) {
-    std::snprintf(buf, sizeof(buf), "0");
-  } else {
-    std::snprintf(buf, sizeof(buf), "%.*f", display_info.decimals, display_value);
-  }
-  return buf;
-}
-
 std::optional<double> sample_route_series_value(const RouteSeries &series, double tm, bool stairs) {
   return app_sample_xy_value_at_time(series.times, series.values, stairs, tm);
 }
@@ -306,7 +227,7 @@ std::string browser_series_value_text(const AppSession &session, const UiState &
     ? BrowserSeriesDisplayInfo{}
     : display_it->second;
 
-  return format_display_value_impl(*value, display_info, enum_info);
+  return format_display_value(*value, display_info, enum_info);
 }
 
 bool browser_node_matches(const BrowserNode &node, const std::string &filter) {
@@ -326,14 +247,82 @@ bool browser_node_matches(const BrowserNode &node, const std::string &filter) {
 
 }  // namespace
 
+BrowserSeriesDisplayInfo classify_values(const std::vector<double> &values, bool enum_like) {
+  BrowserSeriesDisplayInfo info;
+  if (values.empty()) {
+    return info;
+  }
+  const size_t step = std::max<size_t>(1, values.size() / 128);
+  double peak_abs = 0.0;
+  bool integer_like = enum_like;
+  std::vector<int> unique_levels;
+  unique_levels.reserve(8);
+  for (size_t i = 0; i < values.size(); i += step) {
+    const double value = values[i];
+    if (!std::isfinite(value)) {
+      continue;
+    }
+    peak_abs = std::max(peak_abs, std::abs(value));
+    const double rounded = std::round(value);
+    if (std::abs(value - rounded) > 1.0e-6) {
+      integer_like = false;
+      continue;
+    }
+    const int level = static_cast<int>(rounded);
+    if (std::find(unique_levels.begin(), unique_levels.end(), level) == unique_levels.end()) {
+      unique_levels.push_back(level);
+      if (unique_levels.size() > 8) {
+        integer_like = false;
+      }
+    }
+  }
+  info.integer_like = integer_like;
+  if (integer_like || enum_like) {
+    info.decimals = 0;
+    return info;
+  }
+  if (peak_abs >= 1000.0) {
+    info.decimals = 0;
+  } else if (peak_abs >= 100.0) {
+    info.decimals = 1;
+  } else if (peak_abs >= 10.0) {
+    info.decimals = 2;
+  } else if (peak_abs >= 0.01) {
+    info.decimals = 3;
+  } else {
+    info.decimals = 4;
+  }
+  return info;
+}
+
 BrowserSeriesDisplayInfo compute_browser_display_info(const AppSession &session, const RouteSeries &series) {
-  return compute_browser_display_info_impl(session, series);
+  const bool enum_like = session.route_data.enum_info.find(series.path) != session.route_data.enum_info.end();
+  return classify_values(series.values, enum_like);
 }
 
 std::string format_display_value(double display_value,
                                  const BrowserSeriesDisplayInfo &display_info,
                                  const EnumInfo *enum_info) {
-  return format_display_value_impl(display_value, display_info, enum_info);
+  if (!std::isfinite(display_value)) {
+    return {};
+  }
+  if (enum_info != nullptr) {
+    const int idx = static_cast<int>(std::llround(display_value));
+    if (idx >= 0 && std::abs(display_value - static_cast<double>(idx)) < 0.01
+        && static_cast<size_t>(idx) < enum_info->names.size()
+        && !enum_info->names[static_cast<size_t>(idx)].empty()) {
+      return enum_info->names[static_cast<size_t>(idx)];
+    }
+  }
+  char buf[64] = {};
+  if (display_info.integer_like) {
+    std::snprintf(buf, sizeof(buf), "%.0f", std::round(display_value));
+  } else if (std::abs(display_value) < 1.0e-6) {
+    std::snprintf(buf, sizeof(buf), "0");
+  } else {
+    std::snprintf(buf, sizeof(buf), "%.*f", display_info.decimals, display_value);
+  }
+  return buf;
 }
 
 std::vector<std::string> decode_browser_drag_payload(std::string_view payload) {
@@ -381,7 +370,7 @@ void rebuild_route_index(AppSession *session) {
   session->browser_display_by_path.clear();
   for (RouteSeries &series : session->route_data.series) {
     session->series_by_path.emplace(series.path, &series);
-    session->browser_display_by_path.emplace(series.path, compute_browser_display_info_impl(*session, series));
+    session->browser_display_by_path.emplace(series.path, compute_browser_display_info(*session, series));
   }
 }
 
@@ -482,4 +471,3 @@ void draw_browser_node(AppSession *session,
   }
 }
 
-}  // namespace jotpluggler

@@ -2,7 +2,7 @@
 #include <iostream>
 #include <string>
 
-#include "tools/jotpluggler/app.h"
+#include "tools/jotpluggler/jotpluggler.h"
 
 namespace {
 
@@ -56,7 +56,7 @@ bool parse_double(const char *value, double *out) {
 }  // namespace
 
 int main(int argc, char *argv[]) {
-  jotpluggler::Options options;
+  Options options;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     const auto require_value = [&](const char *flag) -> const char * {
@@ -127,5 +127,5 @@ int main(int argc, char *argv[]) {
     return 2;
   }
 
-  return jotpluggler::run(options);
+  return run(options);
 }

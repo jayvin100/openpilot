@@ -1,0 +1,738 @@
+#pragma once
+
+#include "cereal/gen/cpp/log.capnp.h"
+#include "imgui.h"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cctype>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// app options & entry point
+// ---------------------------------------------------------------------------
+
+struct Options {
+  std::string layout;
+  std::string route_name;
+  std::string data_dir;
+  std::string output_path;
+  std::string stream_address = "127.0.0.1";
+  int width = 1600;
+  int height = 900;
+  bool show = false;
+  bool sync_load = false;
+  bool stream = false;
+  double stream_buffer_seconds = 30.0;
+};
+
+int run(const Options &options);
+
+// ---------------------------------------------------------------------------
+// sketch layout & route data
+// ---------------------------------------------------------------------------
+
+struct PlotRange {
+  bool valid = false;
+  double left = 0.0;
+  double right = 0.0;
+  double bottom = 0.0;
+  double top = 1.0;
+  bool has_y_limit_min = false;
+  bool has_y_limit_max = false;
+  double y_limit_min = 0.0;
+  double y_limit_max = 1.0;
+};
+
+struct CustomPythonSeries {
+  std::string linked_source;
+  std::vector<std::string> additional_sources;
+  std::string globals_code;
+  std::string function_code;
+};
+
+struct Curve {
+  std::string name;
+  std::string label;
+  std::array<uint8_t, 3> color = {160, 170, 180};
+  bool visible = true;
+  bool derivative = false;
+  double derivative_dt = 0.0;
+  double value_scale = 1.0;
+  double value_offset = 0.0;
+  bool runtime_only = false;
+  std::optional<CustomPythonSeries> custom_python;
+  std::string runtime_error_message;
+  std::vector<double> xs;
+  std::vector<double> ys;
+};
+
+struct Pane {
+  std::string title;
+  PlotRange range;
+  std::vector<Curve> curves;
+};
+
+enum class SplitOrientation {
+  Horizontal,
+  Vertical,
+};
+
+struct WorkspaceNode {
+  bool is_pane = false;
+  int pane_index = -1;
+  SplitOrientation orientation = SplitOrientation::Horizontal;
+  std::vector<float> sizes;
+  std::vector<WorkspaceNode> children;
+};
+
+struct WorkspaceTab {
+  std::string tab_name;
+  WorkspaceNode root;
+  std::vector<Pane> panes;
+};
+
+struct RouteSeries {
+  std::string path;
+  std::vector<double> times;
+  std::vector<double> values;
+};
+
+struct CameraSegmentFile {
+  int segment = -1;
+  std::string path;
+};
+
+struct CameraFrameIndexEntry {
+  double timestamp = 0.0;
+  int segment = -1;
+  int decode_index = -1;
+  uint32_t frame_id = 0;
+};
+
+struct CameraFeedIndex {
+  std::vector<CameraSegmentFile> segment_files;
+  std::vector<CameraFrameIndexEntry> entries;
+};
+
+enum class LogOrigin : uint8_t {
+  Log,
+  Android,
+  Alert,
+};
+
+struct LogEntry {
+  double mono_time = 0.0;
+  double boot_time = 0.0;
+  double wall_time = 0.0;
+  uint8_t level = 20;
+  std::string source;
+  std::string func;
+  std::string message;
+  std::string context;
+  LogOrigin origin = LogOrigin::Log;
+};
+
+struct EnumInfo {
+  std::vector<std::string> names;
+};
+
+struct RouteData {
+  std::vector<RouteSeries> series;
+  std::vector<std::string> paths;
+  std::vector<std::string> roots;
+  CameraFeedIndex road_camera;
+  std::vector<LogEntry> logs;
+  std::unordered_map<std::string, EnumInfo> enum_info;
+  std::string car_fingerprint;
+  std::string dbc_name;
+  bool has_time_range = false;
+  double x_min = 0.0;
+  double x_max = 1.0;
+};
+
+struct StreamExtractBatch {
+  std::vector<RouteSeries> series;
+  std::vector<LogEntry> logs;
+  std::unordered_map<std::string, EnumInfo> enum_info;
+  std::string car_fingerprint;
+  std::string dbc_name;
+  bool has_time_offset = false;
+  double time_offset = 0.0;
+};
+
+struct SketchLayout {
+  std::vector<WorkspaceTab> tabs;
+  std::vector<std::string> roots;
+  int current_tab_index = 0;
+};
+
+enum class RouteLoadStage {
+  Resolving,
+  DownloadingSegment,
+  ParsingSegment,
+  Finished,
+};
+
+struct RouteLoadProgress {
+  RouteLoadStage stage = RouteLoadStage::Resolving;
+  size_t segment_index = 0;
+  size_t segment_count = 0;
+  uint64_t current = 0;
+  uint64_t total = 0;
+  size_t segments_downloaded = 0;
+  size_t segments_parsed = 0;
+  size_t total_segments = 0;
+  uint64_t bytes_downloaded = 0;
+  int num_workers = 1;
+  std::string segment_name;
+};
+
+using RouteLoadProgressCallback = std::function<void(const RouteLoadProgress &)>;
+
+class StreamAccumulator {
+public:
+  explicit StreamAccumulator(const std::string &dbc_name = {}, std::optional<double> time_offset = std::nullopt);
+  ~StreamAccumulator();
+
+  StreamAccumulator(const StreamAccumulator &) = delete;
+  StreamAccumulator &operator=(const StreamAccumulator &) = delete;
+
+  void set_dbc_name(const std::string &dbc_name);
+  void append_event(cereal::Event::Which which, kj::ArrayPtr<const capnp::word> data);
+  StreamExtractBatch take_batch();
+  const std::string &car_fingerprint() const;
+  const std::string &dbc_name() const;
+  std::optional<double> time_offset() const;
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+SketchLayout load_sketch_layout(const std::filesystem::path &layout_path);
+const std::vector<std::string> &available_dbc_names();
+std::vector<std::string> collect_route_roots_for_paths(const std::vector<std::string> &paths);
+RouteData load_route_data(const std::string &route_name,
+                          const std::string &data_dir = {},
+                          const std::string &dbc_name = {},
+                          const RouteLoadProgressCallback &progress = {});
+
+// ---------------------------------------------------------------------------
+// dbc_core
+// ---------------------------------------------------------------------------
+
+namespace dbc_core {
+
+struct ValueDescriptionEntry {
+  double value = 0.0;
+  std::string text;
+};
+
+struct Signal {
+  enum class Type {
+    Normal = 0,
+    Multiplexed,
+    Multiplexor,
+  };
+
+  Type type = Type::Normal;
+  std::string name;
+  int start_bit = 0;
+  int msb = 0;
+  int lsb = 0;
+  int size = 0;
+  double factor = 1.0;
+  double offset = 0.0;
+  bool is_signed = false;
+  bool is_little_endian = false;
+  int multiplex_value = 0;
+  int multiplexor_index = -1;
+  std::vector<ValueDescriptionEntry> value_descriptions;
+};
+
+struct Message {
+  uint32_t address = 0;
+  std::string name;
+  uint32_t size = 0;
+  std::vector<Signal> signals;
+  int multiplexor_index = -1;
+};
+
+class Database {
+public:
+  Database() = default;
+  explicit Database(const std::filesystem::path &path);
+
+  const Message *message(uint32_t address) const;
+  std::vector<std::string> enum_names(const Signal &signal) const;
+
+private:
+  void parse(const std::string &content, const std::string &filename);
+  void parse_bo(const std::string &line, int line_number, Message **current_message);
+  void parse_sg(const std::string &line, int line_number, Message *current_message);
+  void parse_val(const std::string &line, int line_number);
+  void finalize();
+
+  std::unordered_map<uint32_t, Message> messages_;
+};
+
+std::optional<double> signal_value(const Signal &signal, const Message &message, const uint8_t *data, size_t data_size);
+
+}  // namespace dbc_core
+
+// ---------------------------------------------------------------------------
+// bootstrap_icons
+// ---------------------------------------------------------------------------
+
+namespace bootstrap_icons {
+
+void load_font(float size);
+const char *glyph(std::string_view icon_id);
+bool menu_item(std::string_view icon_id,
+               const char *label,
+               const char *shortcut = nullptr,
+               bool selected = false,
+               bool enabled = true);
+
+}  // namespace bootstrap_icons
+
+// ---------------------------------------------------------------------------
+// app session, UI state, & internal API
+// ---------------------------------------------------------------------------
+
+class AsyncRouteLoader;
+class SidebarCameraFeed;
+class StreamPoller;
+
+enum class SessionDataMode : uint8_t {
+  Route,
+  Stream,
+};
+
+struct BrowserNode {
+  std::string label;
+  std::string full_path;
+  std::vector<BrowserNode> children;
+};
+
+struct BrowserSeriesDisplayInfo {
+  int decimals = 3;
+  bool integer_like = false;
+};
+
+struct AppSession {
+  std::filesystem::path layout_path;
+  std::filesystem::path autosave_path;
+  std::string route_name;
+  std::string data_dir;
+  std::string dbc_override;
+  std::string stream_address = "127.0.0.1";
+  double stream_buffer_seconds = 30.0;
+  SessionDataMode data_mode = SessionDataMode::Route;
+  SketchLayout layout;
+  RouteData route_data;
+  std::unordered_map<std::string, RouteSeries *> series_by_path;
+  std::unordered_map<std::string, BrowserSeriesDisplayInfo> browser_display_by_path;
+  std::vector<BrowserNode> browser_nodes;
+  std::unique_ptr<AsyncRouteLoader> route_loader;
+  std::unique_ptr<StreamPoller> stream_poller;
+  std::unique_ptr<SidebarCameraFeed> camera_feed;
+  bool async_route_loading = false;
+  double next_stream_custom_refresh_time = 0.0;
+  bool stream_paused = false;
+  std::optional<double> stream_time_offset;
+};
+
+struct TabUiState {
+  bool dock_needs_build = true;
+  int active_pane_index = 0;
+  int runtime_id = 0;
+};
+
+struct CustomSeriesEditorState {
+  bool open = false;
+  bool open_help = false;
+  bool request_select = false;
+  bool selected = false;
+  bool focus_name = false;
+  int selected_template = 0;
+  int selected_additional_source = -1;
+  std::string name;
+  std::string linked_source;
+  std::vector<std::string> additional_sources;
+  std::string globals_code;
+  std::string function_code = "return value";
+  std::string preview_label;
+  std::vector<double> preview_xs;
+  std::vector<double> preview_ys;
+  bool preview_is_result = false;
+};
+
+enum class LogTimeMode : uint8_t {
+  Route,
+  Boot,
+  WallClock,
+};
+
+struct LogsUiState {
+  bool selected = false;
+  bool request_select = false;
+  bool all_sources = true;
+  uint32_t enabled_levels_mask = 0b11110;
+  int expanded_index = -1;
+  std::string search;
+  std::vector<std::string> selected_sources;
+  double last_auto_scroll_time = -1.0;
+  LogTimeMode time_mode = LogTimeMode::Route;
+};
+
+struct AxisLimitsEditorState {
+  bool open = false;
+  int pane_index = -1;
+  double x_min = 0.0;
+  double x_max = 1.0;
+  bool y_min_enabled = false;
+  bool y_max_enabled = false;
+  double y_min = 0.0;
+  double y_max = 1.0;
+};
+
+struct UiState {
+  bool open_open_route = false;
+  bool open_stream = false;
+  bool open_load_layout = false;
+  bool open_save_layout = false;
+  bool request_close = false;
+  bool request_reset_layout = false;
+  bool request_save_layout = false;
+  bool request_new_tab = false;
+  bool request_duplicate_tab = false;
+  bool request_close_tab = false;
+  bool follow_latest = false;
+  bool has_shared_range = false;
+  bool has_tracker_time = false;
+  bool layout_dirty = false;
+  bool playback_loop = false;
+  bool playback_playing = false;
+  bool show_deprecated_fields = false;
+  bool suppress_range_side_effects = false;
+  int active_tab_index = 0;
+  int next_tab_runtime_id = 1;
+  int requested_tab_index = -1;
+  int rename_tab_index = -1;
+  bool focus_rename_tab_input = false;
+  std::vector<TabUiState> tabs;
+  std::array<char, 128> route_buffer = {};
+  std::array<char, 128> stream_address_buffer = {};
+  std::array<char, 128> rename_tab_buffer = {};
+  std::array<char, 128> browser_filter = {};
+  std::array<char, 512> data_dir_buffer = {};
+  std::array<char, 512> load_layout_buffer = {};
+  std::array<char, 512> save_layout_buffer = {};
+  std::string selected_browser_path;
+  std::vector<std::string> selected_browser_paths;
+  std::string browser_selection_anchor;
+  std::string error_text;
+  bool open_error_popup = false;
+  std::string status_text = "Ready";
+  bool stream_remote = false;
+  float sidebar_width = 320.0f;
+  double route_x_min = 0.0;
+  double route_x_max = 1.0;
+  double x_view_min = 0.0;
+  double x_view_max = 1.0;
+  double tracker_time = 0.0;
+  double playback_rate = 1.0;
+  double playback_step = 0.1;
+  double stream_buffer_seconds = 30.0;
+  AxisLimitsEditorState axis_limits;
+  CustomSeriesEditorState custom_series;
+  LogsUiState logs;
+};
+
+// inline helpers
+
+inline ImVec4 color_rgb(int r, int g, int b, float alpha = 1.0f) {
+  return ImVec4(static_cast<float>(r) / 255.0f,
+                static_cast<float>(g) / 255.0f,
+                static_cast<float>(b) / 255.0f,
+                alpha);
+}
+
+inline ImVec4 color_rgb(const std::array<uint8_t, 3> &color, float alpha = 1.0f) {
+  return color_rgb(color[0], color[1], color[2], alpha);
+}
+
+inline std::string trim_copy(std::string_view text) {
+  size_t begin = 0;
+  size_t end = text.size();
+  while (begin < end && std::isspace(static_cast<unsigned char>(text[begin]))) {
+    ++begin;
+  }
+  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
+    --end;
+  }
+  return std::string(text.substr(begin, end - begin));
+}
+
+inline std::string lowercase(std::string_view value) {
+  std::string out(value);
+  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return out;
+}
+
+inline int imgui_resize_callback(ImGuiInputTextCallbackData *data) {
+  if (data->EventFlag != ImGuiInputTextFlags_CallbackResize || data->UserData == nullptr) {
+    return 0;
+  }
+  auto *text = static_cast<std::string *>(data->UserData);
+  text->resize(static_cast<size_t>(data->BufTextLen));
+  data->Buf = text->data();
+  return 0;
+}
+
+inline bool input_text_string(const char *label,
+                              std::string *text,
+                              ImGuiInputTextFlags flags = 0) {
+  flags |= ImGuiInputTextFlags_CallbackResize;
+  if (text->capacity() == 0) text->reserve(256);
+  return ImGui::InputText(label, text->data(), text->capacity() + 1,
+                          flags, imgui_resize_callback, text);
+}
+
+inline bool input_text_with_hint_string(const char *label,
+                                        const char *hint,
+                                        std::string *text,
+                                        ImGuiInputTextFlags flags = 0) {
+  flags |= ImGuiInputTextFlags_CallbackResize;
+  if (text->capacity() == 0) text->reserve(256);
+  return ImGui::InputTextWithHint(label, hint, text->data(), text->capacity() + 1,
+                                  flags, imgui_resize_callback, text);
+}
+
+inline bool input_text_multiline_string(const char *label,
+                                        std::string *text,
+                                        const ImVec2 &size = ImVec2(0.0f, 0.0f),
+                                        ImGuiInputTextFlags flags = 0) {
+  flags |= ImGuiInputTextFlags_CallbackResize;
+  if (text->capacity() == 0) text->reserve(1024);
+  return ImGui::InputTextMultiline(label, text->data(), text->capacity() + 1,
+                                   size, flags, imgui_resize_callback, text);
+}
+
+inline bool is_local_stream_address(std::string_view address) {
+  return address.empty() || address == "127.0.0.1" || address == "localhost";
+}
+
+inline void ensure_parent_dir(const std::filesystem::path &path) {
+  if (path.has_parent_path()) {
+    std::filesystem::create_directories(path.parent_path());
+  }
+}
+
+inline std::string shell_quote(std::string_view value) {
+  std::string quoted;
+  quoted.reserve(value.size() + 8);
+  quoted.push_back('\'');
+  for (const char c : value) {
+    if (c == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted.push_back(c);
+    }
+  }
+  quoted.push_back('\'');
+  return quoted;
+}
+
+// app.cc public API
+
+const WorkspaceTab *app_active_tab(const SketchLayout &layout, const UiState &state);
+WorkspaceTab *app_active_tab(SketchLayout *layout, const UiState &state);
+TabUiState *app_active_tab_state(UiState *state);
+
+void app_push_mono_font();
+void app_pop_mono_font();
+bool app_add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path);
+
+std::string app_curve_display_name(const Curve &curve);
+std::array<uint8_t, 3> app_next_curve_color(const Pane &pane);
+const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path);
+void app_decimate_samples(const std::vector<double> &xs_in,
+                          const std::vector<double> &ys_in,
+                          int max_points,
+                          std::vector<double> *xs_out,
+                          std::vector<double> *ys_out);
+std::optional<double> app_sample_xy_value_at_time(const std::vector<double> &xs,
+                                                   const std::vector<double> &ys,
+                                                   bool stairs,
+                                                   double tm);
+void save_layout_json(const SketchLayout &layout, const std::filesystem::path &path);
+
+// ---------------------------------------------------------------------------
+// browser
+// ---------------------------------------------------------------------------
+
+void rebuild_route_index(AppSession *session);
+void rebuild_browser_nodes(AppSession *session, UiState *state);
+BrowserSeriesDisplayInfo compute_browser_display_info(const AppSession &session, const RouteSeries &series);
+BrowserSeriesDisplayInfo classify_values(const std::vector<double> &values, bool enum_like = false);
+std::string format_display_value(double display_value,
+                                 const BrowserSeriesDisplayInfo &display_info,
+                                 const EnumInfo *enum_info);
+std::vector<std::string> decode_browser_drag_payload(std::string_view payload);
+void collect_visible_leaf_paths(const BrowserNode &node,
+                                const std::string &filter,
+                                std::vector<std::string> *out);
+void draw_browser_node(AppSession *session,
+                       const BrowserNode &node,
+                       UiState *state,
+                       const std::string &filter,
+                       const std::vector<std::string> &visible_paths);
+
+// ---------------------------------------------------------------------------
+// custom series
+// ---------------------------------------------------------------------------
+
+void open_custom_series_editor(UiState *state, const std::string &preferred_source = {});
+std::string preferred_custom_series_source(const Pane &pane);
+void refresh_all_custom_curves(AppSession *session, UiState *state);
+void draw_custom_series_editor(AppSession *session, UiState *state);
+
+// ---------------------------------------------------------------------------
+// logs
+// ---------------------------------------------------------------------------
+
+void draw_logs_tab(AppSession *session, UiState *state);
+
+// ---------------------------------------------------------------------------
+// runtime (GLFW, async loaders, streaming, camera)
+// ---------------------------------------------------------------------------
+
+struct GLFWwindow;
+
+struct RouteLoadSnapshot {
+  bool active = false;
+  size_t total_segments = 0;
+  size_t segments_downloaded = 0;
+  size_t segments_parsed = 0;
+};
+
+struct StreamPollSnapshot {
+  bool active = false;
+  bool connected = false;
+  bool paused = false;
+  bool remote = false;
+  std::string address;
+  std::string dbc_name;
+  std::string car_fingerprint;
+  double buffer_seconds = 30.0;
+  uint64_t received_messages = 0;
+};
+
+class GlfwRuntime {
+public:
+  explicit GlfwRuntime(const Options &options);
+  ~GlfwRuntime();
+
+  GlfwRuntime(const GlfwRuntime &) = delete;
+  GlfwRuntime &operator=(const GlfwRuntime &) = delete;
+
+  GLFWwindow *window() const;
+
+private:
+  GLFWwindow *window_ = nullptr;
+};
+
+class ImGuiRuntime {
+public:
+  explicit ImGuiRuntime(GLFWwindow *window);
+  ~ImGuiRuntime();
+
+  ImGuiRuntime(const ImGuiRuntime &) = delete;
+  ImGuiRuntime &operator=(const ImGuiRuntime &) = delete;
+};
+
+class TerminalRouteProgress {
+public:
+  explicit TerminalRouteProgress(bool enabled);
+  ~TerminalRouteProgress();
+
+  TerminalRouteProgress(const TerminalRouteProgress &) = delete;
+  TerminalRouteProgress &operator=(const TerminalRouteProgress &) = delete;
+
+  void update(const RouteLoadProgress &progress);
+  void finish();
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+class AsyncRouteLoader {
+public:
+  explicit AsyncRouteLoader(bool enable_terminal_progress);
+  ~AsyncRouteLoader();
+
+  AsyncRouteLoader(const AsyncRouteLoader &) = delete;
+  AsyncRouteLoader &operator=(const AsyncRouteLoader &) = delete;
+
+  void start(const std::string &route_name, const std::string &data_dir, const std::string &dbc_name);
+  RouteLoadSnapshot snapshot() const;
+  bool consume(RouteData *route_data, std::string *error_text);
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+class StreamPoller {
+public:
+  StreamPoller();
+  ~StreamPoller();
+
+  StreamPoller(const StreamPoller &) = delete;
+  StreamPoller &operator=(const StreamPoller &) = delete;
+
+  void start(const std::string &address,
+             double buffer_seconds,
+             const std::string &dbc_name,
+             std::optional<double> time_offset = std::nullopt);
+  void set_paused(bool paused);
+  void stop();
+  StreamPollSnapshot snapshot() const;
+  bool consume(StreamExtractBatch *batch, std::string *error_text);
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+class SidebarCameraFeed {
+public:
+  SidebarCameraFeed();
+  ~SidebarCameraFeed();
+
+  SidebarCameraFeed(const SidebarCameraFeed &) = delete;
+  SidebarCameraFeed &operator=(const SidebarCameraFeed &) = delete;
+
+  void set_route_data(const RouteData &route_data);
+  void update(double tracker_time);
+  void draw(float width, bool loading);
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};

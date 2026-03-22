@@ -1,5 +1,4 @@
-#include "tools/jotpluggler/app_runtime.h"
-#include "tools/jotpluggler/app_internal.h"
+#include "tools/jotpluggler/jotpluggler.h"
 
 #include "cereal/services.h"
 #include "imgui.h"
@@ -37,7 +36,6 @@
 
 #include "system/camerad/cameras/nv12_info.h"
 
-namespace jotpluggler {
 
 namespace {
 
@@ -77,7 +75,7 @@ void glfw_error_callback(int error, const char *description) {
   if (error == 65539 && desc.find("Invalid window attribute 0x0002000D") != std::string_view::npos) {
     return;
   }
-  std::cerr << "GLFW error " << error << ": " << (description != nullptr ? description : "unknown") << "\n";
+  std::cerr << "GLFW error " << error << ": " << desc << "\n";
 }
 
 }  // namespace
@@ -934,4 +932,3 @@ void SidebarCameraFeed::draw(float width, bool loading) {
   impl_->draw(width, loading);
 }
 
-}  // namespace jotpluggler

@@ -1,5 +1,4 @@
-#include "tools/jotpluggler/app_logs.h"
-#include "tools/jotpluggler/app_runtime.h"
+#include "tools/jotpluggler/jotpluggler.h"
 
 #include "imgui.h"
 
@@ -13,7 +12,6 @@
 #include <string_view>
 #include <vector>
 
-namespace jotpluggler {
 
 namespace {
 
@@ -478,4 +476,3 @@ void draw_logs_tab(AppSession *session, UiState *state) {
   ImGui::EndChild();
 }
 
-}  // namespace jotpluggler

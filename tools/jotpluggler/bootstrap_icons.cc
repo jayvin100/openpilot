@@ -1,4 +1,4 @@
-#include "tools/jotpluggler/bootstrap_icons.h"
+#include "tools/jotpluggler/jotpluggler.h"
 
 #include <algorithm>
 #include <array>
@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <string>
 
-namespace jotpluggler::bootstrap_icons {
+namespace bootstrap_icons {
 namespace {
 namespace fs = std::filesystem;
 
@@ -84,4 +84,4 @@ bool menu_item(std::string_view icon_id,
   return ImGui::MenuItem(text.c_str(), shortcut, selected, enabled);
 }
 
-}  // namespace jotpluggler::bootstrap_icons
+}  // namespace bootstrap_icons

@@ -1,9 +1,4 @@
-#include "tools/jotpluggler/app_browser.h"
-#include "tools/jotpluggler/app_custom_series.h"
-#include "tools/jotpluggler/app_internal.h"
-#include "tools/jotpluggler/app_logs.h"
-#include "tools/jotpluggler/app_runtime.h"
-#include "tools/jotpluggler/bootstrap_icons.h"
+#include "tools/jotpluggler/jotpluggler.h"
 #include "imgui_impl_glfw.h"
 
 #include "imgui.h"
@@ -43,7 +38,6 @@
 
 #include "third_party/json11/json11.hpp"
 
-namespace jotpluggler {
 namespace fs = std::filesystem;
 
 namespace {
@@ -553,7 +547,6 @@ struct PaneDropAction {
   PaneCurveDragPayload curve_ref;
 };
 
-std::string curve_display_name(const Curve &curve);
 bool add_curve_to_active_pane_impl(AppSession *session, UiState *state, const std::string &path);
 bool curve_has_samples(const AppSession &session, const Curve &curve);
 
@@ -833,8 +826,8 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##dbc_combo", dbc_combo_label(*session).c_str())) {
       const bool auto_selected = session->dbc_override.empty();
-        if (ImGui::Selectable("Auto", auto_selected)) {
-          apply_dbc_override_change(session, state, {});
+      if (ImGui::Selectable("Auto", auto_selected)) {
+        apply_dbc_override_change(session, state, {});
       }
       if (auto_selected) {
         ImGui::SetItemDefaultFocus();
@@ -1508,9 +1501,7 @@ bool build_curve_series(const AppSession &session,
       prepared->display_info = display_it->second;
     }
   } else {
-    RouteSeries display_series;
-    display_series.values = transformed_ys;
-    prepared->display_info = compute_browser_display_info(session, display_series);
+    prepared->display_info = classify_values(transformed_ys);
   }
   const bool stairs = !curve.derivative && prepared->display_info.integer_like;
   if (state.has_tracker_time) {
@@ -1767,14 +1758,14 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
 
   const double previous_x_min = state->x_view_min;
   const double previous_x_max = state->x_view_max;
-  app_push_mono_font();
+  push_mono_font_internal();
   if (ImPlot::BeginPlot("##plot", plot_size, plot_flags)) {
     ImPlot::SetupAxes(nullptr, nullptr, x_axis_flags, y_axis_flags);
     ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f");
     if (!enum_context.enums.empty()) {
       ImPlot::SetupAxisFormat(ImAxis_Y1, format_enum_axis_tick, &enum_context);
     } else {
-    ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
+      ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
     }
     ImPlot::SetupAxisLinks(ImAxis_X1, &state->x_view_min, &state->x_view_max);
     if (state->route_x_max > state->route_x_min) {
@@ -1821,7 +1812,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
     }
     ImPlot::EndPlot();
   }
-  app_pop_mono_font();
+  pop_mono_font_internal();
   clamp_shared_range(state, session);
   if (std::abs(state->x_view_min - previous_x_min) > 1.0e-6
       || std::abs(state->x_view_max - previous_x_max) > 1.0e-6) {
@@ -2553,4 +2544,3 @@ int run(const Options &options) {
   }
 }
 
-}  // namespace jotpluggler

@@ -1,5 +1,4 @@
-#include "tools/jotpluggler/sketch_layout.h"
-#include "tools/jotpluggler/dbc_core.h"
+#include "tools/jotpluggler/jotpluggler.h"
 
 #include <capnp/dynamic.h>
 
@@ -33,7 +32,6 @@
 #include "tools/replay/logreader.h"
 #include "tools/replay/py_downloader.h"
 
-namespace jotpluggler {
 namespace fs = std::filesystem;
 
 namespace {
@@ -1065,8 +1063,6 @@ bool is_absolute_curve(const std::string &name) {
   return !name.empty() && name.front() == '/';
 }
 
-std::vector<std::string> collect_route_roots(const std::vector<std::string> &paths);
-
 std::optional<double> scalar_value_to_double(const capnp::DynamicValue::Reader &value, ScalarKind kind) {
   switch (kind) {
     case ScalarKind::Bool:
@@ -1495,7 +1491,7 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list,
   route_data.enum_info = std::move(enum_info);
   route_data.car_fingerprint = std::move(car_fingerprint);
   route_data.dbc_name = std::move(dbc_name);
-  route_data.roots = collect_route_roots(route_data.paths);
+  route_data.roots = collect_route_roots_for_paths(route_data.paths);
   return route_data;
 }
 
@@ -1769,7 +1765,9 @@ std::vector<std::string> collect_layout_roots(const SketchLayout &layout) {
   return roots;
 }
 
-std::vector<std::string> collect_route_roots(const std::vector<std::string> &paths) {
+}  // namespace
+
+std::vector<std::string> collect_route_roots_for_paths(const std::vector<std::string> &paths) {
   std::vector<std::string> roots;
   for (const std::string &path : paths) {
     if (!is_absolute_curve(path)) {
@@ -1784,8 +1782,6 @@ std::vector<std::string> collect_route_roots(const std::vector<std::string> &pat
   std::sort(roots.begin(), roots.end());
   return roots;
 }
-
-}  // namespace
 
 struct StreamAccumulator::Impl {
   const SchemaIndex &schema = SchemaIndex::instance();
@@ -1933,8 +1929,4 @@ const std::vector<std::string> &available_dbc_names() {
   return names;
 }
 
-std::vector<std::string> collect_route_roots_for_paths(const std::vector<std::string> &paths) {
-  return collect_route_roots(paths);
-}
 
-}  // namespace jotpluggler

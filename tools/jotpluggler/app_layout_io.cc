@@ -1,4 +1,4 @@
-#include "tools/jotpluggler/app_internal.h"
+#include "tools/jotpluggler/jotpluggler.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,7 +9,6 @@
 
 #include "third_party/json11/json11.hpp"
 
-namespace jotpluggler {
 namespace fs = std::filesystem;
 
 namespace {
@@ -129,4 +128,3 @@ void save_layout_json(const SketchLayout &layout, const fs::path &path) {
   out << root.dump() << "\n";
 }
 
-}  // namespace jotpluggler
