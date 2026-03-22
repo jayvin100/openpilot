@@ -1,6 +1,6 @@
 #include "tools/jotpluggler/app_stream_flow.cc"
 
-const RouteSeries *find_route_series(const AppSession &session, const std::string &path) {
+const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path) {
   auto it = session.series_by_path.find(path);
   return it == session.series_by_path.end() ? nullptr : it->second;
 }
@@ -74,7 +74,7 @@ void ensure_shared_range(UiState *state, const AppSession &session) {
     return;
   }
 
-  if (const WorkspaceTab *tab = active_tab(session.layout, *state); tab != nullptr) {
+  if (const WorkspaceTab *tab = app_active_tab(session.layout, *state); tab != nullptr) {
     if (std::optional<std::pair<double, double>> tab_range = tab_default_x_range(*tab); tab_range.has_value()) {
       state->x_view_min = tab_range->first;
       state->x_view_max = tab_range->second;

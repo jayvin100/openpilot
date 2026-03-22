@@ -44,9 +44,9 @@ void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *st
     ImGui::SameLine();
     char tracker_text[64] = {};
     std::snprintf(tracker_text, sizeof(tracker_text), "%.3f", state->has_tracker_time ? state->tracker_time : 0.0);
-    push_mono_font_internal();
+    app_push_mono_font();
     ImGui::TextUnformatted(tracker_text);
-    pop_mono_font_internal();
+    app_pop_mono_font();
     ImGui::EndDisabled();
   }
   ImGui::End();

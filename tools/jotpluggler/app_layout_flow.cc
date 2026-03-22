@@ -206,29 +206,16 @@ bool reload_session(AppSession *session, UiState *state, const std::string &rout
 }
 
 void draw_popups(AppSession *session, UiState *state) {
-  if (state->open_open_route) {
-    ImGui::OpenPopup("Open Route");
-    state->open_open_route = false;
-  }
-  if (state->open_stream) {
-    sync_stream_buffers(state, *session);
-    ImGui::OpenPopup("Live Stream");
-    state->open_stream = false;
-  }
-  if (state->open_load_layout) {
-    sync_layout_buffers(state, *session);
-    ImGui::OpenPopup("Load Layout");
-    state->open_load_layout = false;
-  }
-  if (state->open_save_layout) {
-    sync_layout_buffers(state, *session);
-    ImGui::OpenPopup("Save Layout");
-    state->open_save_layout = false;
-  }
-  if (state->axis_limits.open) {
-    ImGui::OpenPopup("Edit Axis Limits");
-    state->axis_limits.open = false;
-  }
+  auto open_popup = [](bool &flag, const char *name) {
+    if (flag) { ImGui::OpenPopup(name); flag = false; }
+  };
+  open_popup(state->open_open_route, "Open Route");
+  if (state->open_stream) { sync_stream_buffers(state, *session); }
+  open_popup(state->open_stream, "Live Stream");
+  if (state->open_load_layout || state->open_save_layout) { sync_layout_buffers(state, *session); }
+  open_popup(state->open_load_layout, "Load Layout");
+  open_popup(state->open_save_layout, "Save Layout");
+  open_popup(state->axis_limits.open, "Edit Axis Limits");
 
   if (ImGui::BeginPopupModal("Open Route", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted("Load a route into the current layout.");
@@ -309,7 +296,7 @@ void draw_popups(AppSession *session, UiState *state) {
     ImGui::EndPopup();
   }
   if (ImGui::BeginPopupModal("Edit Axis Limits", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    const WorkspaceTab *tab = active_tab(session->layout, *state);
+    const WorkspaceTab *tab = app_active_tab(session->layout, *state);
     const bool valid_pane = tab != nullptr
       && state->axis_limits.pane_index >= 0
       && state->axis_limits.pane_index < static_cast<int>(tab->panes.size());

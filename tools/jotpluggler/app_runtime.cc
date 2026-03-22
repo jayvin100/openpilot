@@ -747,16 +747,17 @@ struct SidebarCameraFeed::Impl {
       return;
     }
 
+    const bool new_size = texture_width != result->width || texture_height != result->height;
     if (texture == 0) {
       glGenTextures(1, &texture);
     }
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    if (texture_width != result->width || texture_height != result->height) {
+    if (new_size) {
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, result->width, result->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, result->rgba.data());
       texture_width = result->width;
       texture_height = result->height;
@@ -782,28 +783,16 @@ struct SidebarCameraFeed::Impl {
     frame_height = 0;
   }
 
-  static bool ensure_decode_buffer(FrameReader *reader,
-                                   VisionBuf *buffer,
-                                   bool *allocated,
-                                   int *width,
-                                   int *height) {
-    if (reader == nullptr || buffer == nullptr || allocated == nullptr || width == nullptr || height == nullptr) {
-      return false;
-    }
-    if (*allocated && *width == reader->width && *height == reader->height) {
-      return true;
-    }
-    if (*allocated) {
-      buffer->free();
-      *allocated = false;
-    }
-
+  static bool ensure_decode_buffer(FrameReader *reader, VisionBuf *buf, bool &allocated, int &w, int &h) {
+    if (!reader) return false;
+    if (allocated && w == reader->width && h == reader->height) return true;
+    if (allocated) { buf->free(); allocated = false; }
     const auto [stride, y_height, _uv_height, size] = get_nv12_info(reader->width, reader->height);
-    buffer->allocate(size);
-    buffer->init_yuv(reader->width, reader->height, stride, stride * y_height);
-    *width = reader->width;
-    *height = reader->height;
-    *allocated = true;
+    buf->allocate(size);
+    buf->init_yuv(reader->width, reader->height, stride, stride * y_height);
+    w = reader->width;
+    h = reader->height;
+    allocated = true;
     return true;
   }
 
@@ -859,7 +848,7 @@ struct SidebarCameraFeed::Impl {
         loaded_generation = request.generation;
       }
 
-      if (!ensure_decode_buffer(reader.get(), &buffer, &buffer_allocated, &buffer_width, &buffer_height) ||
+      if (!ensure_decode_buffer(reader.get(), &buffer, buffer_allocated, buffer_width, buffer_height) ||
           !reader->get(request.key.decode_index, &buffer)) {
         publish_result(request, std::move(result));
         continue;

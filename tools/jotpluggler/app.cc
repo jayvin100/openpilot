@@ -27,7 +27,6 @@
 
 namespace fs = std::filesystem;
 
-namespace {
 
 constexpr const char *UNTITLED_PANE_TITLE = "...";
 
@@ -207,7 +206,7 @@ void run_or_throw(const std::string &command, const std::string &action) {
 bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg);
 bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir);
 void reset_shared_range(UiState *state, const AppSession &session);
-std::string curve_display_name(const Curve &curve);
+std::string app_curve_display_name(const Curve &curve);
 SketchLayout make_empty_layout();
 void cancel_rename_tab(UiState *state);
 void sync_ui_state(UiState *state, const SketchLayout &layout);
@@ -292,38 +291,26 @@ void configure_style() {
   style.FramePadding = ImVec2(6.0f, 3.0f);
   style.ItemSpacing = ImVec2(8.0f, 5.0f);
   style.ItemInnerSpacing = ImVec2(6.0f, 3.0f);
-  style.Colors[ImGuiCol_WindowBg] = color_rgb(250, 250, 251);
-  style.Colors[ImGuiCol_ChildBg] = color_rgb(255, 255, 255);
-  style.Colors[ImGuiCol_Border] = color_rgb(194, 198, 204);
-  style.Colors[ImGuiCol_TitleBg] = color_rgb(252, 252, 253);
-  style.Colors[ImGuiCol_TitleBgActive] = color_rgb(252, 252, 253);
-  style.Colors[ImGuiCol_TitleBgCollapsed] = color_rgb(252, 252, 253);
-  style.Colors[ImGuiCol_Text] = color_rgb(74, 80, 88);
-  style.Colors[ImGuiCol_TextDisabled] = color_rgb(108, 118, 128);
-  style.Colors[ImGuiCol_Button] = color_rgb(255, 255, 255);
-  style.Colors[ImGuiCol_ButtonHovered] = color_rgb(246, 248, 250);
-  style.Colors[ImGuiCol_ButtonActive] = color_rgb(238, 240, 244);
-  style.Colors[ImGuiCol_FrameBg] = color_rgb(255, 255, 255);
-  style.Colors[ImGuiCol_FrameBgHovered] = color_rgb(248, 249, 251);
-  style.Colors[ImGuiCol_FrameBgActive] = color_rgb(241, 244, 248);
-  style.Colors[ImGuiCol_Header] = color_rgb(243, 245, 248);
-  style.Colors[ImGuiCol_HeaderHovered] = color_rgb(237, 240, 244);
-  style.Colors[ImGuiCol_HeaderActive] = color_rgb(232, 236, 240);
-  style.Colors[ImGuiCol_PopupBg] = color_rgb(248, 249, 251);
-  style.Colors[ImGuiCol_MenuBarBg] = color_rgb(232, 236, 241);
-  style.Colors[ImGuiCol_Separator] = color_rgb(194, 198, 204);
-  style.Colors[ImGuiCol_ScrollbarBg] = color_rgb(240, 242, 245);
-  style.Colors[ImGuiCol_ScrollbarGrab] = color_rgb(202, 207, 214);
-  style.Colors[ImGuiCol_ScrollbarGrabHovered] = color_rgb(180, 186, 194);
-  style.Colors[ImGuiCol_ScrollbarGrabActive] = color_rgb(164, 171, 180);
-  style.Colors[ImGuiCol_Tab] = color_rgb(219, 224, 230);
-  style.Colors[ImGuiCol_TabHovered] = color_rgb(232, 236, 241);
-  style.Colors[ImGuiCol_TabSelected] = color_rgb(250, 251, 253);
-  style.Colors[ImGuiCol_TabSelectedOverline] = color_rgb(92, 109, 136);
-  style.Colors[ImGuiCol_TabDimmed] = color_rgb(213, 219, 226);
-  style.Colors[ImGuiCol_TabDimmedSelected] = color_rgb(244, 247, 249);
-  style.Colors[ImGuiCol_TabDimmedSelectedOverline] = color_rgb(92, 109, 136);
-  style.Colors[ImGuiCol_DockingEmptyBg] = color_rgb(244, 246, 248);
+  struct ColorDef { ImGuiCol idx; int r, g, b; };
+  constexpr ColorDef COLORS[] = {
+    {ImGuiCol_WindowBg, 250, 250, 251},  {ImGuiCol_ChildBg, 255, 255, 255},
+    {ImGuiCol_Border, 194, 198, 204},    {ImGuiCol_TitleBg, 252, 252, 253},
+    {ImGuiCol_TitleBgActive, 252, 252, 253}, {ImGuiCol_TitleBgCollapsed, 252, 252, 253},
+    {ImGuiCol_Text, 74, 80, 88},         {ImGuiCol_TextDisabled, 108, 118, 128},
+    {ImGuiCol_Button, 255, 255, 255},    {ImGuiCol_ButtonHovered, 246, 248, 250},
+    {ImGuiCol_ButtonActive, 238, 240, 244}, {ImGuiCol_FrameBg, 255, 255, 255},
+    {ImGuiCol_FrameBgHovered, 248, 249, 251}, {ImGuiCol_FrameBgActive, 241, 244, 248},
+    {ImGuiCol_Header, 243, 245, 248},    {ImGuiCol_HeaderHovered, 237, 240, 244},
+    {ImGuiCol_HeaderActive, 232, 236, 240}, {ImGuiCol_PopupBg, 248, 249, 251},
+    {ImGuiCol_MenuBarBg, 232, 236, 241}, {ImGuiCol_Separator, 194, 198, 204},
+    {ImGuiCol_ScrollbarBg, 240, 242, 245}, {ImGuiCol_ScrollbarGrab, 202, 207, 214},
+    {ImGuiCol_ScrollbarGrabHovered, 180, 186, 194}, {ImGuiCol_ScrollbarGrabActive, 164, 171, 180},
+    {ImGuiCol_Tab, 219, 224, 230},       {ImGuiCol_TabHovered, 232, 236, 241},
+    {ImGuiCol_TabSelected, 250, 251, 253}, {ImGuiCol_TabSelectedOverline, 92, 109, 136},
+    {ImGuiCol_TabDimmed, 213, 219, 226}, {ImGuiCol_TabDimmedSelected, 244, 247, 249},
+    {ImGuiCol_TabDimmedSelectedOverline, 92, 109, 136}, {ImGuiCol_DockingEmptyBg, 244, 246, 248},
+  };
+  for (const auto &c : COLORS) { style.Colors[c.idx] = color_rgb(c.r, c.g, c.b); }
   style.Colors[ImGuiCol_DockingPreview] = color_rgb(69, 115, 184, 0.22f);
 
   ImPlotStyle &plot_style = ImPlot::GetStyle();
@@ -344,13 +331,13 @@ void configure_style() {
   input_map.SelectMod = ImGuiMod_None;
 }
 
-void push_mono_font_internal() {
+void app_push_mono_font() {
   if (g_mono_font != nullptr) {
     ImGui::PushFont(g_mono_font);
   }
 }
 
-void pop_mono_font_internal() {
+void app_pop_mono_font() {
   if (g_mono_font != nullptr) {
     ImGui::PopFont();
   }
@@ -429,7 +416,7 @@ void sync_layout_buffers(UiState *state, const AppSession &session) {
   copy_to_buffer(default_layout_save_path(session).string(), &state->save_layout_buffer);
 }
 
-const WorkspaceTab *active_tab(const SketchLayout &layout, const UiState &state) {
+const WorkspaceTab *app_active_tab(const SketchLayout &layout, const UiState &state) {
   if (layout.tabs.empty()) {
     return nullptr;
   }
@@ -437,7 +424,7 @@ const WorkspaceTab *active_tab(const SketchLayout &layout, const UiState &state)
   return &layout.tabs[static_cast<size_t>(index)];
 }
 
-WorkspaceTab *active_tab(SketchLayout *layout, const UiState &state) {
+WorkspaceTab *app_active_tab(SketchLayout *layout, const UiState &state) {
   if (layout->tabs.empty()) {
     return nullptr;
   }
@@ -445,7 +432,7 @@ WorkspaceTab *active_tab(SketchLayout *layout, const UiState &state) {
   return &layout->tabs[static_cast<size_t>(index)];
 }
 
-TabUiState *active_tab_state(UiState *state) {
+TabUiState *app_active_tab_state(UiState *state) {
   if (state->tabs.empty()) {
     return nullptr;
   }
@@ -534,7 +521,7 @@ struct PaneDropAction {
   PaneCurveDragPayload curve_ref;
 };
 
-bool add_curve_to_active_pane_impl(AppSession *session, UiState *state, const std::string &path);
+bool app_add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path);
 bool curve_has_samples(const AppSession &session, const Curve &curve);
 
 bool curve_has_local_samples(const Curve &curve) {
@@ -736,7 +723,7 @@ bool mark_layout_dirty(AppSession *session, UiState *state) {
   return autosave_layout(session, state);
 }
 
-std::array<uint8_t, 3> next_curve_color(const Pane &pane) {
+std::array<uint8_t, 3> app_next_curve_color(const Pane &pane) {
   static constexpr std::array<std::array<uint8_t, 3>, 10> PALETTE = {{
     {35, 107, 180},
     {220, 82, 52},
@@ -752,7 +739,7 @@ std::array<uint8_t, 3> next_curve_color(const Pane &pane) {
   return PALETTE[pane.curves.size() % PALETTE.size()];
 }
 
-const RouteSeries *find_route_series(const AppSession &session, const std::string &path);
+const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path);
 #include "tools/jotpluggler/app_session_flow.cc"
 
 #include "tools/jotpluggler/app_sidebar_flow.cc"
@@ -908,7 +895,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
   ImGui::PopStyleColor(2);
 }
 
-std::string curve_display_name(const Curve &curve) {
+std::string app_curve_display_name(const Curve &curve) {
   if (!curve.label.empty()) {
     return curve.label;
   }
@@ -922,7 +909,7 @@ Curve make_curve_for_path(const Pane &pane, const std::string &path) {
   Curve curve;
   curve.name = path;
   curve.label = path;
-  curve.color = next_curve_color(pane);
+  curve.color = app_next_curve_color(pane);
   return curve;
 }
 
@@ -944,11 +931,11 @@ bool add_curve_to_pane(WorkspaceTab *tab, int pane_index, Curve curve) {
 }
 
 bool add_path_curve_to_pane(AppSession *session, UiState *state, int pane_index, const std::string &path) {
-  if (find_route_series(*session, path) == nullptr) {
+  if (app_find_route_series(*session, path) == nullptr) {
     state->status_text = "Path not found in route";
     return false;
   }
-  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  WorkspaceTab *tab = app_active_tab(&session->layout, *state);
   if (tab == nullptr || pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
     state->status_text = "No active pane";
     return false;
@@ -965,7 +952,7 @@ bool add_path_curve_to_pane(AppSession *session, UiState *state, int pane_index,
 }
 
 int add_path_curves_to_pane(AppSession *session, UiState *state, int pane_index, const std::vector<std::string> &paths) {
-  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  WorkspaceTab *tab = app_active_tab(&session->layout, *state);
   if (tab == nullptr || pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
     state->status_text = "No active pane";
     return 0;
@@ -974,7 +961,7 @@ int add_path_curves_to_pane(AppSession *session, UiState *state, int pane_index,
   int inserted_count = 0;
   int duplicate_count = 0;
   for (const std::string &path : paths) {
-    if (find_route_series(*session, path) == nullptr) {
+    if (app_find_route_series(*session, path) == nullptr) {
       continue;
     }
     if (add_curve_to_pane(tab, pane_index, make_curve_for_path(tab->panes[static_cast<size_t>(pane_index)], path))) {
@@ -1001,8 +988,8 @@ int add_path_curves_to_pane(AppSession *session, UiState *state, int pane_index,
   return 0;
 }
 
-bool add_curve_to_active_pane_impl(AppSession *session, UiState *state, const std::string &path) {
-  const TabUiState *tab_state = active_tab_state(state);
+bool app_add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path) {
+  const TabUiState *tab_state = app_active_tab_state(state);
   if (tab_state == nullptr) {
     state->status_text = "No active pane";
     return false;
@@ -1186,7 +1173,7 @@ bool curve_has_samples(const AppSession &session, const Curve &curve) {
   if (curve.name.empty() || curve.name.front() != '/') {
     return false;
   }
-  const RouteSeries *series = find_route_series(session, curve.name);
+  const RouteSeries *series = app_find_route_series(session, curve.name);
   return series != nullptr && series->times.size() > 1 && series->times.size() == series->values.size();
 }
 
@@ -1235,7 +1222,7 @@ struct PaneEnumContext {
   std::vector<const EnumInfo *> enums;
 };
 
-void decimate_samples_impl(const std::vector<double> &xs_in,
+void app_decimate_samples_impl(const std::vector<double> &xs_in,
                            const std::vector<double> &ys_in,
                            int max_points,
                            std::vector<double> *xs_out,
@@ -1279,7 +1266,7 @@ void decimate_samples_impl(const std::vector<double> &xs_in,
   }
 }
 
-void decimate_samples(const std::vector<double> &xs_in,
+void app_decimate_samples(const std::vector<double> &xs_in,
                       const std::vector<double> &ys_in,
                       int max_points,
                       std::vector<double> *xs_out,
@@ -1294,10 +1281,10 @@ void decimate_samples(const std::vector<double> &xs_in,
     *ys_out = ys_in;
     return;
   }
-  decimate_samples_impl(xs_in, ys_in, max_points, xs_out, ys_out);
+  app_decimate_samples_impl(xs_in, ys_in, max_points, xs_out, ys_out);
 }
 
-void decimate_samples(std::vector<double> &&xs_in,
+void app_decimate_samples(std::vector<double> &&xs_in,
                       std::vector<double> &&ys_in,
                       int max_points,
                       std::vector<double> *xs_out,
@@ -1312,10 +1299,10 @@ void decimate_samples(std::vector<double> &&xs_in,
     *ys_out = std::move(ys_in);
     return;
   }
-  decimate_samples_impl(xs_in, ys_in, max_points, xs_out, ys_out);
+  app_decimate_samples_impl(xs_in, ys_in, max_points, xs_out, ys_out);
 }
 
-std::optional<double> sample_xy_value_at_time(const std::vector<double> &xs,
+std::optional<double> app_sample_xy_value_at_time(const std::vector<double> &xs,
                                               const std::vector<double> &ys,
                                               bool stairs,
                                               double tm) {
@@ -1410,7 +1397,7 @@ bool build_curve_series(const AppSession &session,
     xs = curve.xs;
     ys = curve.ys;
   } else {
-    const RouteSeries *series = find_route_series(session, curve.name);
+    const RouteSeries *series = app_find_route_series(session, curve.name);
     if (series == nullptr || series->times.size() < 2 || series->times.size() != series->values.size()) {
       return false;
     }
@@ -1460,7 +1447,7 @@ bool build_curve_series(const AppSession &session,
     value = value * curve.value_scale + curve.value_offset;
   }
 
-  prepared->label = curve_display_name(curve);
+  prepared->label = app_curve_display_name(curve);
   prepared->color = curve.color;
   prepared->line_weight = curve.derivative ? 1.8f : 2.25f;
   if (!curve.derivative
@@ -1492,9 +1479,9 @@ bool build_curve_series(const AppSession &session,
   }
   const bool stairs = !curve.derivative && prepared->display_info.integer_like;
   if (state.has_tracker_time) {
-    prepared->legend_value = sample_xy_value_at_time(transformed_xs, transformed_ys, stairs, state.tracker_time);
+    prepared->legend_value = app_sample_xy_value_at_time(transformed_xs, transformed_ys, stairs, state.tracker_time);
   }
-  decimate_samples(std::move(transformed_xs), std::move(transformed_ys), max_points, &prepared->xs, &prepared->ys);
+  app_decimate_samples(std::move(transformed_xs), std::move(transformed_ys), max_points, &prepared->xs, &prepared->ys);
   prepared->stairs = stairs;
   return prepared->xs.size() > 1 && prepared->xs.size() == prepared->ys.size();
 }
@@ -1608,7 +1595,7 @@ PlotBounds current_plot_bounds_for_pane(const AppSession &session, const Pane &p
 void open_axis_limits_editor(const AppSession &session, UiState *state, int pane_index) {
   ensure_shared_range(state, session);
   clamp_shared_range(state, session);
-  const WorkspaceTab *tab = active_tab(session.layout, *state);
+  const WorkspaceTab *tab = app_active_tab(session.layout, *state);
   if (tab == nullptr || pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
     return;
   }
@@ -1627,7 +1614,7 @@ void open_axis_limits_editor(const AppSession &session, UiState *state, int pane
 }
 
 bool apply_axis_limits_editor(AppSession *session, UiState *state) {
-  WorkspaceTab *tab = active_tab(&session->layout, *state);
+  WorkspaceTab *tab = app_active_tab(&session->layout, *state);
   if (tab == nullptr) {
     return false;
   }
@@ -1745,7 +1732,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
 
   const double previous_x_min = state->x_view_min;
   const double previous_x_max = state->x_view_max;
-  push_mono_font_internal();
+  app_push_mono_font();
   if (ImPlot::BeginPlot("##plot", plot_size, plot_flags)) {
     ImPlot::SetupAxes(nullptr, nullptr, x_axis_flags, y_axis_flags);
     ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f");
@@ -1799,7 +1786,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
     }
     ImPlot::EndPlot();
   }
-  pop_mono_font_internal();
+  app_pop_mono_font();
   clamp_shared_range(state, session);
   if (std::abs(state->x_view_min - previous_x_min) > 1.0e-6
       || std::abs(state->x_view_max - previous_x_max) > 1.0e-6) {
@@ -1907,38 +1894,31 @@ std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_inde
     ImGui::SetCursorScreenPos(zone.rect.Min);
     ImGui::InvisibleButton("##drop_zone", zone.rect.GetSize());
     if (ImGui::BeginDragDropTarget()) {
-      if (const ImGuiPayload *payload =
-            ImGui::AcceptDragDropPayload("JOTP_BROWSER_PATHS", ImGuiDragDropFlags_AcceptBeforeDelivery)) {
-        if (payload->Preview) {
+      auto try_accept = [&](const char *type) -> const ImGuiPayload * {
+        const ImGuiPayload *p = ImGui::AcceptDragDropPayload(type, ImGuiDragDropFlags_AcceptBeforeDelivery);
+        if (p && p->Preview) {
           draw_list->AddRectFilled(zone.rect.Min, zone.rect.Max, IM_COL32(70, 130, 220, 55));
           draw_list->AddRect(zone.rect.Min, zone.rect.Max, IM_COL32(45, 95, 175, 220), 0.0f, 0, 2.0f);
         }
-        if (payload->Delivery) {
-          PaneDropAction action;
-          action.zone = zone.zone;
-          action.target_pane_index = pane_index;
-          action.from_browser = true;
-          action.browser_paths = decode_browser_drag_payload(static_cast<const char *>(payload->Data));
-          ImGui::EndDragDropTarget();
-          ImGui::PopID();
-          return action;
-        }
+        return p;
+      };
+      auto deliver = [&](PaneDropAction action) -> std::optional<PaneDropAction> {
+        action.zone = zone.zone;
+        action.target_pane_index = pane_index;
+        ImGui::EndDragDropTarget();
+        ImGui::PopID();
+        return action;
+      };
+      if (const ImGuiPayload *p = try_accept("JOTP_BROWSER_PATHS"); p && p->Delivery) {
+        PaneDropAction action;
+        action.from_browser = true;
+        action.browser_paths = decode_browser_drag_payload(static_cast<const char *>(p->Data));
+        return deliver(std::move(action));
       }
-      if (const ImGuiPayload *payload =
-            ImGui::AcceptDragDropPayload("JOTP_PANE_CURVE", ImGuiDragDropFlags_AcceptBeforeDelivery)) {
-        if (payload->Preview) {
-          draw_list->AddRectFilled(zone.rect.Min, zone.rect.Max, IM_COL32(70, 130, 220, 55));
-          draw_list->AddRect(zone.rect.Min, zone.rect.Max, IM_COL32(45, 95, 175, 220), 0.0f, 0, 2.0f);
-        }
-        if (payload->Delivery) {
-          PaneDropAction action;
-          action.zone = zone.zone;
-          action.target_pane_index = pane_index;
-          action.curve_ref = *static_cast<const PaneCurveDragPayload *>(payload->Data);
-          ImGui::EndDragDropTarget();
-          ImGui::PopID();
-          return action;
-        }
+      if (const ImGuiPayload *p = try_accept("JOTP_PANE_CURVE"); p && p->Delivery) {
+        PaneDropAction action;
+        action.curve_ref = *static_cast<const PaneCurveDragPayload *>(p->Data);
+        return deliver(std::move(action));
       }
       ImGui::EndDragDropTarget();
     }
@@ -1949,8 +1929,8 @@ std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_inde
 
 bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
                             const PaneMenuAction &action) {
-  WorkspaceTab *tab = active_tab(&session->layout, *state);
-  TabUiState *tab_state = active_tab_state(state);
+  WorkspaceTab *tab = app_active_tab(&session->layout, *state);
+  TabUiState *tab_state = app_active_tab_state(state);
   if (tab == nullptr || tab_state == nullptr) {
     return false;
   }
@@ -2034,8 +2014,8 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
 }
 
 bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropAction &action) {
-  WorkspaceTab *tab = active_tab(&session->layout, *state);
-  TabUiState *tab_state = active_tab_state(state);
+  WorkspaceTab *tab = app_active_tab(&session->layout, *state);
+  TabUiState *tab_state = app_active_tab_state(state);
   if (tab == nullptr || tab_state == nullptr) {
     return false;
   }
@@ -2087,7 +2067,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
     tab_state->active_pane_index = action.target_pane_index;
     if (inserted) {
       if (mark_layout_dirty(session, state)) {
-        state->status_text = "Added " + curve_display_name(curve);
+        state->status_text = "Added " + app_curve_display_name(curve);
       }
     } else {
       state->status_text = "Curve already present";
@@ -2098,7 +2078,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
     tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
     mark_tab_dock_dirty(state, state->active_tab_index);
     if (mark_layout_dirty(session, state)) {
-      state->status_text = "Split pane and added " + curve_display_name(curve);
+      state->status_text = "Split pane and added " + app_curve_display_name(curve);
     }
     return true;
   }
@@ -2164,8 +2144,8 @@ void ensure_dockspace(const WorkspaceTab &tab, TabUiState *tab_state, ImVec2 doc
 }
 
 void draw_pane_windows(AppSession *session, UiState *state) {
-  WorkspaceTab *tab = active_tab(&session->layout, *state);
-  TabUiState *tab_state = active_tab_state(state);
+  WorkspaceTab *tab = app_active_tab(&session->layout, *state);
+  TabUiState *tab_state = app_active_tab_state(state);
   if (tab == nullptr || tab_state == nullptr) {
     return;
   }
@@ -2395,7 +2375,8 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
 
 #include "tools/jotpluggler/app_render_flow.cc"
 
-int run_app(const Options &options) {
+int run(const Options &options) {
+  try {
   const fs::path layout_path = options.layout.empty() ? fs::path() : resolve_layout_path(options.layout);
   AppSession session = {
     .layout_path = layout_path,
@@ -2467,67 +2448,10 @@ int run_app(const Options &options) {
   }
   session.camera_feed.reset();
   return 0;
-}
-
-}  // namespace
-
-const WorkspaceTab *app_active_tab(const SketchLayout &layout, const UiState &state) {
-  return active_tab(layout, state);
-}
-
-WorkspaceTab *app_active_tab(SketchLayout *layout, const UiState &state) {
-  return active_tab(layout, state);
-}
-
-TabUiState *app_active_tab_state(UiState *state) {
-  return active_tab_state(state);
-}
-
-std::string app_curve_display_name(const Curve &curve) {
-  return curve_display_name(curve);
-}
-
-std::array<uint8_t, 3> app_next_curve_color(const Pane &pane) {
-  return next_curve_color(pane);
-}
-
-const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path) {
-  return find_route_series(session, path);
-}
-
-void app_push_mono_font() {
-  push_mono_font_internal();
-}
-
-void app_pop_mono_font() {
-  pop_mono_font_internal();
-}
-
-bool app_add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path) {
-  return add_curve_to_active_pane_impl(session, state, path);
-}
-
-std::optional<double> app_sample_xy_value_at_time(const std::vector<double> &xs,
-                                                   const std::vector<double> &ys,
-                                                   bool stairs,
-                                                   double tm) {
-  return sample_xy_value_at_time(xs, ys, stairs, tm);
-}
-
-void app_decimate_samples(const std::vector<double> &xs_in,
-                          const std::vector<double> &ys_in,
-                          int max_points,
-                          std::vector<double> *xs_out,
-                          std::vector<double> *ys_out) {
-  decimate_samples(xs_in, ys_in, max_points, xs_out, ys_out);
-}
-
-int run(const Options &options) {
-  try {
-    return run_app(options);
   } catch (const std::exception &err) {
     std::cerr << err.what() << "\n";
     return 1;
   }
 }
+
 

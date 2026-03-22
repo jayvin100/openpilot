@@ -153,48 +153,25 @@ struct LoadStats {
   }
 
   void print_summary(size_t final_series_count) const {
-    const auto duration_seconds = [](TimePoint start, TimePoint end) {
-      return std::chrono::duration<double>(end - start).count();
-    };
-
-    double total_download = 0.0;
-    double total_decompress = 0.0;
-    double total_parse = 0.0;
-    double total_extract = 0.0;
-    size_t total_events = 0;
-    size_t total_compressed = 0;
-    size_t total_decompressed = 0;
-    for (const SegmentStats &segment : segments) {
-      total_download += segment.download_seconds;
-      total_decompress += segment.decompress_seconds;
-      total_parse += segment.parse_seconds;
-      total_extract += segment.extract_seconds;
-      total_events += segment.event_count;
-      total_compressed += segment.compressed_bytes;
-      total_decompressed += segment.decompressed_bytes;
+    const auto secs = [](TimePoint a, TimePoint b) { return std::chrono::duration<double>(b - a).count(); };
+    const auto mb = [](size_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); };
+    double dl = 0, dc = 0, pa = 0, ex = 0;
+    size_t ev = 0, cb = 0, db = 0;
+    for (const auto &s : segments) {
+      dl += s.download_seconds; dc += s.decompress_seconds;
+      pa += s.parse_seconds; ex += s.extract_seconds;
+      ev += s.event_count; cb += s.compressed_bytes; db += s.decompressed_bytes;
     }
-
-    std::cerr << std::fixed << std::setprecision(1);
-    std::cerr << "route loaded in " << duration_seconds(load_start, load_end)
-              << "s (" << segment_count << " segments, worker budget " << num_workers << ")\n";
-    std::cerr << "  resolve:      " << duration_seconds(load_start, resolve_end) << "s\n";
-    std::cerr << "  fetch comp:   " << total_download << "s total (" << (segment_count == 0 ? 0.0 : total_download / segment_count)
-              << "s avg, " << (static_cast<double>(total_compressed) / (1024.0 * 1024.0)) << " MB)\n";
-    std::cerr << "  decompress:   " << total_decompress << "s total (" << (static_cast<double>(total_decompressed) / (1024.0 * 1024.0))
-              << " MB)\n";
-    std::cerr << "  capnp parse:  " << total_parse << "s total (" << total_events << " events)\n";
-    std::cerr << "  series ext:   " << total_extract << "s total\n";
-    std::cerr << "  merge:        " << duration_seconds(merge_start, merge_end) << "s\n";
-    std::cerr << "  series:       " << final_series_count << " paths\n";
-    std::cerr << "  per segment:\n";
-    for (const SegmentStats &segment : segments) {
-      std::cerr << "    seg " << std::setw(2) << segment.segment_number << ": "
-                << (segment.failed ? "FAILED" : "fetch " + std::to_string(segment.download_seconds)
-                  + "s  decompress " + std::to_string(segment.decompress_seconds)
-                  + "s  parse " + std::to_string(segment.parse_seconds)
-                  + "s  extract " + std::to_string(segment.extract_seconds)
-                  + "s (" + std::to_string(segment.event_count) + " events, "
-                  + std::to_string(segment.series_count) + " series)") << "\n";
+    std::cerr << std::fixed << std::setprecision(1)
+      << "route loaded in " << secs(load_start, load_end) << "s (" << segment_count << " segments, " << num_workers << " workers)\n"
+      << "  resolve: " << secs(load_start, resolve_end) << "s  fetch: " << dl << "s (" << mb(cb) << " MB)"
+      << "  decompress: " << dc << "s (" << mb(db) << " MB)\n"
+      << "  parse: " << pa << "s (" << ev << " events)  extract: " << ex << "s  merge: " << secs(merge_start, merge_end) << "s"
+      << "  series: " << final_series_count << " paths\n";
+    for (const auto &s : segments) {
+      std::cerr << "    seg " << std::setw(2) << s.segment_number << ": "
+        << (s.failed ? "FAILED" : std::to_string(s.download_seconds) + "s + " + std::to_string(s.parse_seconds)
+          + "s (" + std::to_string(s.event_count) + " ev, " + std::to_string(s.series_count) + " series)") << "\n";
     }
     std::cerr.unsetf(std::ios::floatfield);
   }
@@ -604,97 +581,72 @@ void append_log_event(cereal::Event::Which which,
   const double boot_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
   const double mono_time = boot_time - time_offset;
 
+  auto make_entry = [&](LogOrigin origin, uint8_t level = 20) {
+    LogEntry e;
+    e.mono_time = mono_time;
+    e.boot_time = boot_time;
+    e.origin = origin;
+    e.level = level;
+    return e;
+  };
+
   switch (which) {
     case cereal::Event::Which::LOG_MESSAGE:
     case cereal::Event::Which::ERROR_LOG_MESSAGE: {
       const std::string raw = which == cereal::Event::Which::LOG_MESSAGE
-        ? event.getLogMessage().cStr()
-        : event.getErrorLogMessage().cStr();
-      std::string parse_error;
-      const json11::Json parsed = json11::Json::parse(raw, parse_error);
-
-      LogEntry entry;
-      entry.mono_time = mono_time;
-      entry.boot_time = boot_time;
-      entry.origin = LogOrigin::Log;
-      entry.level = which == cereal::Event::Which::ERROR_LOG_MESSAGE ? 40 : 20;
+        ? event.getLogMessage().cStr() : event.getErrorLogMessage().cStr();
+      auto entry = make_entry(LogOrigin::Log, which == cereal::Event::Which::ERROR_LOG_MESSAGE ? 40 : 20);
       entry.source = "log";
       entry.message = raw;
-      if (parse_error.empty() && parsed.is_object()) {
-        entry.wall_time = parsed["created"].number_value();
-        if (parsed["levelnum"].is_number()) {
-          entry.level = static_cast<uint8_t>(parsed["levelnum"].int_value());
-        }
-        const std::string filename = parsed["filename"].string_value();
-        const int lineno = parsed["lineno"].is_number() ? parsed["lineno"].int_value() : 0;
-        entry.source = filename.empty() ? "log" : filename + (lineno > 0 ? ":" + std::to_string(lineno) : "");
-        entry.func = parsed["funcname"].string_value();
-        if (parsed["msg"].is_string()) {
-          entry.message = parsed["msg"].string_value();
-        }
-        if (!parsed["ctx"].is_null()) {
-          entry.context = parsed["ctx"].dump();
-        }
+      std::string err;
+      if (const auto p = json11::Json::parse(raw, err); err.empty() && p.is_object()) {
+        entry.wall_time = p["created"].number_value();
+        if (p["levelnum"].is_number()) entry.level = static_cast<uint8_t>(p["levelnum"].int_value());
+        const std::string fn = p["filename"].string_value();
+        const int ln = p["lineno"].is_number() ? p["lineno"].int_value() : 0;
+        entry.source = fn.empty() ? "log" : fn + (ln > 0 ? ":" + std::to_string(ln) : "");
+        entry.func = p["funcname"].string_value();
+        if (p["msg"].is_string()) entry.message = p["msg"].string_value();
+        if (!p["ctx"].is_null()) entry.context = p["ctx"].dump();
       }
       logs->push_back(std::move(entry));
       break;
     }
     case cereal::Event::Which::ANDROID_LOG: {
       const auto android = event.getAndroidLog();
-      LogEntry entry;
-      entry.mono_time = mono_time;
-      entry.boot_time = boot_time;
+      auto entry = make_entry(LogOrigin::Android, android_priority_to_level(android.getPriority()));
       entry.wall_time = android_wall_time_seconds(android.getTs());
-      entry.level = android_priority_to_level(android.getPriority());
       entry.source = android.hasTag() ? android.getTag().cStr() : "android";
       entry.message = android.hasMessage() ? android.getMessage().cStr() : std::string();
       entry.context = "pid=" + std::to_string(android.getPid()) + ", tid=" + std::to_string(android.getTid());
       if (!entry.message.empty()) {
-        std::string parse_error;
-        const json11::Json parsed = json11::Json::parse(entry.message, parse_error);
-        if (parse_error.empty() && parsed.is_object()) {
-          if (parsed["MESSAGE"].is_string()) {
-            entry.message = parsed["MESSAGE"].string_value();
-          }
-          if (parsed["SYSLOG_IDENTIFIER"].is_string() && !parsed["SYSLOG_IDENTIFIER"].string_value().empty()) {
-            entry.source = parsed["SYSLOG_IDENTIFIER"].string_value();
-          }
-          if (const std::optional<int> priority = json_int_value(parsed["PRIORITY"]); priority.has_value()) {
-            entry.level = android_priority_to_level(priority.value());
-          }
-          if (const std::optional<uint64_t> wall_ts = json_u64_value(parsed["__REALTIME_TIMESTAMP"]); wall_ts.has_value()) {
-            entry.wall_time = android_wall_time_seconds(wall_ts.value());
-          }
-          entry.context = format_journal_context(parsed, android.getPid(), android.getTid());
+        std::string err;
+        if (const auto p = json11::Json::parse(entry.message, err); err.empty() && p.is_object()) {
+          if (p["MESSAGE"].is_string()) entry.message = p["MESSAGE"].string_value();
+          if (p["SYSLOG_IDENTIFIER"].is_string() && !p["SYSLOG_IDENTIFIER"].string_value().empty())
+            entry.source = p["SYSLOG_IDENTIFIER"].string_value();
+          if (auto pri = json_int_value(p["PRIORITY"]); pri.has_value())
+            entry.level = android_priority_to_level(*pri);
+          if (auto ts = json_u64_value(p["__REALTIME_TIMESTAMP"]); ts.has_value())
+            entry.wall_time = android_wall_time_seconds(*ts);
+          entry.context = format_journal_context(p, android.getPid(), android.getTid());
         }
       }
-      entry.origin = LogOrigin::Android;
       logs->push_back(std::move(entry));
       break;
     }
     case cereal::Event::Which::SELFDRIVE_STATE: {
-      const auto state = event.getSelfdriveState();
-      const std::string alert_type = state.getAlertType().cStr();
-      const std::string alert_text1 = state.getAlertText1().cStr();
-      if (alert_text1.empty() && alert_type.empty()) {
-        break;
-      }
-      const std::string current_key = alert_type + "\n" + alert_text1 + "\n" + std::string(state.getAlertText2().cStr());
-      if (last_alert_key != nullptr && current_key == *last_alert_key) {
-        break;
-      }
-      if (last_alert_key != nullptr) {
-        *last_alert_key = current_key;
-      }
-
-      LogEntry entry;
-      entry.mono_time = mono_time;
-      entry.boot_time = boot_time;
-      entry.level = alert_status_to_level(state.getAlertStatus());
+      const auto sd = event.getSelfdriveState();
+      const std::string alert_type = sd.getAlertType().cStr();
+      const std::string alert_text1 = sd.getAlertText1().cStr();
+      if (alert_text1.empty() && alert_type.empty()) break;
+      const std::string key = alert_type + "\n" + alert_text1 + "\n" + std::string(sd.getAlertText2().cStr());
+      if (last_alert_key != nullptr && key == *last_alert_key) break;
+      if (last_alert_key != nullptr) *last_alert_key = key;
+      auto entry = make_entry(LogOrigin::Alert, alert_status_to_level(sd.getAlertStatus()));
       entry.source = "alert";
       entry.func = alert_type;
-      entry.message = alert_message_text(state);
-      entry.origin = LogOrigin::Alert;
+      entry.message = alert_message_text(sd);
       logs->push_back(std::move(entry));
       break;
     }
