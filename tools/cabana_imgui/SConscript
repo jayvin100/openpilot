@@ -25,6 +25,7 @@ cabana_srcs = [
   'main.cc',
   'app/application.cc',
   'core/app_state.cc',
+  'core/settings.cc',
   'dbc/dbc_file.cc',
   'dbc/dbc_manager.cc',
   'sources/replay_source.cc',

@@ -12,6 +12,10 @@ bool signal_matches(const ChartSignalRef &signal, const MessageId &msg_id, const
 
 }  // namespace
 
+void AppState::markSettingsDirty() {
+  settings_dirty = true;
+}
+
 ChartTabState &AppState::ensureChartTab() {
   if (chart_tabs.empty()) {
     chart_tabs.push_back({.id = next_chart_tab_id++});
@@ -38,7 +42,11 @@ const ChartTabState *AppState::activeChartTab() const {
 
 void AppState::selectChartTab(int index) {
   ensureChartTab();
-  current_chart_tab = std::clamp(index, 0, (int)chart_tabs.size() - 1);
+  const int next_index = std::clamp(index, 0, (int)chart_tabs.size() - 1);
+  if (next_index != current_chart_tab) {
+    current_chart_tab = next_index;
+    markSettingsDirty();
+  }
   auto *tab = activeChartTab();
   if (!tab || tab->charts.empty()) {
     selected_chart = -1;
@@ -51,6 +59,7 @@ void AppState::newChartTab() {
   chart_tabs.push_back({.id = next_chart_tab_id++});
   current_chart_tab = (int)chart_tabs.size() - 1;
   selected_chart = -1;
+  markSettingsDirty();
 }
 
 void AppState::removeChartTab(int index) {
@@ -64,6 +73,7 @@ void AppState::removeChartTab(int index) {
   current_chart_tab = std::clamp(current_chart_tab, 0, (int)chart_tabs.size() - 1);
   auto *tab = activeChartTab();
   selected_chart = (!tab || tab->charts.empty()) ? -1 : std::clamp(selected_chart, 0, (int)tab->charts.size() - 1);
+  markSettingsDirty();
 }
 
 void AppState::clearCharts() {
@@ -72,12 +82,14 @@ void AppState::clearCharts() {
   chart_tabs[0].charts.clear();
   current_chart_tab = 0;
   selected_chart = -1;
+  markSettingsDirty();
 }
 
 void AppState::addEmptyChart() {
   auto &tab = ensureChartTab();
   tab.charts.emplace_back();
   selected_chart = (int)tab.charts.size() - 1;
+  markSettingsDirty();
 }
 
 void AppState::removeChart(int chart_idx) {
@@ -89,6 +101,7 @@ void AppState::removeChart(int chart_idx) {
   } else {
     selected_chart = std::clamp(selected_chart, 0, (int)tab.charts.size() - 1);
   }
+  markSettingsDirty();
 }
 
 void AppState::splitChart(int chart_idx) {
@@ -105,6 +118,7 @@ void AppState::splitChart(int chart_idx) {
   chart.signals.erase(chart.signals.begin() + 1, chart.signals.end());
   tab.charts.insert(tab.charts.begin() + chart_idx + 1, splits.begin(), splits.end());
   selected_chart = chart_idx;
+  markSettingsDirty();
 }
 
 void AppState::addSignalToCharts(const MessageId &msg_id, const std::string &signal_name, bool merge) {
@@ -127,6 +141,7 @@ void AppState::addSignalToCharts(const MessageId &msg_id, const std::string &sig
 
   tab.charts[target_chart].signals.push_back({.msg_id = msg_id, .signal_name = signal_name});
   selected_chart = target_chart;
+  markSettingsDirty();
 }
 
 void AppState::removeSignalFromCharts(const MessageId &msg_id, const std::string &signal_name) {
@@ -151,6 +166,7 @@ void AppState::removeSignalFromCharts(const MessageId &msg_id, const std::string
   } else {
     selected_chart = std::clamp(selected_chart, 0, (int)tab->charts.size() - 1);
   }
+  markSettingsDirty();
 }
 
 bool AppState::hasChartSignal(const MessageId &msg_id, const std::string &signal_name) const {

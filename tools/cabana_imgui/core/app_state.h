@@ -44,6 +44,7 @@ struct AppState {
   MessageId selected_msg;
   bool reset_layout_requested = false;
   bool show_help_overlay = false;
+  bool settings_dirty = false;
 
   // Chart state
   float chart_range_sec = 7.0f;
@@ -66,6 +67,7 @@ struct AppState {
   void removeSignalFromCharts(const MessageId &msg_id, const std::string &signal_name);
   bool hasChartSignal(const MessageId &msg_id, const std::string &signal_name) const;
   int totalChartCount() const;
+  void markSettingsDirty();
 };
 
 AppState &app_state();

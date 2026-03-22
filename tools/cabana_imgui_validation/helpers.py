@@ -23,6 +23,18 @@ XVFB_RESOLUTION = "1920x1080x24"
 # Minimum size to consider a window "real" (not a Qt internal widget)
 MIN_WINDOW_SIZE = 50
 
+SIGNAL_PLOT_X = 1418
+SIGNAL_PLOT_Y0 = 164
+SIGNAL_PLOT_ROW_STEP = 22
+CHART_NEW_TAB = (1550, 660)
+CHART_SPLIT = (1480, 690)
+CHART_REMOVE = (1540, 690)
+CHART_TAB_X0 = 1485
+CHART_TAB_Y = 710
+CHART_TAB_X_STEP = 60
+FILE_MENU = (15, 12)
+FILE_MENU_EXIT = (30, 295)
+
 
 class XvfbCabana:
   """Manages a cabana process running under xvfb-run."""
@@ -290,10 +302,24 @@ class XvfbCabana:
     """Send a keystroke to the focused window."""
     return self.xdotool("key", "--window", self.wid, key)
 
+  def key_down(self, key):
+    """Press and hold a key against the focused window."""
+    return self.xdotool("keydown", "--window", self.wid, key)
+
+  def key_up(self, key):
+    """Release a previously held key."""
+    return self.xdotool("keyup", "--window", self.wid, key)
+
   def click(self, x, y, button=1):
     """Click at (x, y) relative to the cabana window."""
-    self.xdotool("mousemove", "--window", self.wid, str(x), str(y))
-    self.xdotool("click", "--window", self.wid, str(button))
+    geo = self.get_window_geometry()
+    if geo is not None:
+      abs_x = geo["X"] + x
+      abs_y = geo["Y"] + y
+      self.xdotool("mousemove", str(abs_x), str(abs_y))
+    else:
+      self.xdotool("mousemove", "--window", self.wid, str(x), str(y))
+    self.xdotool("click", str(button))
 
   def get_window_geometry(self, wid=None):
     """Return dict with WINDOW, X, Y, WIDTH, HEIGHT, SCREEN."""
@@ -332,7 +358,27 @@ class XvfbCabana:
       self._cleanup_tmpdir()
       return self.proc.returncode if self.proc else -1
 
-    # Try graceful close via alt+F4
+    self.focus()
+    self.xdotool("windowclose", self.wid)
+
+    try:
+      self.proc.wait(timeout=timeout)
+      self._close_process_streams()
+      self._cleanup_tmpdir()
+      return self.proc.returncode
+    except subprocess.TimeoutExpired:
+      pass
+
+    self.send_key("ctrl+q")
+
+    try:
+      self.proc.wait(timeout=timeout)
+      self._close_process_streams()
+      self._cleanup_tmpdir()
+      return self.proc.returncode
+    except subprocess.TimeoutExpired:
+      pass
+
     self.send_key("alt+F4")
 
     try:
@@ -385,9 +431,9 @@ def wait_for_demo_route(cabana, settle_seconds=8):
 def reset_layout(cabana):
   """Open View -> Reset Window Layout using screen coordinates."""
   cabana.focus()
-  cabana.click(76, 10)
+  cabana.click(110, 12)
   time.sleep(0.4)
-  cabana.click(96, 58)
+  cabana.click(120, 80)
   time.sleep(1.0)
 
 
@@ -398,3 +444,60 @@ def select_first_message(cabana):
   time.sleep(0.3)
   cabana.send_key("Down")
   time.sleep(0.5)
+
+
+def click_signal_plot(cabana, signal_index=0, merge=False):
+  """Click a signal plot checkbox in the selected message detail view."""
+  cabana.focus()
+  y = SIGNAL_PLOT_Y0 + signal_index * SIGNAL_PLOT_ROW_STEP
+  if merge:
+    cabana.key_down("Shift_L")
+    time.sleep(0.1)
+  cabana.click(SIGNAL_PLOT_X, y)
+  if merge:
+    time.sleep(0.1)
+    cabana.key_up("Shift_L")
+  time.sleep(0.8)
+
+
+def create_chart_tab(cabana):
+  """Create a new chart tab from the chart toolbar."""
+  cabana.focus()
+  cabana.click(*CHART_NEW_TAB)
+  time.sleep(0.6)
+
+
+def activate_chart_tab(cabana, tab_index):
+  """Activate a chart tab by index."""
+  cabana.focus()
+  cabana.click(CHART_TAB_X0 + tab_index * CHART_TAB_X_STEP, CHART_TAB_Y)
+  time.sleep(0.5)
+
+
+def split_selected_chart(cabana):
+  """Trigger split on the selected chart."""
+  cabana.focus()
+  cabana.click(*CHART_SPLIT)
+  time.sleep(0.8)
+
+
+def remove_selected_chart(cabana):
+  """Remove the selected chart via the chart toolbar."""
+  cabana.focus()
+  cabana.click(*CHART_REMOVE)
+  time.sleep(0.8)
+
+
+def quit_via_menu(cabana, timeout=5):
+  """Quit via File -> Exit so the app runs its normal shutdown path."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_EXIT)
+  try:
+    cabana.proc.wait(timeout=timeout)
+    cabana._close_process_streams()
+    cabana._cleanup_tmpdir()
+    return cabana.proc.returncode
+  except subprocess.TimeoutExpired:
+    return cabana.close(timeout=timeout)

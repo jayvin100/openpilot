@@ -16,6 +16,7 @@
 #include <GLFW/glfw3.h>
 
 #include "core/app_state.h"
+#include "core/settings.h"
 #include "dbc/dbc_manager.h"
 #include "sources/replay_source.h"
 #include "ui/shell.h"
@@ -84,6 +85,7 @@ bool Application::parseArgs(int argc, char *argv[]) {
 
 bool Application::init(int argc, char *argv[]) {
   s_app = this;
+  shutdown_done_ = false;
 
   if (!parseArgs(argc, argv)) return false;
 
@@ -112,6 +114,8 @@ bool Application::init(int argc, char *argv[]) {
 
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  imgui_ini_path_ = cabana::settings::imguiIniPath();
+  io.IniFilename = imgui_ini_path_.c_str();
 
   // HiDPI
   float dpi_scale = 1.0f;
@@ -141,10 +145,12 @@ bool Application::init(int argc, char *argv[]) {
   ImGui_ImplOpenGL3_Init("#version 130");
 
   auto &st = cabana::app_state();
+  cabana::settings::load(st);
   st.route_name.clear();
   st.car_fingerprint.clear();
   st.route_loading = false;
   st.route_load_error.clear();
+  st.show_help_overlay = false;
 
   // Kick route loading to a background thread so the first frame appears immediately.
   if (!route_.empty()) {
@@ -197,6 +203,10 @@ int Application::run() {
     ImGui::NewFrame();
 
     cabana::shell::render();
+
+    if (st.settings_dirty && cabana::settings::save(st)) {
+      st.settings_dirty = false;
+    }
 
     ImGui::Render();
 
@@ -282,13 +292,24 @@ void Application::pollReplayLoad() {
 }
 
 void Application::shutdown() {
+  if (shutdown_done_) {
+    return;
+  }
+  shutdown_done_ = true;
+
   replay_load_state_.reset();
   source_.reset();
 
-  ImGui_ImplOpenGL3_Shutdown();
-  ImGui_ImplGlfw_Shutdown();
-  ImPlot::DestroyContext();
-  ImGui::DestroyContext();
+  if (ImGui::GetCurrentContext()) {
+    if (!imgui_ini_path_.empty()) {
+      ImGui::SaveIniSettingsToDisk(imgui_ini_path_.c_str());
+    }
+    cabana::settings::save(cabana::app_state());
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImPlot::DestroyContext();
+    ImGui::DestroyContext();
+  }
 
   if (window) {
     glfwDestroyWindow(window);

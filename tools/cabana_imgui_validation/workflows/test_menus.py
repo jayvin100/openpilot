@@ -33,7 +33,7 @@ class TestMenus:
       wait_for_demo_route(c)
 
       # Click on "Tools" in the menu bar
-      c.click(110, 12)
+      c.click(170, 12)
       time.sleep(1)
 
       path = c.screenshot("workflow_tools_menu.png")

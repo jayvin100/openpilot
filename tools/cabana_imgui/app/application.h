@@ -32,8 +32,10 @@ private:
   std::string route_;
   std::string dbc_file_;
   std::string data_dir_;
+  std::string imgui_ini_path_;
   uint32_t replay_flags_ = 0;
   bool auto_source_ = false;
+  bool shutdown_done_ = false;
 };
 
 // Global access for UI panes

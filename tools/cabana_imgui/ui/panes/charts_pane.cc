@@ -102,7 +102,9 @@ static void render_chart_toolbar(AppState &st) {
   ImGui::TextUnformatted("Window");
   ImGui::SameLine();
   ImGui::SetNextItemWidth(std::min(180.0f, ImGui::GetContentRegionAvail().x));
-  ImGui::SliderFloat("##range", &st.chart_range_sec, 1.0f, 60.0f, "%.0f s");
+  if (ImGui::SliderFloat("##range", &st.chart_range_sec, 1.0f, 60.0f, "%.0f s")) {
+    st.markSettingsDirty();
+  }
 
   ImGui::BeginDisabled(st.selected_chart < 0);
   if (ImGui::Button("Split")) {
@@ -141,7 +143,8 @@ void charts() {
       std::string label = "Tab " + std::to_string(i + 1);
       bool open = true;
       bool *open_ptr = st.chart_tabs.size() > 1 ? &open : nullptr;
-      if (ImGui::BeginTabItem(label.c_str(), open_ptr)) {
+      ImGuiTabItemFlags tab_flags = (i == st.current_chart_tab) ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+      if (ImGui::BeginTabItem(label.c_str(), open_ptr, tab_flags)) {
         active_tab_index = i;
         ImGui::EndTabItem();
       }

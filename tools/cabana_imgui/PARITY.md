@@ -34,7 +34,7 @@
 - [x] charts display — `wired`
 - [x] chart tabs — `wired`
 - [x] split/merge behavior — `wired`
-- [ ] layout persistence — `not started`
+- [x] layout persistence — `wired`
 
 ## Video
 - [x] video display — `skeleton only`
@@ -46,9 +46,9 @@
 - [ ] export to CSV — `not started`
 
 ## App State
-- [ ] settings persistence — `not started`
+- [x] settings persistence — `partial (chart state + dock layout)`
 - [ ] recent files — `not started`
-- [ ] session restore — `not started`
+- [x] session restore — `partial (chart tabs + active tab + dock layout)`
 - [ ] undo/redo command stack — `not started`
 - [x] help overlay — `wired`
 

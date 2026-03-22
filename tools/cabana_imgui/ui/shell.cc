@@ -20,6 +20,12 @@ static constexpr float LEFT_DOCK_RATIO = 0.21f;
 static constexpr float RIGHT_DOCK_RATIO = 0.36f;
 static constexpr float RIGHT_TOP_RATIO = 0.58f;
 
+static bool has_saved_layout(ImGuiID dockspace_id) {
+  ImGuiDockNode *node = ImGui::DockBuilderGetNode(dockspace_id);
+  if (!node) return false;
+  return node->ChildNodes[0] != nullptr || node->ChildNodes[1] != nullptr || node->Windows.Size > 0;
+}
+
 static void setup_default_layout(ImGuiID dockspace_id) {
   ImGui::DockBuilderRemoveNode(dockspace_id);
   ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
@@ -128,14 +134,13 @@ void render() {
   ImGui::PopStyleVar(3);
 
   ImGuiID dockspace_id = ImGui::GetID("CabanaDockSpace");
+  ImGui::DockSpace(dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_None);
 
-  if (first_frame || st.reset_layout_requested) {
+  if (st.reset_layout_requested || (first_frame && !has_saved_layout(dockspace_id))) {
     setup_default_layout(dockspace_id);
-    first_frame = false;
     st.reset_layout_requested = false;
   }
-
-  ImGui::DockSpace(dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_None);
+  first_frame = false;
 
   // Menu bar
   cabana::menus::render();

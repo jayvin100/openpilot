@@ -39,7 +39,7 @@ class TestFullUI:
       wait_for_demo_route(c)
 
       # Open View menu
-      c.click(75, 8)
+      c.click(110, 12)
       time.sleep(1)
 
       path = c.screenshot("workflow_view_menu_info.png")
