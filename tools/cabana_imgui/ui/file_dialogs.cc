@@ -1,6 +1,9 @@
 #include "ui/file_dialogs.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 
 #include "imgui.h"
@@ -18,6 +21,7 @@ enum class DialogMode {
   None = 0,
   OpenDbc,
   SaveDbcAs,
+  ExportCsv,
 };
 
 struct DialogRequest {
@@ -38,6 +42,7 @@ const char *dialogTitle(DialogMode mode) {
   switch (mode) {
     case DialogMode::OpenDbc: return "Open DBC File";
     case DialogMode::SaveDbcAs: return "Save DBC As";
+    case DialogMode::ExportCsv: return "Export to CSV";
     case DialogMode::None: break;
   }
   return "";
@@ -66,6 +71,27 @@ std::string initialSavePath(const DialogRequest &request) {
   return "untitled.dbc";
 }
 
+std::string sanitizeFilename(std::string value) {
+  if (value.empty()) return "cabana_export";
+  std::replace_if(value.begin(), value.end(), [](unsigned char c) {
+    return !(std::isalnum(c) || c == '_' || c == '-' || c == '.');
+  }, '_');
+  return value;
+}
+
+std::string initialExportPath() {
+  namespace fs = std::filesystem;
+
+  const auto &st = cabana::app_state();
+  fs::path base = fs::current_path();
+  std::string name = "cabana_export";
+  if (!st.route_name.empty()) {
+    const fs::path route_path(st.route_name);
+    name = sanitizeFilename(route_path.filename().string());
+  }
+  return (base / (name + ".csv")).string();
+}
+
 void openRequestedDialog() {
   if (requested_dialog.mode == DialogMode::None) return;
 
@@ -73,7 +99,19 @@ void openRequestedDialog() {
   requested_dialog = {};
   dialog_error.clear();
   focus_path_input = true;
-  copyPath(active_dialog.mode == DialogMode::OpenDbc ? initialOpenPath(active_dialog) : initialSavePath(active_dialog));
+  switch (active_dialog.mode) {
+    case DialogMode::OpenDbc:
+      copyPath(initialOpenPath(active_dialog));
+      break;
+    case DialogMode::SaveDbcAs:
+      copyPath(initialSavePath(active_dialog));
+      break;
+    case DialogMode::ExportCsv:
+      copyPath(initialExportPath());
+      break;
+    case DialogMode::None:
+      break;
+  }
   ImGui::OpenPopup(dialogTitle(active_dialog.mode));
 }
 
@@ -86,11 +124,35 @@ bool submitDialog() {
     return false;
   }
 
-  const bool ok = active_dialog.mode == DialogMode::OpenDbc
-                    ? app()->openDbcFile(path, active_dialog.sources)
-                    : app()->saveDbcAs(path, active_dialog.source);
+  bool ok = false;
+  switch (active_dialog.mode) {
+    case DialogMode::OpenDbc:
+      ok = app()->openDbcFile(path, active_dialog.sources);
+      break;
+    case DialogMode::SaveDbcAs:
+      ok = app()->saveDbcAs(path, active_dialog.source);
+      break;
+    case DialogMode::ExportCsv:
+      ok = app()->exportCsv(path);
+      break;
+    case DialogMode::None:
+      break;
+  }
   if (!ok) {
-    dialog_error = active_dialog.mode == DialogMode::OpenDbc ? "Failed to open DBC file." : "Failed to save DBC file.";
+    switch (active_dialog.mode) {
+      case DialogMode::OpenDbc:
+        dialog_error = "Failed to open DBC file.";
+        break;
+      case DialogMode::SaveDbcAs:
+        dialog_error = "Failed to save DBC file.";
+        break;
+      case DialogMode::ExportCsv:
+        dialog_error = "Failed to export CSV.";
+        break;
+      case DialogMode::None:
+        dialog_error.clear();
+        break;
+    }
     return false;
   }
 
@@ -126,6 +188,14 @@ void requestSaveDbcAs(int source) {
   };
 }
 
+void requestExportCsv() {
+  requested_dialog = {
+    .mode = DialogMode::ExportCsv,
+    .sources = {},
+    .source = cabana::dbc::kDbcSourceAll,
+  };
+}
+
 void render() {
   openRequestedDialog();
   if (active_dialog.mode == DialogMode::None) return;
@@ -141,9 +211,19 @@ void render() {
     focus_path_input = false;
   }
 
-  ImGui::TextUnformatted(active_dialog.mode == DialogMode::OpenDbc ?
-                         "Enter a DBC file path to load." :
-                         "Enter the output path for the current DBC.");
+  switch (active_dialog.mode) {
+    case DialogMode::OpenDbc:
+      ImGui::TextUnformatted("Enter a DBC file path to load.");
+      break;
+    case DialogMode::SaveDbcAs:
+      ImGui::TextUnformatted("Enter the output path for the current DBC.");
+      break;
+    case DialogMode::ExportCsv:
+      ImGui::TextUnformatted("Enter the output path for the CAN CSV export.");
+      break;
+    case DialogMode::None:
+      break;
+  }
   ImGui::Spacing();
   const bool submit_from_input = ImGui::InputText("Path", path_buffer, sizeof(path_buffer),
                                                   ImGuiInputTextFlags_EnterReturnsTrue);
@@ -155,7 +235,9 @@ void render() {
   ImGui::Spacing();
   const bool can_submit = path_buffer[0] != '\0';
   if (!can_submit) ImGui::BeginDisabled();
-  if (ImGui::Button(active_dialog.mode == DialogMode::OpenDbc ? "Open" : "Save", ImVec2(96, 0)) || submit_from_input) {
+  const char *action_label = active_dialog.mode == DialogMode::OpenDbc ? "Open" :
+                             active_dialog.mode == DialogMode::SaveDbcAs ? "Save" : "Export";
+  if (ImGui::Button(action_label, ImVec2(96, 0)) || submit_from_input) {
     submitDialog();
   }
   if (!can_submit) ImGui::EndDisabled();

@@ -12,7 +12,7 @@
 
 ## DBC
 - [x] automatic DBC selection from fingerprint — `wired`
-- [x] manual DBC open/save/save-as — `wired`
+- [x] manual DBC open/save/save-as/opendbc menu load — `wired`
 - [x] manual DBC new file — `wired`
 - [x] DBC clipboard import/export — `wired`
 - [x] DBC management per bus/source — `wired`
@@ -44,7 +44,7 @@
 ## Tools
 - [ ] find signal — `not started`
 - [ ] find similar bits — `not started`
-- [ ] export to CSV — `not started`
+- [x] export to CSV — `wired (route-wide CAN dump)`
 
 ## App State
 - [x] settings persistence — `partial (chart state + dock layout + selection/detail/dbc recents)`
@@ -55,7 +55,7 @@
 
 ## UI Shell
 - [x] dockspace layout — `wired`
-- [x] menu bar (File, Edit, View, Tools, Help) — `partial (DBC file flows + clipboard/new + per-source DBC management + edit message/add signal + layout/help)`
+- [x] menu bar (File, Edit, View, Tools, Help) — `partial (DBC file flows + opendbc/export + clipboard/new + per-source DBC management + edit message/add signal + layout/help)`
 - [x] messages pane — `wired`
 - [x] detail pane with tabs — `wired`
 - [x] charts pane — `wired`

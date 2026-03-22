@@ -36,6 +36,7 @@ CHART_TAB_X0 = 1485
 CHART_TAB_Y = 710
 CHART_TAB_X_STEP = 60
 FILE_MENU = (15, 12)
+FILE_MENU_EXPORT_CSV = (60, 60)
 FILE_MENU_NEW_DBC = (60, 92)
 FILE_MENU_SAVE = (60, 199)
 FILE_MENU_SAVE_AS = (60, 215)
@@ -43,6 +44,8 @@ FILE_MENU_LOAD_CLIPBOARD = (60, 176)
 FILE_MENU_COPY_DBC = (60, 231)
 FILE_MENU_EXIT = (30, 295)
 FILE_MENU_MANAGE_DBCS = (60, 124)
+FILE_MENU_OPENDBC_SUBMENU = (132, 160)
+FILE_MENU_OPENDBC_SUBMENU_X = 290
 EDIT_MENU = (38, 12)
 EDIT_MENU_UNDO = (78, 28)
 EDIT_MENU_REDO = (78, 44)
@@ -587,6 +590,32 @@ def copy_dbc_to_clipboard(cabana):
   time.sleep(0.4)
   cabana.click(*FILE_MENU_COPY_DBC)
   time.sleep(0.8)
+
+
+def export_csv_path(cabana, path):
+  """Use File -> Export to CSV and write the chosen output path."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_EXPORT_CSV)
+  time.sleep(1.0)
+  cabana.send_key("ctrl+a")
+  time.sleep(0.2)
+  cabana.type_text(path)
+  time.sleep(0.4)
+  cabana.send_key("Return")
+  time.sleep(2.0)
+
+
+def load_first_opendbc_via_menu(cabana):
+  """Use File -> Load DBC from comma/opendbc -> first menu item."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_OPENDBC_SUBMENU)
+  time.sleep(0.8)
+  cabana.click(FILE_MENU_OPENDBC_SUBMENU_X, FILE_MENU_OPENDBC_SUBMENU[1])
+  time.sleep(1.2)
 
 
 def save_dbc_as_path(cabana, path):

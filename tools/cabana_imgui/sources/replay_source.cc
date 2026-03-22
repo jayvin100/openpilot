@@ -72,6 +72,7 @@ double ReplaySource::minSec() const { return replay_ ? replay_->minSeconds() : 0
 double ReplaySource::maxSec() const { return replay_ ? replay_->maxSeconds() : 0; }
 float ReplaySource::speed() const { return replay_ ? replay_->getSpeed() : 1.0f; }
 const std::string &ReplaySource::routeName() const { return route_name_; }
+double ReplaySource::toSeconds(uint64_t mono_time) const { return replay_ ? replay_->toSeconds(mono_time) : 0.0; }
 const std::string &ReplaySource::carFingerprint() const {
   static std::string empty;
   return replay_ ? replay_->carFingerprint() : empty;
@@ -127,6 +128,20 @@ bool ReplaySource::pollEvents() {
   return changed;
 }
 
+bool ReplaySource::mergeAllSegments() {
+  bool changed = false;
+  while (mergeSegments(SIZE_MAX)) {
+    changed = true;
+  }
+
+  if (msgs_dirty_.exchange(false, std::memory_order_relaxed)) {
+    std::lock_guard lk(msg_mutex_);
+    ui_msgs_ = live_msgs_;
+    changed = true;
+  }
+  return changed;
+}
+
 bool ReplaySource::mergeSegments(size_t max_segments) {
   size_t merged_segments = 0;
   auto event_data = replay_->getEventData();
@@ -170,6 +185,11 @@ bool ReplaySource::mergeSegments(size_t max_segments) {
   const bool has_more = processed_segments_.size() < event_data->segments.size();
   segments_merged_.store(has_more, std::memory_order_relaxed);
   return merged_segments > 0;
+}
+
+const std::vector<const CanEvent *> *ReplaySource::events(const MessageId &id) const {
+  auto it = events_.find(id);
+  return it == events_.end() ? nullptr : &it->second;
 }
 
 const CanEvent *ReplaySource::allocEvent(uint64_t mono_time, const cereal::CanData::Reader &c) {

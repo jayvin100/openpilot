@@ -4,9 +4,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <getopt.h>
+#include <iomanip>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #include "imgui.h"
@@ -467,6 +470,41 @@ bool Application::copyDbcToClipboard(int source) {
   if (!dbc_file) return false;
   glfwSetClipboardString(window, dbc_file->contents().c_str());
   return true;
+}
+
+bool Application::exportCsv(const std::string &path, std::optional<MessageId> msg_id) {
+  if (path.empty() || !source_) {
+    return false;
+  }
+
+  source_->mergeAllSegments();
+
+  std::ofstream output(path);
+  if (!output.is_open()) {
+    return false;
+  }
+
+  const auto *events = msg_id.has_value() ? source_->events(*msg_id) : &source_->allEvents();
+  if (!events) {
+    return false;
+  }
+
+  output << "time,addr,bus,data\n";
+  for (const CanEvent *event : *events) {
+    if (!event) continue;
+
+    output << std::fixed << std::setprecision(3) << source_->toSeconds(event->mono_time)
+           << ",0x" << std::uppercase << std::hex << event->address
+           << std::dec << "," << static_cast<int>(event->src) << ",0x";
+
+    for (uint8_t i = 0; i < event->size; ++i) {
+      output << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+             << static_cast<int>(event->dat[i]);
+    }
+    output << std::dec << std::setfill(' ') << "\n";
+  }
+
+  return output.good();
 }
 
 void Application::closeDbcs(const SourceSet &sources) {

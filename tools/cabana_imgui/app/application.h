@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 
 struct GLFWwindow;
@@ -23,6 +24,7 @@ public:
   bool openDbcFile(const std::string &path, const SourceSet &sources);
   bool loadDbcFromClipboard(const SourceSet &sources);
   bool copyDbcToClipboard(int source = -1);
+  bool exportCsv(const std::string &path, std::optional<MessageId> msg_id = std::nullopt);
   void closeDbcs(const SourceSet &sources);
   void closeDbcEverywhere(int source);
   bool saveDbc(int source = -1);

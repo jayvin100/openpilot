@@ -1,5 +1,6 @@
 #include "ui/menus.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -20,6 +21,26 @@ namespace menus {
 namespace {
 
 bool show_manage_dbcs_modal = false;
+
+std::vector<std::filesystem::path> available_opendbc_files() {
+  namespace fs = std::filesystem;
+
+  std::vector<fs::path> files;
+  const fs::path root = OPENDBC_FILE_PATH;
+  std::error_code ec;
+  if (!fs::exists(root, ec) || ec) {
+    return files;
+  }
+
+  for (const auto &entry : fs::directory_iterator(root, ec)) {
+    if (ec) break;
+    if (entry.is_regular_file() && entry.path().extension() == ".dbc") {
+      files.push_back(entry.path());
+    }
+  }
+  std::sort(files.begin(), files.end());
+  return files;
+}
 
 std::vector<int> available_buses() {
   std::set<int> buses;
@@ -170,7 +191,9 @@ void render() {
         application->closeRoute();
       }
       ImGui::Separator();
-      if (ImGui::MenuItem("Export to CSV...")) {}
+      if (ImGui::MenuItem("Export to CSV...", nullptr, false, application && application->source())) {
+        cabana::file_dialogs::requestExportCsv();
+      }
       ImGui::Separator();
       if (ImGui::MenuItem("New DBC File", "Ctrl+N") && application) {
         application->newDbcFile(cabana::dbc::sourceAll());
@@ -209,6 +232,17 @@ void render() {
       }
       ImGui::Separator();
       if (ImGui::BeginMenu("Load DBC from comma/opendbc")) {
+        const auto files = available_opendbc_files();
+        if (files.empty()) {
+          ImGui::MenuItem("No OpenDBC files found", nullptr, false, false);
+        } else {
+          for (const auto &path : files) {
+            const std::string name = path.filename().string();
+            if (ImGui::MenuItem(name.c_str()) && application) {
+              application->openDbcFile(path.string());
+            }
+          }
+        }
         ImGui::EndMenu();
       }
       if (ImGui::MenuItem("Load DBC From Clipboard") && application) {

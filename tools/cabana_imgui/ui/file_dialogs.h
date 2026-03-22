@@ -9,6 +9,7 @@ void requestOpenDbc();
 void requestOpenDbc(const SourceSet &sources);
 void requestSaveDbcAs();
 void requestSaveDbcAs(int source);
+void requestExportCsv();
 void render();
 
 }  // namespace file_dialogs

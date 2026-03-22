@@ -44,9 +44,11 @@ public:
   const std::string &routeName() const;
   const std::string &carFingerprint() const;
   uint64_t routeStartNanos() const;
+  double toSeconds(uint64_t mono_time) const;
 
   // Called each frame on the main thread. Returns true if UI-visible state changed.
   bool pollEvents();
+  bool mergeAllSegments();
 
   // Latest message state — call only from main thread after pollEvents()
   const std::unordered_map<MessageId, MsgLiveData> &messages() const { return ui_msgs_; }
@@ -54,6 +56,7 @@ public:
   // Merged events map (main thread only, updated by mergeSegments)
   const MessageEventsMap &eventsMap() const { return events_; }
   const std::vector<const CanEvent *> &allEvents() const { return all_events_; }
+  const std::vector<const CanEvent *> *events(const MessageId &id) const;
 
   Replay *replay() { return replay_.get(); }
 
