@@ -36,6 +36,7 @@ CHART_TAB_X0 = 1485
 CHART_TAB_Y = 710
 CHART_TAB_X_STEP = 60
 FILE_MENU = (15, 12)
+FILE_MENU_OPEN_STREAM = (75, 28)
 FILE_MENU_EXPORT_CSV = (60, 60)
 FILE_MENU_NEW_DBC = (60, 92)
 FILE_MENU_SAVE = (60, 199)
@@ -800,6 +801,15 @@ def open_find_similar_bits_window(cabana):
   cabana.click(*TOOLS_MENU)
   time.sleep(0.4)
   cabana.click(*TOOLS_MENU_FIND_SIMILAR_BITS)
+  time.sleep(1.0)
+
+
+def open_stream_window(cabana):
+  """Use File -> Open Stream."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_OPEN_STREAM)
   time.sleep(1.0)
 
 

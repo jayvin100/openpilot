@@ -10,6 +10,7 @@
 #include "ui/file_dialogs.h"
 #include "ui/help_overlay.h"
 #include "ui/menus.h"
+#include "ui/stream_dialogs.h"
 #include "ui/panes/messages_pane.h"
 #include "ui/panes/detail_pane.h"
 #include "ui/panes/video_pane.h"
@@ -191,6 +192,7 @@ void render() {
   // Status bar
   render_status_bar();
   render_route_load_overlay();
+  cabana::stream_dialogs::render();
   cabana::file_dialogs::render();
   cabana::tools_windows::render();
   cabana::help_overlay::render();

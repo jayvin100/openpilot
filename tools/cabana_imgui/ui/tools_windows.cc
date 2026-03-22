@@ -178,7 +178,7 @@ std::string result_label(const FindSignalResult &result) {
   return result.matches.empty() ? std::string() : result.matches.back();
 }
 
-std::vector<int> available_buses(cabana::ReplaySource *src) {
+std::vector<int> available_buses(cabana::Source *src) {
   std::set<int> buses;
   if (!src) return {};
 
@@ -208,7 +208,7 @@ std::string message_label(const MessageId &id) {
   return addr;
 }
 
-std::vector<MessageOption> source_messages_for_bus(cabana::ReplaySource *src, int bus) {
+std::vector<MessageOption> source_messages_for_bus(cabana::Source *src, int bus) {
   std::map<MessageId, int> sizes;
   std::vector<MessageOption> options;
   if (!src || bus < 0) return options;
@@ -248,7 +248,7 @@ const MessageOption *selected_message_option(const FindSimilarBitsState &state) 
   return it == state.source_messages.end() ? nullptr : &*it;
 }
 
-void refresh_find_similar_bits_state(cabana::ReplaySource *src) {
+void refresh_find_similar_bits_state(cabana::Source *src) {
   auto &state = g_find_similar_bits;
   state.buses = available_buses(src);
   if (state.buses.empty()) {
@@ -330,7 +330,7 @@ void seed_find_signal_filters_from_selection(FindSignalState &state) {
   state.focus_value_input = true;
 }
 
-bool initialize_find_signal_results(FindSignalState &state, cabana::ReplaySource *src) {
+bool initialize_find_signal_results(FindSignalState &state, cabana::Source *src) {
   state.initial_results.clear();
   state.last_time = std::numeric_limits<uint64_t>::max();
 
@@ -366,9 +366,9 @@ bool initialize_find_signal_results(FindSignalState &state, cabana::ReplaySource
   state.min_size = min_size;
   state.max_size = max_size;
 
-  const uint64_t first_time = src->replay()->routeStartNanos() + (uint64_t)(std::max(0.0, first_sec) * 1e9);
+  const uint64_t first_time = src->routeStartNanos() + (uint64_t)(std::max(0.0, first_sec) * 1e9);
   if (std::isfinite(last_sec)) {
-    state.last_time = src->replay()->routeStartNanos() + (uint64_t)(std::max(0.0, last_sec) * 1e9);
+    state.last_time = src->routeStartNanos() + (uint64_t)(std::max(0.0, last_sec) * 1e9);
   }
 
   for (const auto &[id, events] : src->eventsMap()) {

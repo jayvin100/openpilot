@@ -22,11 +22,7 @@ ReplaySource::ReplaySource() {
   event_buffer_ = std::make_unique<MonotonicBuffer>(EVENT_BUFFER_SIZE);
 }
 
-ReplaySource::~ReplaySource() {
-  if (replay_) {
-    replay_->waitForFinished();
-  }
-}
+ReplaySource::~ReplaySource() { stop(); }
 
 bool ReplaySource::load(const std::string &route, const std::string &data_dir,
                         uint32_t flags, bool auto_source) {
@@ -50,8 +46,16 @@ bool ReplaySource::load(const std::string &route, const std::string &data_dir,
   return ok;
 }
 
-void ReplaySource::start() {
+bool ReplaySource::start(std::string *error) {
+  (void)error;
   if (replay_) replay_->start();
+  return replay_ != nullptr;
+}
+
+void ReplaySource::stop() {
+  if (replay_) {
+    replay_->waitForFinished();
+  }
 }
 
 void ReplaySource::pause(bool p) {

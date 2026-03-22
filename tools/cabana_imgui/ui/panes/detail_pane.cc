@@ -749,7 +749,7 @@ std::string format_hex_data(const uint8_t *data, int data_size) {
   return hex;
 }
 
-void render_history_view(const MessageId &id, cabana::ReplaySource *src) {
+void render_history_view(const MessageId &id, cabana::Source *src) {
   auto it = src->eventsMap().find(id);
   if (it == src->eventsMap().end() || it->second.empty()) {
     ImGui::TextDisabled("Waiting for indexed CAN events...");
@@ -792,7 +792,7 @@ void render_history_view(const MessageId &id, cabana::ReplaySource *src) {
         const auto *e = it->second[it->second.size() - 1 - row];
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        ImGui::Text("%.3f", src->replay()->toSeconds(e->mono_time));
+        ImGui::Text("%.3f", src->toSeconds(e->mono_time));
 
         if (show_hex) {
           ImGui::TableNextColumn();

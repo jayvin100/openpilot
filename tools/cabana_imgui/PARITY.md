@@ -4,10 +4,10 @@
 - [x] route replay loading and playback controls — `wired`
 - [x] demo route support — `wired`
 - [x] auto-source route loading — `wired`
-- [ ] live device streaming — `not started`
-- [ ] panda streaming — `not started`
-- [ ] socketcan streaming — `not started`
-- [ ] zmq/device address streaming — `not started`
+- [x] live device streaming — `partial (msgq/zmq source layer + cli/dialog wired)`
+- [x] panda streaming — `partial (source layer + cli/dialog wired; hardware validation pending)`
+- [x] socketcan streaming — `partial (source layer + cli/dialog wired; hardware validation pending)`
+- [x] zmq/device address streaming — `partial (bridge-backed source layer + cli/dialog wired)`
 - [x] qcam, ecam, dcam handling — `wired`
 
 ## DBC
@@ -56,7 +56,7 @@
 
 ## UI Shell
 - [x] dockspace layout — `wired`
-- [x] menu bar (File, Edit, View, Tools, Help) — `partial (DBC file flows + opendbc/export + clipboard/new + per-source DBC management + find signal/similar bits/route info + edit message/add signal + layout/help)`
+- [x] menu bar (File, Edit, View, Tools, Help) — `partial (open stream dialog + DBC file flows + opendbc/export + clipboard/new + per-source DBC management + find signal/similar bits/route info + edit message/add signal + layout/help)`
 - [x] messages pane — `wired`
 - [x] detail pane with tabs — `wired`
 - [x] charts pane — `wired`

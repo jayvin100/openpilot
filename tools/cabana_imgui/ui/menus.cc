@@ -13,6 +13,7 @@
 #include "core/command_stack.h"
 #include "dbc/dbc_manager.h"
 #include "ui/file_dialogs.h"
+#include "ui/stream_dialogs.h"
 #include "ui/panes/detail_pane.h"
 #include "ui/tools_windows.h"
 
@@ -187,7 +188,9 @@ void render() {
 
   if (ImGui::BeginMenuBar()) {
     if (ImGui::BeginMenu("File")) {
-      if (ImGui::MenuItem("Open Stream...")) {}
+      if (ImGui::MenuItem("Open Stream...")) {
+        cabana::stream_dialogs::requestOpen();
+      }
       if (ImGui::MenuItem("Close Stream", nullptr, false, application && application->source())) {
         application->closeRoute();
       }

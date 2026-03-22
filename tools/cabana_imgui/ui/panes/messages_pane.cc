@@ -10,7 +10,7 @@
 #include "app/application.h"
 #include "core/app_state.h"
 #include "dbc/dbc_manager.h"
-#include "sources/replay_source.h"
+#include "sources/source.h"
 
 namespace cabana {
 namespace panes {
@@ -49,7 +49,7 @@ void messages() {
   // Read messages from source (already on main thread, no copy needed)
   static std::vector<MsgRow> rows;
   static int last_msg_count = 0;
-  static const cabana::ReplaySource *last_src = nullptr;
+  static const cabana::Source *last_src = nullptr;
   static uint64_t last_dbc_revision = 0;
 
   if (src) {
@@ -137,6 +137,8 @@ void messages() {
       const auto &st = cabana::app_state();
       if (st.route_loading) {
         ImGui::TextDisabled("(loading route...)");
+      } else if (src) {
+        ImGui::TextDisabled(src->liveStreaming() ? "(waiting for CAN traffic...)" : "(no messages indexed yet)");
       } else if (!st.route_load_error.empty()) {
         ImGui::TextDisabled("(route load failed)");
       } else {

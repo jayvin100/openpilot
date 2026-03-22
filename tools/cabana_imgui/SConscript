@@ -1,5 +1,6 @@
 import os
 import imgui
+import libusb
 
 Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal', 'replay_lib')
 
@@ -8,6 +9,8 @@ cabana_env = env.Clone()
 # imgui sources
 cabana_env['CPPPATH'] += [imgui.INCLUDE_DIR, '#tools/cabana_imgui']
 cabana_env['LIBPATH'] += [imgui.LIB_DIR]
+cabana_env['CPPPATH'] += [libusb.INCLUDE_DIR]
+cabana_env['LIBPATH'] += [libusb.LIB_DIR]
 
 imgui_srcs = [os.path.join(imgui.SRC_DIR, f) for f in [
   'imgui.cpp', 'imgui_draw.cpp', 'imgui_tables.cpp', 'imgui_widgets.cpp',
@@ -19,6 +22,7 @@ imgui_lib = cabana_env.Library('imgui', imgui_srcs)
 # opendbc path (shared with legacy cabana)
 opendbc_path = '-DOPENDBC_FILE_PATH=\'"%s"\'' % (cabana_env.Dir("../../opendbc/dbc").abspath)
 cabana_env['CXXFLAGS'] += [opendbc_path]
+panda_obj = cabana_env.Object('panda_imgui', '#tools/cabana/panda.cc')
 
 # cabana_imgui sources
 cabana_srcs = [
@@ -30,10 +34,15 @@ cabana_srcs = [
   'dbc/dbc_file.cc',
   'dbc/dbc_manager.cc',
   'sources/replay_source.cc',
+  'sources/live_source.cc',
+  'sources/device_source.cc',
+  'sources/panda_source.cc',
+  'sources/socketcan_source.cc',
   'ui/shell.cc',
   'ui/theme.cc',
   'ui/menus.cc',
   'ui/file_dialogs.cc',
+  'ui/stream_dialogs.cc',
   'ui/help_overlay.cc',
   'ui/tools_windows.cc',
   'ui/bootstrap_icons.cc',
@@ -46,7 +55,7 @@ cabana_srcs = [
 base_libs = [replay_lib, common, messaging, cereal, visionipc,
              'avformat', 'avcodec', 'swresample', 'avutil',
              'x264', 'z', 'bz2', 'zstd', 'yuv',
-             imgui_lib, 'glfw3',
+             imgui_lib, 'glfw3', 'usb-1.0',
              'GL', 'dl', 'pthread', 'm']
 
-cabana_env.Program('_cabana_imgui', cabana_srcs, LIBS=base_libs)
+cabana_env.Program('_cabana_imgui', cabana_srcs + [panda_obj], LIBS=base_libs)

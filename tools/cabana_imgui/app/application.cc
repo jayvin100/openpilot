@@ -81,12 +81,19 @@ static void clear_state_for_dbc_sources(const SourceSet &sources) {
 }
 
 bool Application::videoEnabled() const {
-  return (replay_flags_ & REPLAY_FLAG_NO_VIPC) == 0;
+  return source_ && !source_->liveStreaming() && (replay_flags_ & REPLAY_FLAG_NO_VIPC) == 0;
 }
 
 bool Application::parseArgs(int argc, char *argv[]) {
   static struct option long_opts[] = {
     {"demo", no_argument, nullptr, 'd'},
+    {"msgq", no_argument, nullptr, 'm'},
+    {"zmq", required_argument, nullptr, 'z'},
+    {"panda", no_argument, nullptr, 'p'},
+    {"panda-serial", required_argument, nullptr, 's'},
+#ifdef __linux__
+    {"socketcan", required_argument, nullptr, 'S'},
+#endif
     {"no-vipc", no_argument, nullptr, 'V'},
     {"qcam", no_argument, nullptr, 'q'},
     {"ecam", no_argument, nullptr, 'e'},
@@ -102,6 +109,28 @@ bool Application::parseArgs(int argc, char *argv[]) {
   while ((opt = getopt_long(argc, argv, "h", long_opts, nullptr)) != -1) {
     switch (opt) {
       case 'd': route_ = DEMO_ROUTE; break;
+      case 'm':
+        use_device_stream_ = true;
+        device_config_ = {.use_zmq = false, .address = "127.0.0.1"};
+        break;
+      case 'z':
+        use_device_stream_ = true;
+        device_config_ = {.use_zmq = true, .address = optarg ? optarg : "127.0.0.1"};
+        break;
+      case 'p':
+        use_panda_stream_ = true;
+        panda_config_ = {};
+        break;
+      case 's':
+        use_panda_stream_ = true;
+        panda_config_.serial = optarg ? optarg : "";
+        break;
+#ifdef __linux__
+      case 'S':
+        use_socketcan_stream_ = true;
+        socketcan_config_.device = optarg ? optarg : "";
+        break;
+#endif
       case 'V': replay_flags_ |= REPLAY_FLAG_NO_VIPC; break;
       case 'q': replay_flags_ |= REPLAY_FLAG_QCAMERA; break;
       case 'e': replay_flags_ |= REPLAY_FLAG_ECAM; break;
@@ -110,7 +139,7 @@ bool Application::parseArgs(int argc, char *argv[]) {
       case 'D': dbc_file_ = optarg; break;
       case 'P': data_dir_ = optarg; break;
       case 'h':
-        fprintf(stderr, "Usage: cabana_imgui [route] [--demo] [--no-vipc] [--dbc file]\n");
+        fprintf(stderr, "Usage: cabana_imgui [route] [--demo|--msgq|--zmq ip|--panda|--socketcan dev] [--no-vipc] [--dbc file]\n");
         return false;
     }
   }
@@ -198,8 +227,16 @@ bool Application::init(int argc, char *argv[]) {
     openConfiguredDbcs();
   }
 
-  // Kick route loading to a background thread so the first frame appears immediately.
-  if (!route_.empty()) {
+  if (use_device_stream_) {
+    openDeviceStream(device_config_, dbc_file_);
+  } else if (use_panda_stream_) {
+    openPandaStream(panda_config_, dbc_file_);
+#ifdef __linux__
+  } else if (use_socketcan_stream_) {
+    openSocketCanStream(socketcan_config_, dbc_file_);
+#endif
+  } else if (!route_.empty()) {
+    // Kick route loading to a background thread so the first frame appears immediately.
     beginReplayLoad();
   }
 
@@ -364,14 +401,47 @@ void Application::openConfiguredDbcs() {
   }
 }
 
-void Application::openRoute(const std::string &route) {
-  if (route.empty()) return;
+bool Application::activateSource(std::unique_ptr<cabana::Source> source, const std::string &dbc_path) {
+  if (!source) {
+    return false;
+  }
 
+  std::string error;
+  if (!source->start(&error)) {
+    auto &st = cabana::app_state();
+    st.route_loading = false;
+    st.route_load_error = error.empty() ? "Failed to open stream" : error;
+    return false;
+  }
+
+  auto &st = cabana::app_state();
+  replay_load_state_.reset();
+  source_ = std::move(source);
+  route_ = source_->routeName();
+  st.route_name = source_->routeName();
+  st.car_fingerprint = source_->carFingerprint();
+  st.route_loading = false;
+  st.route_load_error.clear();
+  st.current_sec = source_->currentSec();
+  st.min_sec = source_->minSec();
+  st.max_sec = source_->maxSec();
+  st.speed = source_->speed();
+  st.paused = source_->isPaused();
+  glfwSetWindowTitle(window, window_title(st.route_name).c_str());
+
+  if (!dbc_path.empty()) {
+    openDbcFile(dbc_path);
+  } else if (cabana::dbc::dbc_manager().nonEmptyDbcCount() == 0) {
+    newDbcFile(cabana::dbc::sourceAll());
+  }
+  return true;
+}
+
+void Application::resetSourceState() {
   auto &st = cabana::app_state();
   source_.reset();
   replay_load_state_.reset();
 
-  route_ = route;
   st.route_name.clear();
   st.car_fingerprint.clear();
   st.route_loading = false;
@@ -379,25 +449,45 @@ void Application::openRoute(const std::string &route) {
   st.current_sec = 0;
   st.min_sec = 0;
   st.max_sec = 0;
+  st.speed = 1.0f;
   st.paused = false;
+}
 
+void Application::openRoute(const std::string &route, const std::string &data_dir,
+                            uint32_t replay_flags, bool auto_source) {
+  if (route.empty()) return;
+
+  resetSourceState();
+  route_ = route;
+  data_dir_ = data_dir;
+  replay_flags_ = replay_flags;
+  auto_source_ = auto_source;
   glfwSetWindowTitle(window, window_title(route_).c_str());
   beginReplayLoad();
 }
 
+bool Application::openDeviceStream(const cabana::DeviceSourceConfig &config, const std::string &dbc_path) {
+  resetSourceState();
+  route_.clear();
+  return activateSource(std::make_unique<cabana::DeviceSource>(config), dbc_path);
+}
+
+bool Application::openPandaStream(const cabana::PandaSourceConfig &config, const std::string &dbc_path) {
+  resetSourceState();
+  route_.clear();
+  return activateSource(std::make_unique<cabana::PandaSource>(config), dbc_path);
+}
+
+bool Application::openSocketCanStream(const cabana::SocketCanSourceConfig &config, const std::string &dbc_path) {
+  resetSourceState();
+  route_.clear();
+  return activateSource(std::make_unique<cabana::SocketCanSource>(config), dbc_path);
+}
+
 void Application::closeRoute() {
-  auto &st = cabana::app_state();
-  replay_load_state_.reset();
   source_.reset();
   route_.clear();
-  st.route_name.clear();
-  st.car_fingerprint.clear();
-  st.route_loading = false;
-  st.route_load_error.clear();
-  st.current_sec = 0;
-  st.min_sec = 0;
-  st.max_sec = 0;
-  st.paused = false;
+  resetSourceState();
   glfwSetWindowTitle(window, window_title(std::string()).c_str());
 }
 

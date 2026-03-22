@@ -12,7 +12,6 @@
 #include "app/application.h"
 #include "core/app_state.h"
 #include "dbc/dbc_manager.h"
-#include "sources/replay_source.h"
 
 namespace cabana {
 namespace panes {

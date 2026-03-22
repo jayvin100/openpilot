@@ -7,7 +7,6 @@
 #include "imgui.h"
 #include "app/application.h"
 #include "core/app_state.h"
-#include "sources/replay_source.h"
 #include "ui/bootstrap_icons.h"
 
 namespace cabana {
@@ -105,6 +104,8 @@ void video() {
   if (!src) {
     draw_empty_video_state(st.route_loading ? "Loading route..." : "Video unavailable",
                            st.route_loading ? "Waiting for replay data" : "Open a route to view video");
+  } else if (src->liveStreaming()) {
+    draw_empty_video_state("Video unavailable", "Live video is not wired yet");
   } else if (!video_enabled) {
     draw_empty_video_state("Video disabled", "Replay started with --no-vipc");
   } else {
