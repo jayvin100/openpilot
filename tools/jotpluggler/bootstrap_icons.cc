@@ -1,10 +1,5 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
-#include <algorithm>
-#include <array>
-#include <cstring>
-#include <filesystem>
-#include <string>
 
 namespace bootstrap_icons {
 namespace {
@@ -61,7 +56,7 @@ void load_font(float size) {
 const char *glyph(std::string_view icon_id) {
   auto it = std::lower_bound(kIcons.begin(), kIcons.end(), icon_id,
                              [](const IconEntry &e, std::string_view id) {
-                               return std::strcmp(e.id, id.data()) < 0;
+                               return std::string_view(e.id) < id;
                              });
   if (it != kIcons.end() && icon_id == it->id) {
     return it->utf8;

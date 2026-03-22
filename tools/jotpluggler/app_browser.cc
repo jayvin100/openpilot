@@ -1,14 +1,10 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
 
-#include "imgui.h"
 #include "imgui_internal.h"
 
-#include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
-#include <string_view>
 #include <unordered_set>
 
 namespace {

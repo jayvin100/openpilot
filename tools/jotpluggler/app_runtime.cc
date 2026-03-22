@@ -1,7 +1,6 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
 #include "cereal/services.h"
-#include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_opengl3_loader.h"
@@ -12,27 +11,18 @@
 
 #include <GLFW/glfw3.h>
 
-#include <algorithm>
-#include <array>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
-#include <memory>
 #include <mutex>
-#include <optional>
 #include <sstream>
 #include <stdexcept>
-#include <string_view>
 #include <thread>
-#include <unordered_map>
 #include <unistd.h>
-#include <vector>
 
 #include "system/camerad/cameras/nv12_info.h"
 

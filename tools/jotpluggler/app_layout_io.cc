@@ -1,6 +1,5 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
-#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iomanip>

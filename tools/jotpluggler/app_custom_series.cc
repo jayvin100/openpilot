@@ -1,25 +1,17 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
-#include "imgui.h"
 #include "implot.h"
 
-#include <algorithm>
-#include <array>
-#include <cctype>
 #include <cfloat>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
-#include <optional>
 #include <regex>
 #include <set>
 #include <stdexcept>
-#include <string_view>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <vector>
 
 #include "third_party/json11/json11.hpp"
 

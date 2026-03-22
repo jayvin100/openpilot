@@ -2,30 +2,21 @@
 
 #include <capnp/dynamic.h>
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <cmath>
-#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <map>
 #include <mutex>
-#include <memory>
 #include <limits>
 #include <numeric>
-#include <optional>
 #include <regex>
 #include <set>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <thread>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <vector>
 
 #include "common/util.h"
 #include "third_party/json11/json11.hpp"

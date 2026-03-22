@@ -1,13 +1,10 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
-#include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
-#include <string_view>
 #include <tuple>
 
 namespace dbc_core {
@@ -26,18 +23,6 @@ void update_msb_lsb(Signal *signal) {
     signal->lsb = flip_bit_pos(flip_bit_pos(signal->start_bit) + signal->size - 1);
     signal->msb = signal->start_bit;
   }
-}
-
-std::string trim_copy(std::string_view text) {
-  size_t begin = 0;
-  size_t end = text.size();
-  while (begin < end && std::isspace(static_cast<unsigned char>(text[begin]))) {
-    ++begin;
-  }
-  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
-    --end;
-  }
-  return std::string(text.substr(begin, end - begin));
 }
 
 double raw_signal_value(const Signal &signal, const uint8_t *data, size_t data_size) {

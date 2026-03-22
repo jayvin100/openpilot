@@ -1,16 +1,9 @@
 #include "tools/jotpluggler/jotpluggler.h"
 
-#include "imgui.h"
 
-#include <algorithm>
-#include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
-#include <string>
-#include <string_view>
-#include <vector>
 
 
 namespace {

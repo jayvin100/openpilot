@@ -1,4 +1,4 @@
-#include "tools/jotpluggler/app_stream_flow.inc"
+#include "tools/jotpluggler/app_stream_flow.cc"
 
 const RouteSeries *find_route_series(const AppSession &session, const std::string &path) {
   auto it = session.series_by_path.find(path);

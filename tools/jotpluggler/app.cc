@@ -1,7 +1,6 @@
 #include "tools/jotpluggler/jotpluggler.h"
 #include "imgui_impl_glfw.h"
 
-#include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_opengl3_loader.h"
@@ -9,32 +8,20 @@
 
 #include <GLFW/glfw3.h>
 
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cfloat>
 #include <condition_variable>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <memory>
 #include <mutex>
-#include <optional>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <thread>
-#include <unordered_map>
 #include <unistd.h>
-#include <vector>
 
 #include "third_party/json11/json11.hpp"
 
@@ -766,9 +753,9 @@ std::array<uint8_t, 3> next_curve_color(const Pane &pane) {
 }
 
 const RouteSeries *find_route_series(const AppSession &session, const std::string &path);
-#include "tools/jotpluggler/app_session_flow.inc"
+#include "tools/jotpluggler/app_session_flow.cc"
 
-#include "tools/jotpluggler/app_sidebar_flow.inc"
+#include "tools/jotpluggler/app_sidebar_flow.cc"
 
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed) {
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.top_offset));
@@ -2404,9 +2391,9 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
   ImGui::PopStyleColor(2);
 }
 
-#include "tools/jotpluggler/app_layout_flow.inc"
+#include "tools/jotpluggler/app_layout_flow.cc"
 
-#include "tools/jotpluggler/app_render_flow.inc"
+#include "tools/jotpluggler/app_render_flow.cc"
 
 int run_app(const Options &options) {
   const fs::path layout_path = options.layout.empty() ? fs::path() : resolve_layout_path(options.layout);
