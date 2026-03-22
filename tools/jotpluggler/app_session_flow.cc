@@ -1,11 +1,18 @@
 #include "tools/jotpluggler/app_stream_flow.cc"
 
+#include <limits>
+
 const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path) {
   auto it = session.series_by_path.find(path);
   return it == session.series_by_path.end() ? nullptr : it->second;
 }
 
 void apply_route_data(AppSession *session, UiState *state, RouteData route_data) {
+  if (!route_data.route_id.empty()) {
+    session->route_id = route_data.route_id;
+  } else if (session->route_name.empty() && session->data_mode == SessionDataMode::Route) {
+    session->route_id = {};
+  }
   session->route_data = std::move(route_data);
   rebuild_route_index(session);
   rebuild_browser_nodes(session, state);
@@ -253,7 +260,485 @@ std::string layout_combo_label(const AppSession &session, const UiState &state) 
   return state.layout_dirty ? base + " *" : base;
 }
 
+const char *log_selector_name(LogSelector selector) {
+  switch (selector) {
+    case LogSelector::RLog: return "r";
+    case LogSelector::QLog: return "q";
+    case LogSelector::Auto:
+    default: return "a";
+  }
+}
+
+const char *log_selector_description(LogSelector selector) {
+  switch (selector) {
+    case LogSelector::RLog: return "rlog only";
+    case LogSelector::QLog: return "qlog only";
+    case LogSelector::Auto:
+    default: return "any of rlog or qlog";
+  }
+}
+
+std::string shorten_route_part(std::string_view text, size_t keep) {
+  if (text.size() <= keep) {
+    return std::string(text);
+  }
+  return std::string(text.substr(0, keep));
+}
+
+bool parse_slice_spec(std::string_view text, int *begin, int *end) {
+  const auto parse_nonnegative = [](std::string_view value, int *out) {
+    if (value.empty()) return false;
+    char *end_ptr = nullptr;
+    const long parsed = std::strtol(std::string(value).c_str(), &end_ptr, 10);
+    if (end_ptr == nullptr || *end_ptr != '\0' || parsed < 0) {
+      return false;
+    }
+    *out = static_cast<int>(parsed);
+    return true;
+  };
+  const std::string trimmed = trim_copy(text);
+  if (trimmed.empty()) {
+    return false;
+  }
+  const size_t colon = trimmed.find(':');
+  int parsed_begin = 0;
+  if (!parse_nonnegative(trimmed.substr(0, colon), &parsed_begin)) {
+    return false;
+  }
+  int parsed_end = parsed_begin;
+  if (colon != std::string::npos) {
+    const std::string end_text = trimmed.substr(colon + 1);
+    if (end_text.empty()) {
+      parsed_end = -1;
+    } else if (!parse_nonnegative(end_text, &parsed_end) || parsed_end < parsed_begin) {
+      return false;
+    }
+  }
+  *begin = parsed_begin;
+  *end = parsed_end;
+  return true;
+}
+
+std::string format_duration_short(double seconds) {
+  const double clamped = std::max(0.0, seconds);
+  const int total_ms = static_cast<int>(std::round(clamped * 1000.0));
+  const int minutes = total_ms / 60000;
+  const int rem_ms = total_ms % 60000;
+  const int secs = rem_ms / 1000;
+  const int millis = rem_ms % 1000;
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%d:%02d.%03d", minutes, secs, millis);
+  return buf;
+}
+
+std::string route_useradmin_url(const RouteIdentifier &route_id) {
+  return route_id.empty() ? std::string()
+                          : "https://useradmin.comma.ai/?onebox=" + route_id.dongle_id + "%7C" + route_id.log_id;
+}
+
+std::string route_connect_url(const RouteIdentifier &route_id) {
+  return route_id.empty() ? std::string()
+                          : "https://connect.comma.ai/" + route_id.canonical();
+}
+
+void open_external_url(std::string_view url) {
+#ifdef __APPLE__
+  const std::string command = "open " + shell_quote(url) + " &";
+#else
+  const std::string command = "xdg-open " + shell_quote(url) + " >/dev/null 2>&1 &";
+#endif
+  const int ret = std::system(command.c_str());
+  (void)ret;
+}
+
+bool apply_route_identifier(AppSession *session, UiState *state, const RouteIdentifier &route_id, const char *status_text) {
+  if (route_id.empty()) {
+    return false;
+  }
+  if (!reload_session(session, state, route_id.full_spec(), session->data_dir)) {
+    return false;
+  }
+  state->status_text = status_text;
+  return true;
+}
+
+bool apply_route_slice_change(AppSession *session, UiState *state, std::string_view slice_text) {
+  int begin = 0;
+  int end = 0;
+  if (!parse_slice_spec(slice_text, &begin, &end)) {
+    state->error_text = "Slice must be N or N:M.";
+    state->open_error_popup = true;
+    return false;
+  }
+  RouteIdentifier next = session->route_id;
+  next.slice_begin = begin;
+  next.slice_end = end;
+  next.slice_explicit = true;
+  return apply_route_identifier(session, state, next, "Updated route slice");
+}
+
+bool apply_route_selector_change(AppSession *session, UiState *state, LogSelector selector) {
+  RouteIdentifier next = session->route_id;
+  next.selector = selector;
+  next.selector_explicit = true;
+  return apply_route_identifier(session, state, next, "Updated log selector");
+}
+
+ImU32 route_chip_part_color(int part_index, bool explicit_part) {
+  constexpr std::array<std::array<int, 3>, 4> BASE = {{
+    {70, 96, 126},   // dongle
+    {100, 86, 148},  // log id
+    {72, 112, 86},   // slice
+    {156, 104, 38},  // selector
+  }};
+  const std::array<int, 3> &base = BASE[static_cast<size_t>(std::clamp(part_index, 0, 3))];
+  if (explicit_part) {
+    return ImGui::GetColorU32(color_rgb(base[0], base[1], base[2]));
+  }
+  const int gray = 144;
+  return ImGui::GetColorU32(color_rgb((base[0] + gray) / 2, (base[1] + gray) / 2, (base[2] + gray) / 2));
+}
+
+bool draw_route_chip_text_button(const char *id,
+                                 std::string_view text,
+                                 ImVec2 pos,
+                                 ImU32 color,
+                                 ImDrawList *draw_list,
+                                 const char *tooltip = nullptr) {
+  const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size());
+  ImGui::SetCursorScreenPos(pos);
+  ImGui::InvisibleButton(id, size);
+  const bool hovered = ImGui::IsItemHovered();
+  if (hovered) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    draw_list->AddRectFilled(ImVec2(pos.x - 5.0f, pos.y - 1.0f),
+                             ImVec2(pos.x + size.x + 5.0f, pos.y + size.y + 2.0f),
+                             ImGui::GetColorU32(color_rgb(225, 231, 239, 0.95f)), 5.0f);
+  }
+  draw_list->AddText(pos, color, text.data(), text.data() + text.size());
+  if (tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted(tooltip);
+    ImGui::EndTooltip();
+  }
+  return ImGui::IsItemClicked(ImGuiMouseButton_Left);
+}
+
+void draw_route_copy_feedback(UiState *state, ImDrawList *draw_list, ImVec2 chip_max) {
+  if (state->route_copy_feedback_text.empty()) {
+    return;
+  }
+  const double now = ImGui::GetTime();
+  if (now >= state->route_copy_feedback_until) {
+    state->route_copy_feedback_text.clear();
+    state->route_copy_feedback_until = 0.0;
+    return;
+  }
+
+  const float alpha = static_cast<float>(std::clamp((state->route_copy_feedback_until - now) / 1.1, 0.0, 1.0));
+  const ImVec2 text_size = ImGui::CalcTextSize(state->route_copy_feedback_text.c_str());
+  const ImVec2 pad(9.0f, 5.0f);
+  const ImVec2 bubble_min(chip_max.x - text_size.x - pad.x * 2.0f, chip_max.y + 7.0f);
+  const ImVec2 bubble_max(chip_max.x, bubble_min.y + text_size.y + pad.y * 2.0f);
+  draw_list->AddRectFilled(bubble_min, bubble_max,
+                           ImGui::GetColorU32(color_rgb(46, 125, 80, 0.96f * alpha)), 7.0f);
+  draw_list->AddRect(bubble_min, bubble_max,
+                     ImGui::GetColorU32(color_rgb(35, 96, 61, 0.9f * alpha)), 7.0f, 0, 1.0f);
+  draw_list->AddText(ImVec2(std::floor(bubble_min.x + pad.x), std::floor(bubble_min.y + pad.y)),
+                     ImGui::GetColorU32(color_rgb(247, 251, 248, alpha)),
+                     state->route_copy_feedback_text.c_str());
+}
+
+ImVec2 calc_icon_size(const char *icon) {
+  if (ImFont *icon_font = bootstrap_icons::font(); icon_font != nullptr && icon != nullptr && icon[0] != '\0') {
+    return icon_font->CalcTextSizeA(icon_font->LegacySize, std::numeric_limits<float>::max(), 0.0f, icon);
+  }
+  return ImGui::CalcTextSize(icon);
+}
+
+void draw_icon_glyph(ImDrawList *draw_list, const ImVec2 &pos, ImU32 color, const char *icon) {
+  if (ImFont *icon_font = bootstrap_icons::font(); icon_font != nullptr && icon != nullptr && icon[0] != '\0') {
+    draw_list->AddText(icon_font, icon_font->LegacySize, pos, color, icon);
+    return;
+  }
+  draw_list->AddText(pos, color, icon);
+}
+
+bool draw_popup_icon_button(const char *id, const char *icon, ImVec2 size, const char *tooltip = nullptr) {
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  const ImVec2 min = ImGui::GetCursorScreenPos();
+  const ImVec2 max(min.x + size.x, min.y + size.y);
+  if (!ImGui::InvisibleButton(id, size)) {
+  }
+  const bool hovered = ImGui::IsItemHovered();
+  const bool held = ImGui::IsItemActive();
+  const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
+  const ImU32 border = ImGui::GetColorU32(ImGuiCol_Border);
+  draw_list->AddRectFilled(min, max, bg, ImGui::GetStyle().FrameRounding);
+  draw_list->AddRect(min, max, border, ImGui::GetStyle().FrameRounding, 0, ImGui::GetStyle().FrameBorderSize);
+  const ImVec2 icon_size = calc_icon_size(icon);
+  draw_icon_glyph(draw_list,
+                  ImVec2(std::floor(min.x + (size.x - icon_size.x) * 0.5f),
+                         std::floor(min.y + (size.y - icon_size.y) * 0.5f)),
+                  ImGui::GetColorU32(ImGuiCol_Text), icon);
+  if (tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted(tooltip);
+    ImGui::EndTooltip();
+  }
+  return ImGui::IsItemClicked(ImGuiMouseButton_Left);
+}
+
+bool draw_popup_link_button(const char *id, const char *label, const char *icon, ImVec2 size) {
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  const ImVec2 min = ImGui::GetCursorScreenPos();
+  const ImVec2 max(min.x + size.x, min.y + size.y);
+  if (!ImGui::InvisibleButton(id, size)) {
+  }
+  const bool hovered = ImGui::IsItemHovered();
+  const bool held = ImGui::IsItemActive();
+  const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
+  const ImU32 border = ImGui::GetColorU32(ImGuiCol_Border);
+  draw_list->AddRectFilled(min, max, bg, ImGui::GetStyle().FrameRounding);
+  draw_list->AddRect(min, max, border, ImGui::GetStyle().FrameRounding, 0, ImGui::GetStyle().FrameBorderSize);
+  const ImVec2 label_size = ImGui::CalcTextSize(label);
+  const ImVec2 icon_size = calc_icon_size(icon);
+  constexpr float left_pad = 10.0f;
+  constexpr float right_pad = 9.0f;
+  draw_list->AddText(ImVec2(std::floor(min.x + left_pad),
+                            std::floor(min.y + (size.y - label_size.y) * 0.5f)),
+                    ImGui::GetColorU32(ImGuiCol_Text), label);
+  draw_icon_glyph(draw_list,
+                  ImVec2(std::floor(min.x + size.x - right_pad - icon_size.x),
+                         std::floor(min.y + (size.y - icon_size.y) * 0.5f)),
+                  ImGui::GetColorU32(ImGuiCol_Text), icon);
+  return ImGui::IsItemClicked(ImGuiMouseButton_Left);
+}
+
+void draw_route_info_popup(AppSession *session, UiState *state, ImVec2 anchor) {
+  if (session->route_id.empty()) {
+    return;
+  }
+  ImGui::SetNextWindowPos(anchor, ImGuiCond_Appearing);
+  ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 0.0f), ImVec2(420.0f, FLT_MAX));
+  if (!ImGui::BeginPopup("##route_info_popup",
+                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    return;
+  }
+
+  ImGui::TextUnformatted("Route Info");
+  ImGui::Separator();
+  app_push_mono_font();
+  ImGui::TextUnformatted(session->route_id.canonical().c_str());
+  app_pop_mono_font();
+
+  const char *copy_icon = bootstrap_icons::glyph("clipboard");
+  const char *link_icon = bootstrap_icons::glyph("box-arrow-up-right");
+  if (copy_icon[0] == '\0') copy_icon = "C";
+  if (link_icon[0] == '\0') link_icon = ">";
+
+  if (draw_popup_icon_button("##copy_route", copy_icon, ImVec2(34.0f, 26.0f), "Copy route")) {
+    ImGui::SetClipboardText(session->route_id.canonical().c_str());
+    state->status_text = "Copied route to clipboard";
+    state->route_copy_feedback_text = "Copied";
+    state->route_copy_feedback_until = ImGui::GetTime() + 1.1;
+  }
+  ImGui::SameLine();
+  if (draw_popup_link_button("##open_useradmin", "Useradmin", link_icon, ImVec2(132.0f, 26.0f))) {
+    open_external_url(route_useradmin_url(session->route_id));
+    state->status_text = "Opened useradmin";
+  }
+  ImGui::SameLine();
+  if (draw_popup_link_button("##open_comma_connect", "comma connect", link_icon, ImVec2(156.0f, 26.0f))) {
+    open_external_url(route_connect_url(session->route_id));
+    state->status_text = "Opened comma connect";
+  }
+
+  ImGui::Spacing();
+  const int loaded_begin = session->route_id.available_begin;
+  const int loaded_end = session->route_id.available_end;
+  const int loaded_count = loaded_end >= loaded_begin ? (loaded_end - loaded_begin + 1) : 0;
+  ImGui::Text("Duration   %s", format_duration_short(session->route_data.x_max - session->route_data.x_min).c_str());
+  ImGui::Text("Segments   %s (%d)", session->route_id.display_slice().c_str(), loaded_count);
+  ImGui::Text("Selector   %s", log_selector_description(session->route_id.selector));
+  if (!session->route_data.car_fingerprint.empty()) {
+    ImGui::TextWrapped("Car        %s", session->route_data.car_fingerprint.c_str());
+  }
+  if (!session->route_data.dbc_name.empty()) {
+    ImGui::TextWrapped("DBC        %s", session->route_data.dbc_name.c_str());
+  }
+
+  ImGui::EndPopup();
+}
+
+void draw_route_id_chip(AppSession *session, UiState *state) {
+  if (session->data_mode != SessionDataMode::Route || session->route_id.empty()) {
+    return;
+  }
+
+  ImGuiWindow *window = ImGui::GetCurrentWindow();
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  const RouteIdentifier &route_id = session->route_id;
+  app_push_bold_font();
+  const std::string dongle_text = shorten_route_part(route_id.dongle_id, 8);
+  const std::string log_text = shorten_route_part(route_id.log_id, 16);
+  const std::string slice_text = route_id.display_slice();
+  const std::string selector_text(1, route_id.selector_char());
+  const std::string sep_text = " / ";
+
+  const ImVec2 dongle_size = ImGui::CalcTextSize(dongle_text.c_str());
+  const ImVec2 log_size = ImGui::CalcTextSize(log_text.c_str());
+  const ImVec2 slice_size = state->editing_route_slice
+    ? ImVec2(68.0f, ImGui::GetFrameHeight())
+    : ImGui::CalcTextSize(slice_text.c_str());
+  const ImVec2 selector_size = ImGui::CalcTextSize(selector_text.c_str());
+  const ImVec2 sep_size = ImGui::CalcTextSize(sep_text.c_str());
+  constexpr float chip_pad_x = 12.0f;
+  constexpr float info_size = 18.0f;
+  const float chip_h = 28.0f;
+  const float chip_w = chip_pad_x * 2.0f + dongle_size.x + sep_size.x + log_size.x + sep_size.x
+                     + slice_size.x + sep_size.x + selector_size.x + 10.0f + info_size;
+  const float menu_right = window->Pos.x + window->Size.x - 8.0f;
+  const float menu_left_limit = window->Pos.x + 70.0f;
+  const float chip_x = std::max(menu_left_limit, menu_right - chip_w);
+  const float chip_y = std::floor(window->Pos.y + std::max(0.0f, (window->Size.y - chip_h) * 0.5f));
+  const ImVec2 chip_min(chip_x, chip_y);
+  const ImVec2 chip_max(chip_x + chip_w, chip_y + chip_h);
+  const float text_y = std::floor(chip_y + std::max(0.0f, (chip_h - ImGui::GetTextLineHeight()) * 0.5f));
+  const ImU32 chip_bg = ImGui::GetColorU32(color_rgb(247, 249, 252));
+  const ImU32 chip_border = ImGui::GetColorU32(color_rgb(184, 191, 200));
+  const ImU32 sep = ImGui::GetColorU32(color_rgb(162, 170, 178));
+  draw_list->AddRectFilled(chip_min, chip_max, chip_bg, 8.0f);
+  draw_list->AddRect(chip_min, chip_max, chip_border, 8.0f, 0, 1.0f);
+
+  float x = chip_x + chip_pad_x;
+  const bool dongle_click = draw_route_chip_text_button(
+    "##route_dongle", dongle_text, ImVec2(x, text_y), route_chip_part_color(0, true), draw_list,
+    "Device identifier");
+  x += dongle_size.x;
+  draw_list->AddText(ImVec2(x, text_y), sep, sep_text.c_str());
+  x += sep_size.x;
+  const bool log_click = draw_route_chip_text_button(
+    "##route_log", log_text, ImVec2(x, text_y), route_chip_part_color(1, true), draw_list,
+    "Route identifier");
+  x += log_size.x;
+  draw_list->AddText(ImVec2(x, text_y), sep, sep_text.c_str());
+  x += sep_size.x;
+
+  if (state->editing_route_slice) {
+    ImGui::SetCursorScreenPos(ImVec2(x - 4.0f, chip_y + 1.0f));
+    ImGui::SetNextItemWidth(76.0f);
+    if (state->focus_route_slice_input) {
+      ImGui::SetKeyboardFocusHere();
+      state->focus_route_slice_input = false;
+    }
+    const bool applied = input_text_string("##route_slice_edit", &state->route_slice_buffer,
+                                           ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool deactivated = ImGui::IsItemDeactivated();
+    const bool clicked_elsewhere = ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+                                && !ImGui::IsItemHovered()
+                                && !ImGui::IsItemActive();
+    if (applied) {
+      if (apply_route_slice_change(session, state, state->route_slice_buffer)) {
+        state->editing_route_slice = false;
+      }
+    } else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+      state->editing_route_slice = false;
+    } else if (deactivated || clicked_elsewhere) {
+      const std::string trimmed = trim_copy(state->route_slice_buffer);
+      if (trimmed != route_id.display_slice()) {
+        int begin = 0;
+        int end = 0;
+        if (parse_slice_spec(trimmed, &begin, &end)) {
+          apply_route_slice_change(session, state, trimmed);
+        } else {
+          state->status_text = "Canceled route slice edit";
+        }
+      }
+      state->editing_route_slice = false;
+    }
+    x += slice_size.x;
+  } else {
+    const bool slice_click = draw_route_chip_text_button(
+      "##route_slice", slice_text, ImVec2(x, text_y),
+      route_chip_part_color(2, route_id.slice_explicit), draw_list,
+      "Segment range");
+    if (slice_click) {
+      state->editing_route_slice = true;
+      state->focus_route_slice_input = true;
+      state->route_slice_buffer = route_id.display_slice();
+    }
+    x += slice_size.x;
+  }
+
+  draw_list->AddText(ImVec2(x, text_y), sep, sep_text.c_str());
+  x += sep_size.x;
+  const bool selector_click = draw_route_chip_text_button(
+    "##route_selector", selector_text, ImVec2(x, text_y),
+    route_chip_part_color(3, route_id.selector_explicit), draw_list,
+    "Log selector");
+  if (selector_click) {
+    ImGui::OpenPopup("##route_selector_popup");
+  }
+  x += selector_size.x + 10.0f;
+
+  const ImVec2 info_center(x + info_size * 0.5f, chip_y + chip_h * 0.5f);
+  ImGui::SetCursorScreenPos(ImVec2(x, chip_y + (chip_h - info_size) * 0.5f));
+  ImGui::InvisibleButton("##route_info_button", ImVec2(info_size, info_size));
+  const bool info_hovered = ImGui::IsItemHovered();
+  if (info_hovered) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+  }
+  draw_list->AddCircleFilled(info_center, info_size * 0.5f,
+                             ImGui::GetColorU32(info_hovered ? color_rgb(220, 229, 240) : color_rgb(239, 243, 248)));
+  draw_list->AddCircle(info_center, info_size * 0.5f, chip_border, 20, 1.0f);
+  const char *info_glyph = bootstrap_icons::glyph("info-circle");
+  const char *info_text = info_glyph[0] != '\0' ? info_glyph : "i";
+  const ImVec2 info_text_size = calc_icon_size(info_text);
+  draw_icon_glyph(draw_list,
+                  ImVec2(std::floor(info_center.x - info_text_size.x * 0.5f),
+                         std::floor(info_center.y - info_text_size.y * 0.5f)),
+                  route_chip_part_color(0, true), info_text);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted("Route details");
+    ImGui::EndTooltip();
+  }
+  if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+    ImGui::OpenPopup("##route_info_popup");
+  }
+
+  app_pop_bold_font();
+
+  if (dongle_click || log_click) {
+    ImGui::SetClipboardText(route_id.canonical().c_str());
+    state->status_text = "Copied route to clipboard";
+    state->route_copy_feedback_text = "Copied";
+    state->route_copy_feedback_until = ImGui::GetTime() + 1.1;
+  }
+
+  ImGui::SetNextWindowPos(ImVec2(chip_max.x - 60.0f, chip_max.y + 4.0f), ImGuiCond_Appearing);
+  if (ImGui::BeginPopup("##route_selector_popup")) {
+    for (LogSelector selector : {LogSelector::Auto, LogSelector::RLog, LogSelector::QLog}) {
+      const bool selected = route_id.selector == selector;
+      const std::string label = std::string(log_selector_name(selector)) + "  " + log_selector_description(selector);
+      if (ImGui::Selectable(label.c_str(), selected) && !selected) {
+        apply_route_selector_change(session, state, selector);
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+    }
+    ImGui::EndPopup();
+  }
+
+  draw_route_copy_feedback(state, draw_list, chip_max);
+  draw_route_info_popup(session, state, ImVec2(std::max(window->Pos.x + 16.0f, chip_max.x - 360.0f), chip_max.y + 6.0f));
+}
+
 float draw_main_menu_bar(AppSession *session, UiState *state) {
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f, 5.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(9.0f, 6.0f));
   float height = ImGui::GetFrameHeight();
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("File")) {
@@ -305,8 +790,10 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
       }
       ImGui::EndMenu();
     }
+    draw_route_id_chip(session, state);
     height = ImGui::GetWindowSize().y;
     ImGui::EndMainMenuBar();
   }
+  ImGui::PopStyleVar(2);
   return height;
 }

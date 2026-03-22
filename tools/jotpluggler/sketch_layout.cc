@@ -32,6 +32,9 @@ struct RouteSelection {
   std::string timestamp;
   int begin_segment = 0;
   int end_segment = -1;
+  bool slice_explicit = false;
+  LogSelector selector = LogSelector::Auto;
+  bool selector_explicit = false;
   std::string canonical_name;
 };
 
@@ -206,8 +209,40 @@ bool parse_segment_number(std::string_view value, int *out) {
   return true;
 }
 
-RouteSelection parse_route_selection(const std::string &route_name) {
+bool is_log_selector_char(char c) {
+  return c == 'a' || c == 'r' || c == 'q';
+}
+
+LogSelector parse_log_selector_char(char c) {
+  switch (c) {
+    case 'r': return LogSelector::RLog;
+    case 'q': return LogSelector::QLog;
+    case 'a':
+    default: return LogSelector::Auto;
+  }
+}
+
+const std::string &selected_log_path(const SegmentLogs &segment, LogSelector selector) {
+  switch (selector) {
+    case LogSelector::RLog:
+      return segment.rlog;
+    case LogSelector::QLog:
+      return segment.qlog;
+    case LogSelector::Auto:
+    default:
+      return !segment.rlog.empty() ? segment.rlog : segment.qlog;
+  }
+}
+
+RouteSelection parse_route_selection(std::string route_name) {
   RouteSelection route = {};
+  route_name = trim_copy(route_name);
+  if (route_name.size() >= 2 && route_name[route_name.size() - 2] == '/'
+      && is_log_selector_char(static_cast<char>(std::tolower(route_name.back())))) {
+    route.selector = parse_log_selector_char(static_cast<char>(std::tolower(route_name.back())));
+    route.selector_explicit = true;
+    route_name.resize(route_name.size() - 2);
+  }
   static const std::regex pattern(R"(^(([a-z0-9]{16})[|_/])?(.{20})((--|/)((-?\d+(:(-?\d+)?)?)|(:-?\d+)))?$)");
   std::smatch match;
   if (!std::regex_match(route_name, match, pattern)) return route;
@@ -219,6 +254,7 @@ RouteSelection parse_route_selection(const std::string &route_name) {
   const std::string separator = match[5].str();
   const std::string range_str = match[6].str();
   if (!range_str.empty()) {
+    route.slice_explicit = true;
     if (separator == "/") {
       size_t pos = range_str.find(':');
       int begin_segment = 0;
@@ -317,18 +353,20 @@ std::map<int, SegmentLogs> load_segments_from_local(const RouteSelection &route,
   return segments;
 }
 
-std::map<int, SegmentLogs> resolve_route_segments(const std::string &route_name, const std::string &data_dir) {
-  const RouteSelection route = parse_route_selection(route_name);
-  if (route.canonical_name.empty() || (data_dir.empty() && route.dongle_id.empty())) {
-    throw std::runtime_error("Invalid route format: " + route_name);
+RouteIdentifier make_route_identifier(const RouteSelection &route, const std::map<int, SegmentLogs> &segments) {
+  RouteIdentifier route_id;
+  route_id.dongle_id = route.dongle_id;
+  route_id.log_id = route.timestamp;
+  route_id.slice_begin = route.begin_segment;
+  route_id.slice_end = route.end_segment;
+  route_id.slice_explicit = route.slice_explicit;
+  route_id.selector = route.selector;
+  route_id.selector_explicit = route.selector_explicit;
+  if (!segments.empty()) {
+    route_id.available_begin = segments.begin()->first;
+    route_id.available_end = segments.rbegin()->first;
   }
-
-  std::map<int, SegmentLogs> segments = data_dir.empty()
-    ? load_segments_from_server(route)
-    : load_segments_from_local(route, data_dir);
-  segments = trim_segments(std::move(segments), route);
-  if (segments.empty()) throw std::runtime_error("No log segments found for " + route_name);
-  return segments;
+  return route_id;
 }
 
 std::string basedir() {
@@ -684,10 +722,14 @@ RouteMetadata extract_segment_metadata(const std::vector<Event> &events) {
   return metadata;
 }
 
-RouteMetadata detect_route_metadata(const std::map<int, SegmentLogs> &segments) {
+RouteMetadata detect_route_metadata(const std::map<int, SegmentLogs> &segments, LogSelector selector) {
   for (const auto &[_, segment] : segments) {
-    const std::string &log_path = !segment.qlog.empty() ? segment.qlog : segment.rlog;
-    if (log_path.empty()) continue;
+    const std::string &log_path = selector == LogSelector::Auto
+      ? (!segment.qlog.empty() ? segment.qlog : segment.rlog)
+      : selected_log_path(segment, selector);
+    if (log_path.empty()) {
+      continue;
+    }
     LogReader reader;
     if (!reader.load(log_path, nullptr, true)) continue;
     RouteMetadata metadata = extract_segment_metadata(reader.events);
@@ -1559,6 +1601,7 @@ LoadedRouteArtifacts load_route_series_parallel(
     const std::map<int, SegmentLogs> &segments,
     const SchemaIndex &schema,
     const dbc_core::Database *can_dbc,
+    LogSelector selector,
     bool skip_raw_can,
     LoadStats *stats) {
   struct SegmentResult {
@@ -1587,7 +1630,7 @@ LoadedRouteArtifacts load_route_series_parallel(
       }
 
       const auto &[segment_number, segment] = segment_list[index];
-      const std::string &log_path = !segment.rlog.empty() ? segment.rlog : segment.qlog;
+      const std::string &log_path = selected_log_path(segment, selector);
       LoadStats::SegmentStats &segment_stats = stats->segments[index];
       segment_stats.segment_number = segment_number;
       segment_stats.log_path = log_path;
@@ -1830,9 +1873,17 @@ RouteData load_route_data(const std::string &route_name,
                           const RouteLoadProgressCallback &progress) {
   if (route_name.empty()) return RouteData{};
 
+  const RouteSelection route = parse_route_selection(route_name);
+  if (route.canonical_name.empty() || (data_dir.empty() && route.dongle_id.empty())) {
+    throw std::runtime_error("Invalid route format: " + route_name);
+  }
   LoadStats stats(progress);
   stats.load_start = LoadStats::Clock::now();
-  const auto segments = resolve_route_segments(route_name, data_dir);
+  std::map<int, SegmentLogs> segments = data_dir.empty()
+    ? load_segments_from_server(route)
+    : load_segments_from_local(route, data_dir);
+  segments = trim_segments(std::move(segments), route);
+  if (segments.empty()) throw std::runtime_error("No log segments found for " + route_name);
   stats.resolve_end = LoadStats::Clock::now();
   stats.segment_count = segments.size();
   stats.total_segments.store(segments.size());
@@ -1840,25 +1891,31 @@ RouteData load_route_data(const std::string &route_name,
   stats.segments.resize(segments.size());
   stats.publish(RouteLoadStage::Resolving, 0, {});
 
-  const RouteMetadata metadata = detect_route_metadata(segments);
+  const RouteMetadata metadata = detect_route_metadata(segments, route.selector);
   const std::string resolved_dbc = !dbc_name.empty() ? dbc_name : detect_dbc_for_fingerprint(metadata.car_fingerprint);
   const std::optional<dbc_core::Database> can_dbc = resolved_dbc.empty()
     ? std::nullopt
     : std::optional<dbc_core::Database>(std::in_place, resolve_dbc_path(resolved_dbc));
 
   const SchemaIndex &schema = SchemaIndex::instance();
-  LoadedRouteArtifacts artifacts = load_route_series_parallel(segments, schema, can_dbc ? &*can_dbc : nullptr, !resolved_dbc.empty(), &stats);
+  LoadedRouteArtifacts artifacts = load_route_series_parallel(segments, schema, can_dbc ? &*can_dbc : nullptr,
+                                                             route.selector, !resolved_dbc.empty(), &stats);
   RouteData route_data = build_route_data(std::move(artifacts.series),
                                           std::move(artifacts.logs),
                                           std::move(artifacts.timeline),
                                           std::move(artifacts.enum_info),
                                           metadata.car_fingerprint,
                                           resolved_dbc);
+  route_data.route_id = make_route_identifier(route, segments);
   build_road_camera_index(segments, &route_data);
   stats.load_end = LoadStats::Clock::now();
   stats.publish(RouteLoadStage::Finished, segments.size(), {});
   stats.print_summary(route_data.series.size());
   return route_data;
+}
+
+RouteIdentifier parse_route_identifier(std::string_view route_name) {
+  return make_route_identifier(parse_route_selection(std::string(route_name)), {});
 }
 
 const std::vector<std::string> &available_dbc_names() {

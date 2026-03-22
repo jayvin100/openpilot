@@ -74,7 +74,10 @@ void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch 
 
   bool new_paths = false;
   std::vector<RouteSeries> new_series;
+  std::vector<std::string> touched_paths;
+  touched_paths.reserve(batch.series.size());
   for (RouteSeries &incoming : batch.series) {
+    touched_paths.push_back(incoming.path);
     auto existing_it = session->series_by_path.find(incoming.path);
     if (existing_it == session->series_by_path.end()) {
       new_series.push_back(std::move(incoming));
@@ -128,6 +131,13 @@ void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch 
     session->route_data.roots = collect_route_roots_for_paths(session->route_data.paths);
     rebuild_route_index(session);
     rebuild_browser_nodes(session, state);
+  } else {
+    for (const std::string &path : touched_paths) {
+      auto series_it = session->series_by_path.find(path);
+      if (series_it == session->series_by_path.end() || series_it->second == nullptr) continue;
+      const bool enum_like = session->route_data.enum_info.find(path) != session->route_data.enum_info.end();
+      session->route_data.series_formats[path] = compute_series_format(series_it->second->values, enum_like);
+    }
   }
 
   const std::optional<double> earliest_time = earliest_stream_batch_time(batch);

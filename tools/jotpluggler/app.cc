@@ -38,6 +38,7 @@ constexpr float STATUS_BAR_HEIGHT = 52.0f;
 constexpr double MIN_HORIZONTAL_ZOOM_SECONDS = 2.0;
 constexpr double PLOT_Y_PAD_FRACTION = 0.4;
 ImFont *g_ui_font = nullptr;
+ImFont *g_ui_bold_font = nullptr;
 ImFont *g_mono_font = nullptr;
 
 struct UiMetrics {
@@ -94,6 +95,14 @@ std::optional<fs::path> inter_font_path() {
   };
   for (const fs::path &candidate : candidates) {
     if (fs::exists(candidate)) return candidate;
+  }
+  return std::nullopt;
+}
+
+std::optional<fs::path> inter_semibold_font_path() {
+  const fs::path candidate = repo_root() / "selfdrive" / "assets" / "fonts" / "Inter-SemiBold.ttf";
+  if (fs::exists(candidate)) {
+    return candidate;
   }
   return std::nullopt;
 }
@@ -239,28 +248,43 @@ void configure_style() {
 
   ImGuiIO &io = ImGui::GetIO();
   g_ui_font = nullptr;
+  g_ui_bold_font = nullptr;
   g_mono_font = nullptr;
   const std::optional<fs::path> ui_font_path = inter_font_path();
+  const std::optional<fs::path> ui_bold_font_path = inter_semibold_font_path();
   const std::optional<fs::path> mono_font_path = jetbrains_mono_font_path();
   ImFontConfig font_cfg;
   font_cfg.OversampleH = 2;
   font_cfg.OversampleV = 2;
   font_cfg.RasterizerDensity = 1.0f;
+  bootstrap_icons::loadFont(16.0f);
+  const auto add_font_with_icons = [&](const fs::path &path, float size) -> ImFont * {
+    ImFont *font = io.Fonts->AddFontFromFileTTF(path.c_str(), size, &font_cfg);
+    if (font != nullptr) {
+      bootstrap_icons::mergeFont(size);
+    }
+    return font;
+  };
   if (ui_font_path.has_value()) {
-    if (ImFont *font = io.Fonts->AddFontFromFileTTF(ui_font_path->c_str(), 16.0f, &font_cfg); font != nullptr) {
+    if (ImFont *font = add_font_with_icons(*ui_font_path, 16.0f); font != nullptr) {
       g_ui_font = font;
       io.FontDefault = font;
     }
   }
+  if (ui_bold_font_path.has_value()) {
+    g_ui_bold_font = add_font_with_icons(*ui_bold_font_path, 16.75f);
+  }
   if (g_ui_font == nullptr && mono_font_path.has_value()) {
-    if (ImFont *font = io.Fonts->AddFontFromFileTTF(mono_font_path->c_str(), 15.75f, &font_cfg); font != nullptr) {
+    if (ImFont *font = add_font_with_icons(*mono_font_path, 15.75f); font != nullptr) {
       g_mono_font = font;
       io.FontDefault = font;
     }
   }
-  bootstrap_icons::loadFont(16.0f);
   if (g_mono_font == nullptr && mono_font_path.has_value()) {
-    g_mono_font = io.Fonts->AddFontFromFileTTF(mono_font_path->c_str(), 15.75f, &font_cfg);
+    g_mono_font = add_font_with_icons(*mono_font_path, 15.75f);
+  }
+  if (g_ui_bold_font == nullptr) {
+    g_ui_bold_font = g_ui_font;
   }
 
   ImGuiStyle &style = ImGui::GetStyle();
@@ -326,6 +350,18 @@ void app_push_mono_font() {
 
 void app_pop_mono_font() {
   if (g_mono_font != nullptr) {
+    ImGui::PopFont();
+  }
+}
+
+void app_push_bold_font() {
+  if (g_ui_bold_font != nullptr) {
+    ImGui::PushFont(g_ui_bold_font);
+  }
+}
+
+void app_pop_bold_font() {
+  if (g_ui_bold_font != nullptr) {
     ImGui::PopFont();
   }
 }
@@ -756,9 +792,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
           state->status_text = "Paused stream " + session->stream_address;
         }
       }
-    } else if (!session->route_name.empty()) {
-      ImGui::TextWrapped("%s", session->route_name.c_str());
-    } else {
+    } else if (session->route_name.empty()) {
       ImGui::TextDisabled("No route loaded");
     }
     if (!session->route_data.car_fingerprint.empty()) {
@@ -1156,7 +1190,7 @@ struct PreparedCurve {
   float line_weight = 2.0f;
   bool stairs = false;
   const EnumInfo *enum_info = nullptr;
-  BrowserSeriesDisplayInfo display_info;
+  SeriesFormat display_info;
   std::optional<double> legend_value;
   std::vector<double> xs;
   std::vector<double> ys;
@@ -1164,6 +1198,11 @@ struct PreparedCurve {
 
 struct PaneEnumContext {
   std::vector<const EnumInfo *> enums;
+};
+
+struct PaneValueFormatContext {
+  SeriesFormat format;
+  bool valid = false;
 };
 
 void app_decimate_samples_impl(const std::vector<double> &xs_in,
@@ -1302,6 +1341,31 @@ int format_enum_axis_tick(double value, char *buf, int size, void *user_data) {
   return std::snprintf(buf, size, "%.6g", value);
 }
 
+int format_numeric_axis_tick(double value, char *buf, int size, void *user_data) {
+  const auto *ctx = static_cast<const PaneValueFormatContext *>(user_data);
+  if (ctx == nullptr || !ctx->valid) {
+    return std::snprintf(buf, size, "%.6g", value);
+  }
+  return std::snprintf(buf, size, ctx->format.fmt, value);
+}
+
+void merge_pane_value_format(PaneValueFormatContext *ctx, const SeriesFormat &format) {
+  if (!ctx->valid) {
+    ctx->format = format;
+    ctx->valid = true;
+    return;
+  }
+  ctx->format.has_negative = ctx->format.has_negative || format.has_negative;
+  ctx->format.digits_before = std::max(ctx->format.digits_before, format.digits_before);
+  ctx->format.decimals = std::max(ctx->format.decimals, format.decimals);
+  ctx->format.integer_like = ctx->format.decimals == 0;
+  const int sign_width = ctx->format.has_negative ? 1 : 0;
+  const int dot_width = ctx->format.decimals > 0 ? 1 : 0;
+  ctx->format.total_width = sign_width + ctx->format.digits_before + dot_width + ctx->format.decimals;
+  std::snprintf(ctx->format.fmt, sizeof(ctx->format.fmt), "%%%d.%df",
+                ctx->format.total_width, ctx->format.decimals);
+}
+
 std::string curve_legend_label(const PreparedCurve &curve, bool has_cursor_time) {
   if (!has_cursor_time) return curve.label;
   if (!curve.legend_value.has_value()) return curve.label;
@@ -1380,20 +1444,21 @@ bool build_curve_series(const AppSession &session,
     }
   }
   if (prepared->enum_info != nullptr) {
-    prepared->display_info.integer_like = true;
-    prepared->display_info.decimals = 0;
+    prepared->display_info = compute_series_format(transformed_ys, true);
   } else if (!curve_has_local_samples(curve)
              && !curve.derivative
              && curve.value_scale == 1.0
              && curve.value_offset == 0.0
              && !curve.name.empty()
              && curve.name.front() == '/') {
-    auto display_it = session.browser_display_by_path.find(curve.name);
-    if (display_it != session.browser_display_by_path.end()) {
+    auto display_it = session.route_data.series_formats.find(curve.name);
+    if (display_it != session.route_data.series_formats.end()) {
       prepared->display_info = display_it->second;
+    } else {
+      prepared->display_info = compute_series_format(transformed_ys, false);
     }
   } else {
-    prepared->display_info = classify_values(transformed_ys);
+    prepared->display_info = compute_series_format(transformed_ys, false);
   }
   const bool stairs = !curve.derivative && prepared->display_info.integer_like;
   if (state.has_tracker_time) {
@@ -1619,10 +1684,18 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
 
   const PlotBounds bounds = compute_plot_bounds(*pane, prepared_curves, *state);
   PaneEnumContext enum_context;
+  PaneValueFormatContext pane_value_format;
+  bool all_enum_curves = !prepared_curves.empty();
   for (const PreparedCurve &curve : prepared_curves) {
     if (curve.enum_info != nullptr) {
       enum_context.enums.push_back(curve.enum_info);
+    } else {
+      all_enum_curves = false;
+      merge_pane_value_format(&pane_value_format, curve.display_info);
     }
+  }
+  if (prepared_curves.empty()) {
+    all_enum_curves = false;
   }
   const int supported_count = static_cast<int>(prepared_curves.size());
   const ImVec2 plot_size = ImGui::GetContentRegionAvail();
@@ -1654,8 +1727,10 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   if (ImPlot::BeginPlot("##plot", plot_size, plot_flags)) {
     ImPlot::SetupAxes(nullptr, nullptr, x_axis_flags, y_axis_flags);
     ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f");
-    if (!enum_context.enums.empty()) {
+    if (all_enum_curves && !enum_context.enums.empty()) {
       ImPlot::SetupAxisFormat(ImAxis_Y1, format_enum_axis_tick, &enum_context);
+    } else if (pane_value_format.valid) {
+      ImPlot::SetupAxisFormat(ImAxis_Y1, format_numeric_axis_tick, &pane_value_format);
     } else {
       ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
     }
@@ -2321,6 +2396,7 @@ int run(const Options &options) {
     .stream_address = options.stream_address,
     .stream_buffer_seconds = options.stream_buffer_seconds,
     .data_mode = options.stream ? SessionDataMode::Stream : SessionDataMode::Route,
+    .route_id = options.stream ? RouteIdentifier{} : parse_route_identifier(options.route_name),
     .layout = options.layout.empty() ? make_empty_layout() : load_sketch_layout(layout_path),
   };
   UiState ui_state;

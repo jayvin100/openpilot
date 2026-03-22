@@ -105,6 +105,7 @@ bool start_stream_session(AppSession *session,
       session->route_loader.reset();
     }
     session->data_mode = SessionDataMode::Stream;
+    session->route_id = {};
     session->route_name.clear();
     session->data_dir.clear();
     session->stream_address = address.empty() ? "127.0.0.1" : address;
@@ -182,6 +183,7 @@ bool reload_session(AppSession *session, UiState *state, const std::string &rout
     stop_stream_session(session, state, false);
     session->data_mode = SessionDataMode::Route;
     session->route_name = route_name;
+    session->route_id = parse_route_identifier(route_name);
     session->data_dir = data_dir;
     if (!session->camera_feed) {
       session->camera_feed = std::make_unique<SidebarCameraFeed>();

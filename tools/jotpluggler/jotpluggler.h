@@ -146,6 +146,15 @@ struct EnumInfo {
   std::vector<std::string> names;
 };
 
+struct SeriesFormat {
+  int decimals = 3;
+  bool integer_like = false;
+  bool has_negative = false;
+  int digits_before = 1;
+  int total_width = 0;
+  char fmt[16] = "%7.3f";
+};
+
 struct TimelineEntry {
   enum class Type : uint8_t {
     None,
@@ -160,6 +169,68 @@ struct TimelineEntry {
   Type type = Type::None;
 };
 
+enum class LogSelector : uint8_t {
+  Auto,
+  RLog,
+  QLog,
+};
+
+struct RouteIdentifier {
+  std::string dongle_id;
+  std::string log_id;
+  int slice_begin = 0;
+  int slice_end = -1;
+  bool slice_explicit = false;
+  LogSelector selector = LogSelector::Auto;
+  bool selector_explicit = false;
+  int available_begin = 0;
+  int available_end = 0;
+
+  bool empty() const {
+    return dongle_id.empty() || log_id.empty();
+  }
+
+  std::string canonical() const {
+    return empty() ? std::string() : dongle_id + "/" + log_id;
+  }
+
+  std::string onebox() const {
+    return empty() ? std::string() : dongle_id + "|" + log_id;
+  }
+
+  std::string display_slice() const {
+    const int begin = slice_explicit ? slice_begin : available_begin;
+    const int end = slice_explicit ? slice_end : available_end;
+    if (end < 0 || end == begin) {
+      return std::to_string(begin);
+    }
+    return std::to_string(begin) + ":" + std::to_string(end);
+  }
+
+  char selector_char() const {
+    switch (selector) {
+      case LogSelector::RLog: return 'r';
+      case LogSelector::QLog: return 'q';
+      case LogSelector::Auto:
+      default: return 'a';
+    }
+  }
+
+  std::string full_spec() const {
+    if (empty()) return {};
+    std::string spec = dongle_id + "/" + log_id;
+    if (slice_explicit) {
+      spec += "/";
+      spec += display_slice();
+    }
+    if (selector_explicit) {
+      spec += "/";
+      spec.push_back(selector_char());
+    }
+    return spec;
+  }
+};
+
 struct RouteData {
   std::vector<RouteSeries> series;
   std::vector<std::string> paths;
@@ -168,8 +239,10 @@ struct RouteData {
   std::vector<LogEntry> logs;
   std::vector<TimelineEntry> timeline;
   std::unordered_map<std::string, EnumInfo> enum_info;
+  std::unordered_map<std::string, SeriesFormat> series_formats;
   std::string car_fingerprint;
   std::string dbc_name;
+  RouteIdentifier route_id;
   bool has_time_range = false;
   double x_min = 0.0;
   double x_max = 1.0;
@@ -242,6 +315,7 @@ RouteData load_route_data(const std::string &route_name,
                           const std::string &data_dir = {},
                           const std::string &dbc_name = {},
                           const RouteLoadProgressCallback &progress = {});
+RouteIdentifier parse_route_identifier(std::string_view route_name);
 
 // *****
 // dbc_core
@@ -313,6 +387,8 @@ std::optional<double> signalValue(const Signal &signal, const Message &message, 
 namespace bootstrap_icons {
 
 void loadFont(float size);
+void mergeFont(float size);
+ImFont *font();
 const char *glyph(std::string_view icon_id);
 bool menuItem(std::string_view icon_id,
                const char *label,
@@ -341,11 +417,6 @@ struct BrowserNode {
   std::vector<BrowserNode> children;
 };
 
-struct BrowserSeriesDisplayInfo {
-  int decimals = 3;
-  bool integer_like = false;
-};
-
 struct AppSession {
   std::filesystem::path layout_path;
   std::filesystem::path autosave_path;
@@ -355,10 +426,10 @@ struct AppSession {
   std::string stream_address = "127.0.0.1";
   double stream_buffer_seconds = 30.0;
   SessionDataMode data_mode = SessionDataMode::Route;
+  RouteIdentifier route_id;
   SketchLayout layout;
   RouteData route_data;
   std::unordered_map<std::string, RouteSeries *> series_by_path;
-  std::unordered_map<std::string, BrowserSeriesDisplayInfo> browser_display_by_path;
   std::vector<BrowserNode> browser_nodes;
   std::unique_ptr<AsyncRouteLoader> route_loader;
   std::unique_ptr<StreamPoller> stream_poller;
@@ -510,9 +581,14 @@ struct UiState {
   std::string selected_browser_path;
   std::vector<std::string> selected_browser_paths;
   std::string browser_selection_anchor;
+  std::string route_slice_buffer;
   std::string error_text;
   bool open_error_popup = false;
   std::string status_text = "Ready";
+  std::string route_copy_feedback_text;
+  double route_copy_feedback_until = 0.0;
+  bool editing_route_slice = false;
+  bool focus_route_slice_input = false;
   bool stream_remote = false;
   float sidebar_width = 320.0f;
   double route_x_min = 0.0;
@@ -658,10 +734,9 @@ void save_layout_json(const SketchLayout &layout, const std::filesystem::path &p
 
 void rebuild_route_index(AppSession *session);
 void rebuild_browser_nodes(AppSession *session, UiState *state);
-BrowserSeriesDisplayInfo compute_browser_display_info(const AppSession &session, const RouteSeries &series);
-BrowserSeriesDisplayInfo classify_values(const std::vector<double> &values, bool enum_like = false);
+SeriesFormat compute_series_format(const std::vector<double> &values, bool enum_like = false);
 std::string format_display_value(double display_value,
-                                 const BrowserSeriesDisplayInfo &display_info,
+                                 const SeriesFormat &format,
                                  const EnumInfo *enum_info);
 std::vector<std::string> decode_browser_drag_payload(std::string_view payload);
 void collect_visible_leaf_paths(const BrowserNode &node,
