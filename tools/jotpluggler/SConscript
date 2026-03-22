@@ -28,7 +28,7 @@ jot_sources = [
   "app_map.cc",
   "app_runtime.cc",
   "bootstrap_icons.cc",
-  "dbc_core.cc",
+  "../cabana/dbc/dbc_core.cc",
   "sketch_layout.cc",
 ]
 
@@ -43,7 +43,7 @@ frameworks = []
 libs = [replay_lib, common, messaging, visionipc, cereal, imgui_static, glfw_static,
         "avformat", "avcodec", "avutil", "x264", "yuv", "z", "bz2", "zstd", "m", "pthread"]
 if arch == "Darwin":
-  frameworks = ["OpenGL", "Cocoa", "IOKit", "CoreFoundation", "CoreVideo"]
+  frameworks = ["OpenGL", "Cocoa", "IOKit", "CoreFoundation", "CoreVideo", "CoreMedia", "VideoToolbox"]
 else:
   libs += ["GL", "dl", "va", "va-drm", "drm"]
 

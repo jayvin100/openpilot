@@ -2,8 +2,20 @@
 
 #include <QFile>
 #include <QFileInfo>
-#include <QRegularExpression>
 #include <QString>
+
+#include <sstream>
+
+#ifdef signals
+#pragma push_macro("signals")
+#undef signals
+#define CABANA_RESTORE_SIGNALS_MACRO
+#endif
+#include "tools/cabana/dbc/dbc_core.h"
+#ifdef CABANA_RESTORE_SIGNALS_MACRO
+#pragma pop_macro("signals")
+#undef CABANA_RESTORE_SIGNALS_MACRO
+#endif
 
 DBCFile::DBCFile(const std::string &dbc_file_name) {
   QFile file(QString::fromStdString(dbc_file_name));
@@ -66,168 +78,56 @@ cabana::Signal *DBCFile::signal(uint32_t address, const std::string &name) {
 void DBCFile::parse(const QString &content) {
   msgs.clear();
 
-  int line_num = 0;
-  QString line;
-  cabana::Msg *current_msg = nullptr;
-  int multiplexor_cnt = 0;
   bool seen_first = false;
-  QTextStream stream((QString *)&content);
-
-  while (!stream.atEnd()) {
-    ++line_num;
-    QString raw_line = stream.readLine();
-    line = raw_line.trimmed();
-
-    bool seen = true;
-    try {
-      if (line.startsWith("BO_ ")) {
-        multiplexor_cnt = 0;
-        current_msg = parseBO(line);
-      } else if (line.startsWith("SG_ ")) {
-        parseSG(line, current_msg, multiplexor_cnt);
-      } else if (line.startsWith("VAL_ ")) {
-        parseVAL(line);
-      } else if (line.startsWith("CM_ BO_")) {
-        parseCM_BO(line, content, raw_line, stream);
-      } else if (line.startsWith("CM_ SG_ ")) {
-        parseCM_SG(line, content, raw_line, stream);
-      } else {
-        seen = false;
-      }
-    } catch (std::exception &e) {
-      throw std::runtime_error(QString("[%1:%2]%3: %4").arg(QString::fromStdString(filename)).arg(line_num).arg(e.what()).arg(line).toStdString());
-    }
-
+  std::istringstream stream(content.toStdString());
+  std::string raw_line;
+  while (std::getline(stream, raw_line)) {
+    const std::string line = QString::fromStdString(raw_line).trimmed().toStdString();
+    const bool seen = line.rfind("BO_ ", 0) == 0 ||
+                      line.rfind("SG_ ", 0) == 0 ||
+                      line.rfind("VAL_ ", 0) == 0 ||
+                      line.rfind("CM_ BO_", 0) == 0 ||
+                      line.rfind("CM_ SG_", 0) == 0;
     if (seen) {
       seen_first = true;
     } else if (!seen_first) {
-      header += raw_line.toStdString() + "\n";
+      header += raw_line + "\n";
     }
   }
 
-  for (auto &[_, m] : msgs) {
-    m.update();
-  }
-}
-
-cabana::Msg *DBCFile::parseBO(const QString &line) {
-  static QRegularExpression bo_regexp(R"(^BO_ (?<address>\w+) (?<name>\w+) *: (?<size>\w+) (?<transmitter>\w+))");
-
-  QRegularExpressionMatch match = bo_regexp.match(line);
-  if (!match.hasMatch())
-    throw std::runtime_error("Invalid BO_ line format");
-
-  uint32_t address = match.captured("address").toUInt();
-  if (msgs.count(address) > 0)
-    throw std::runtime_error(QString("Duplicate message address: %1").arg(address).toStdString());
-
-  // Create a new message object
-  cabana::Msg *msg = &msgs[address];
-  msg->address = address;
-  msg->name = match.captured("name").toStdString();
-  msg->size = match.captured("size").toULong();
-  msg->transmitter = match.captured("transmitter").trimmed().toStdString();
-  return msg;
-}
-
-void DBCFile::parseCM_BO(const QString &line, const QString &content, const QString &raw_line, const QTextStream &stream) {
-  static QRegularExpression msg_comment_regexp(R"(^CM_ BO_ *(?<address>\w+) *\"(?<comment>(?:[^"\\]|\\.)*)\"\s*;)");
-
-  QString parse_line = line;
-  if (!parse_line.endsWith("\";")) {
-    int pos = stream.pos() - raw_line.length() - 1;
-    parse_line = content.mid(pos, content.indexOf("\";", pos));
-  }
-  auto match = msg_comment_regexp.match(parse_line);
-  if (!match.hasMatch())
-    throw std::runtime_error("Invalid message comment format");
-
-  if (auto m = (cabana::Msg *)msg(match.captured("address").toUInt()))
-    m->comment = match.captured("comment").trimmed().replace("\\\"", "\"").toStdString();
-}
-
-void DBCFile::parseSG(const QString &line, cabana::Msg *current_msg, int &multiplexor_cnt) {
-  static QRegularExpression sg_regexp(R"(^SG_ (\w+) *: (\d+)\|(\d+)@(\d+)([\+|\-]) \(([0-9.+\-eE]+),([0-9.+\-eE]+)\) \[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\] \"(.*)\" (.*))");
-  static QRegularExpression sgm_regexp(R"(^SG_ (\w+) (\w+) *: (\d+)\|(\d+)@(\d+)([\+|\-]) \(([0-9.+\-eE]+),([0-9.+\-eE]+)\) \[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\] \"(.*)\" (.*))");
-
-  if (!current_msg)
-    throw std::runtime_error("No Message");
-
-  int offset = 0;
-  auto match = sg_regexp.match(line);
-  if (!match.hasMatch()) {
-    match = sgm_regexp.match(line);
-    offset = 1;
-  }
-  if (!match.hasMatch())
-    throw std::runtime_error("Invalid SG_ line format");
-
-  std::string name = match.captured(1).toStdString();
-  if (current_msg->sig(name) != nullptr)
-    throw std::runtime_error("Duplicate signal name");
-
-  cabana::Signal s{};
-  if (offset == 1) {
-    auto indicator = match.captured(2);
-    if (indicator == "M") {
-      ++multiplexor_cnt;
-      // Only one signal within a single message can be the multiplexer switch.
-      if (multiplexor_cnt >= 2)
-        throw std::runtime_error("Multiple multiplexor");
-
-      s.type = cabana::Signal::Type::Multiplexor;
-    } else {
-      s.type = cabana::Signal::Type::Multiplexed;
-      s.multiplex_value = indicator.mid(1).toInt();
-    }
-  }
-  s.name = name;
-  s.start_bit = match.captured(offset + 2).toInt();
-  s.size = match.captured(offset + 3).toInt();
-  s.is_little_endian = match.captured(offset + 4).toInt() == 1;
-  s.is_signed = match.captured(offset + 5) == "-";
-  s.factor = match.captured(offset + 6).toDouble();
-  s.offset = match.captured(offset + 7).toDouble();
-  s.min = match.captured(8 + offset).toDouble();
-  s.max = match.captured(9 + offset).toDouble();
-  s.unit = match.captured(10 + offset).toStdString();
-  s.receiver_name = match.captured(11 + offset).trimmed().toStdString();
-  current_msg->sigs.push_back(new cabana::Signal(s));
-}
-
-void DBCFile::parseCM_SG(const QString &line, const QString &content, const QString &raw_line, const QTextStream &stream) {
-  static QRegularExpression sg_comment_regexp(R"(^CM_ SG_ *(\w+) *(\w+) *\"((?:[^"\\]|\\.)*)\"\s*;)");
-
-  QString parse_line = line;
-  if (!parse_line.endsWith("\";")) {
-    int pos = stream.pos() - raw_line.length() - 1;
-    parse_line = content.mid(pos, content.indexOf("\";", pos));
-  }
-  auto match = sg_comment_regexp.match(parse_line);
-  if (!match.hasMatch())
-    throw std::runtime_error("Invalid CM_ SG_ line format");
-
-  if (auto s = signal(match.captured(1).toUInt(), match.captured(2).toStdString())) {
-    s->comment = match.captured(3).trimmed().replace("\\\"", "\"").toStdString();
-  }
-}
-
-void DBCFile::parseVAL(const QString &line) {
-  static QRegularExpression val_regexp(R"(VAL_ (\w+) (\w+) (\s*[-+]?[0-9]+\s+\".+?\"[^;]*))");
-
-  auto match = val_regexp.match(line);
-  if (!match.hasMatch())
-    throw std::runtime_error("invalid VAL_ line format");
-
-  if (auto s = signal(match.captured(1).toUInt(), match.captured(2).toStdString())) {
-    QStringList desc_list = match.captured(3).trimmed().split('"');
-    for (int i = 0; i < desc_list.size(); i += 2) {
-      auto val = desc_list[i].trimmed();
-      if (!val.isEmpty() && (i + 1) < desc_list.size()) {
-        auto desc = desc_list[i + 1].trimmed();
-        s->val_desc.push_back({val.toDouble(), desc.toStdString()});
+  const std::string source_name = filename.empty() ? name() : filename;
+  const dbc::Database parsed = dbc::Database::fromContent(content.toStdString(), source_name);
+  for (const auto &[address, parsed_msg] : parsed.messages()) {
+    cabana::Msg &msg = msgs[address];
+    msg.address = parsed_msg.address;
+    msg.name = parsed_msg.name;
+    msg.size = parsed_msg.size;
+    msg.comment = parsed_msg.comment;
+    msg.transmitter = parsed_msg.transmitter;
+    for (const dbc::Signal &parsed_sig : parsed_msg.getSignals()) {
+      cabana::Signal sig;
+      sig.type = static_cast<cabana::Signal::Type>(parsed_sig.type);
+      sig.name = parsed_sig.name;
+      sig.start_bit = parsed_sig.start_bit;
+      sig.msb = parsed_sig.msb;
+      sig.lsb = parsed_sig.lsb;
+      sig.size = parsed_sig.size;
+      sig.factor = parsed_sig.factor;
+      sig.offset = parsed_sig.offset;
+      sig.is_signed = parsed_sig.is_signed;
+      sig.is_little_endian = parsed_sig.is_little_endian;
+      sig.min = parsed_sig.min;
+      sig.max = parsed_sig.max;
+      sig.unit = parsed_sig.unit;
+      sig.comment = parsed_sig.comment;
+      sig.receiver_name = parsed_sig.receiver_name;
+      sig.multiplex_value = parsed_sig.multiplex_value;
+      for (const auto &entry : parsed_sig.value_descriptions) {
+        sig.val_desc.push_back({entry.value, entry.text});
       }
+      msg.sigs.push_back(new cabana::Signal(sig));
     }
+    msg.update();
   }
 }
 
