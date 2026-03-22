@@ -28,12 +28,12 @@
 - [x] signal view — `wired`
 - [ ] signal editing workflows — `not started`
 - [ ] message editing workflows — `not started`
-- [x] history log — `skeleton only`
+- [x] history log — `wired`
 
 ## Charts
-- [x] charts display — `skeleton only`
-- [ ] chart tabs — `not started`
-- [ ] split/merge behavior — `not started`
+- [x] charts display — `wired`
+- [x] chart tabs — `wired`
+- [x] split/merge behavior — `wired`
 - [ ] layout persistence — `not started`
 
 ## Video
@@ -57,4 +57,4 @@
 - [x] menu bar (File, Edit, View, Tools, Help) — `skeleton only`
 - [x] messages pane — `wired`
 - [x] detail pane with tabs — `wired`
-- [x] charts pane — `skeleton only`
+- [x] charts pane — `wired`

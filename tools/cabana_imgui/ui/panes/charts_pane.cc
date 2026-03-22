@@ -29,6 +29,25 @@ static bool icon_button(const char *id, std::string_view icon_id) {
   return ImGui::Button(label.c_str());
 }
 
+static const cabana::dbc::Signal *find_signal(const ChartSignalRef &ref) {
+  const auto *msg = cabana::dbc::dbc_manager().msg(ref.msg_id.address);
+  if (!msg) return nullptr;
+  auto it = std::find_if(msg->signals.begin(), msg->signals.end(), [&](const auto &sig) {
+    return sig.name == ref.signal_name;
+  });
+  return it == msg->signals.end() ? nullptr : &(*it);
+}
+
+static std::string chart_title(const ChartDefinition &chart) {
+  if (chart.signals.empty()) {
+    return "Empty Chart";
+  }
+  if (chart.signals.size() == 1) {
+    return chart.signals.front().signal_name;
+  }
+  return chart.signals.front().signal_name + " +" + std::to_string(chart.signals.size() - 1);
+}
+
 static void collect_signal_points(const std::vector<const CanEvent *> &events,
                                   const cabana::dbc::Signal &sig, uint64_t route_start_nanos,
                                   double min_sec, double max_sec,
@@ -64,6 +83,18 @@ static void collect_signal_points(const std::vector<const CanEvent *> &events,
   }
 }
 
+static void render_chart_series_controls(const ChartDefinition &chart, int chart_idx,
+                                         ChartSignalRef *pending_remove_signal) {
+  for (int i = 0; i < (int)chart.signals.size(); ++i) {
+    if (i > 0) ImGui::SameLine();
+    const auto &signal = chart.signals[i];
+    std::string label = signal.signal_name + " x##chart_" + std::to_string(chart_idx) + "_sig_" + std::to_string(i);
+    if (ImGui::SmallButton(label.c_str())) {
+      *pending_remove_signal = signal;
+    }
+  }
+}
+
 }  // namespace
 
 void charts() {
@@ -71,84 +102,166 @@ void charts() {
 
   auto &st = cabana::app_state();
   auto *src = app() ? app()->source() : nullptr;
+  auto &initial_tab = st.ensureChartTab();
+  (void)initial_tab;
 
-  static float chart_range = 7.0f;
-
-  ImGui::BeginDisabled();
-  icon_button("new_chart", "file-plus");
+  if (icon_button("new_chart", "file-plus")) {
+    st.addEmptyChart();
+  }
   ImGui::SameLine();
-  icon_button("new_tab", "window-stack");
+  if (icon_button("new_tab", "window-stack")) {
+    st.newChartTab();
+  }
+  ImGui::SameLine();
+  ImGui::Text("Charts: %d", st.totalChartCount());
+  ImGui::SameLine();
+  ImGui::TextDisabled("Type: Line");
+  ImGui::SameLine();
+
+  ImGui::SetNextItemWidth(100);
+  ImGui::SliderFloat("##range", &st.chart_range_sec, 1.0f, 60.0f, "%.0f s");
+
+  ImGui::SameLine();
+  ImGui::BeginDisabled(st.selected_chart < 0);
+  if (icon_button("split_chart", "layout-split")) {
+    st.splitChart(st.selected_chart);
+  }
+  ImGui::SameLine();
+  if (icon_button("remove_chart", "x-lg")) {
+    st.removeChart(st.selected_chart);
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(st.totalChartCount() == 0);
+  if (icon_button("remove_all", "x-square")) {
+    st.clearCharts();
+  }
   ImGui::EndDisabled();
 
-  ImGui::SameLine();
-  if (!st.has_selection) {
-    ImGui::Text("Charts: 0");
-  } else {
-    const auto *dbc_msg = cabana::dbc::dbc_manager().msg(st.selected_msg.address);
-    const int signal_count = dbc_msg ? (int)dbc_msg->signals.size() : 0;
-    ImGui::Text("Charts: %d", signal_count);
+  int active_tab_index = st.current_chart_tab;
+  int remove_tab_index = -1;
+  if (ImGui::BeginTabBar("##chart_tabs", ImGuiTabBarFlags_AutoSelectNewTabs)) {
+    for (int i = 0; i < (int)st.chart_tabs.size(); ++i) {
+      auto &tab = st.chart_tabs[i];
+      std::string label = "Tab " + std::to_string(i + 1) + " (" + std::to_string(tab.charts.size()) + ")";
+      bool open = true;
+      bool *open_ptr = st.chart_tabs.size() > 1 ? &open : nullptr;
+      if (ImGui::BeginTabItem(label.c_str(), open_ptr)) {
+        active_tab_index = i;
+        ImGui::EndTabItem();
+      }
+      if (!open) {
+        remove_tab_index = i;
+      }
+    }
+    ImGui::EndTabBar();
   }
 
-  ImGui::SameLine();
-  ImGui::TextDisabled("Selected Message");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(100);
-  ImGui::SliderFloat("##range", &chart_range, 1.0f, 60.0f, "%.0f s");
-
-  ImGui::Separator();
-
-  if (!st.has_selection) {
-    ImGui::TextDisabled("Select a message to plot decoded signals.");
-    ImGui::End();
-    return;
+  if (remove_tab_index != -1) {
+    st.removeChartTab(remove_tab_index);
   }
+  st.selectChartTab(active_tab_index);
 
-  if (!src) {
-    ImGui::TextDisabled(st.route_loading ? "Route is still loading..." : "No stream loaded.");
-    ImGui::End();
-    return;
-  }
-
-  auto events_it = src->eventsMap().find(st.selected_msg);
-  if (events_it == src->eventsMap().end() || events_it->second.empty()) {
-    ImGui::TextDisabled("Waiting for indexed CAN events...");
-    ImGui::End();
-    return;
-  }
-
-  const auto *dbc_msg = cabana::dbc::dbc_manager().msg(st.selected_msg.address);
-  if (!dbc_msg || dbc_msg->signals.empty()) {
-    ImGui::TextDisabled("Selected message has no decoded signals to chart.");
+  const auto *tab = st.activeChartTab();
+  if (!tab || tab->charts.empty()) {
+    ImGui::Separator();
+    ImGui::TextDisabled("No charts in this tab. Use the signal plot toggles or create an empty chart and Shift-click a signal.");
     ImGui::End();
     return;
   }
 
   const double end_sec = std::clamp(st.current_sec > 0.0 ? st.current_sec : st.max_sec, st.min_sec, st.max_sec);
-  const double start_sec = std::max(st.min_sec, end_sec - chart_range);
-  const auto &events = events_it->second;
+  const double start_sec = std::max(st.min_sec, end_sec - st.chart_range_sec);
+
+  int pending_split = -1;
+  int pending_remove_chart = -1;
+  ChartSignalRef pending_remove_signal{};
+  bool has_pending_remove_signal = false;
 
   std::vector<double> xs;
   std::vector<double> ys;
 
+  ImGui::Separator();
   ImGui::BeginChild("##chart_scroll");
-  for (int i = 0; i < (int)dbc_msg->signals.size(); ++i) {
-    const auto &sig = dbc_msg->signals[i];
-    collect_signal_points(events, sig, src->routeStartNanos(), start_sec, end_sec, xs, ys);
+  for (int chart_idx = 0; chart_idx < (int)tab->charts.size(); ++chart_idx) {
+    const auto &chart = tab->charts[chart_idx];
+    const bool selected = chart_idx == st.selected_chart;
 
-    const std::string plot_id = sig.name + "##plot";
-    if (ImPlot::BeginPlot(plot_id.c_str(), ImVec2(-1, 180), ImPlotFlags_NoLegend)) {
-      ImPlot::SetupAxes("Time (s)", sig.unit.empty() ? "Value" : sig.unit.c_str(),
-                        ImPlotAxisFlags_NoHighlight, ImPlotAxisFlags_AutoFit);
+    ImGui::PushID(chart_idx);
+    if (selected) {
+      ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.80f, 0.55f, 0.25f, 1.0f));
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    }
+
+    ImGui::BeginChild("##chart_card", ImVec2(0, 240), true);
+    if (selected) {
+      ImGui::PopStyleVar();
+      ImGui::PopStyleColor();
+    }
+
+    if (ImGui::Selectable(chart_title(chart).c_str(), selected, 0, ImVec2(-1, 0))) {
+      st.selected_chart = chart_idx;
+    }
+
+    if (!chart.signals.empty()) {
+      render_chart_series_controls(chart, chart_idx, &pending_remove_signal);
+      has_pending_remove_signal = has_pending_remove_signal || !pending_remove_signal.signal_name.empty();
+    }
+
+    ImGui::SameLine();
+    if (chart.signals.size() > 1 && ImGui::SmallButton("Split")) {
+      pending_split = chart_idx;
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Remove")) {
+      pending_remove_chart = chart_idx;
+    }
+
+    ImGui::Separator();
+
+    if (!src) {
+      ImGui::TextDisabled(st.route_loading ? "Route is still loading..." : "No stream loaded.");
+    } else if (chart.signals.empty()) {
+      ImGui::TextDisabled("Empty chart. Shift-click a signal to add it here.");
+    } else if (ImPlot::BeginPlot("##plot", ImVec2(-1, 180), ImPlotFlags_NoLegend)) {
+      ImPlot::SetupAxes("Time (s)", "Value", ImPlotAxisFlags_NoHighlight, ImPlotAxisFlags_AutoFit);
       ImPlot::SetupAxisLimits(ImAxis_X1, start_sec, end_sec, ImPlotCond_Always);
 
-      if (!xs.empty()) {
-        ImPlot::PlotLine(sig.name.c_str(), xs.data(), ys.data(), (int)xs.size());
+      for (int i = 0; i < (int)chart.signals.size(); ++i) {
+        const auto &signal_ref = chart.signals[i];
+        const auto *sig = find_signal(signal_ref);
+        if (!sig) continue;
+        auto events_it = src->eventsMap().find(signal_ref.msg_id);
+        if (events_it == src->eventsMap().end() || events_it->second.empty()) continue;
+
+        collect_signal_points(events_it->second, *sig, src->routeStartNanos(), start_sec, end_sec, xs, ys);
+        if (xs.empty()) continue;
+
+        std::string plot_label = signal_ref.signal_name + "##plot_" + std::to_string(i);
+        ImPlot::PlotLine(plot_label.c_str(), xs.data(), ys.data(), (int)xs.size());
       }
 
       ImPlot::EndPlot();
     }
+
+    ImGui::EndChild();
+    ImGui::PopID();
+
+    if (pending_split != -1 || pending_remove_chart != -1 || has_pending_remove_signal) {
+      break;
+    }
   }
   ImGui::EndChild();
+
+  if (pending_split != -1) {
+    st.splitChart(pending_split);
+  }
+  if (pending_remove_chart != -1) {
+    st.removeChart(pending_remove_chart);
+  }
+  if (has_pending_remove_signal) {
+    st.removeSignalFromCharts(pending_remove_signal.msg_id, pending_remove_signal.signal_name);
+  }
 
   ImGui::End();
 }

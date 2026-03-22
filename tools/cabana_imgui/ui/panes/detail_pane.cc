@@ -116,17 +116,19 @@ static void render_signal_list(const MessageId &id, const uint8_t *data, int dat
   ImGui::Text("Signals: %d", (int)msg->signals.size());
   ImGui::Separator();
 
-  if (ImGui::BeginTable("##signals", 4,
+  if (ImGui::BeginTable("##signals", 5,
                         ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                         ImGuiTableFlags_Resizable)) {
     ImGui::TableSetupColumn("Signal", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 80.0f);
     ImGui::TableSetupColumn("Unit", ImGuiTableColumnFlags_WidthFixed, 60.0f);
     ImGui::TableSetupColumn("Bits", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+    ImGui::TableSetupColumn("Plot", ImGuiTableColumnFlags_WidthFixed, 48.0f);
     ImGui::TableHeadersRow();
 
     for (const auto &sig : msg->signals) {
       double val = sig.getValue(data, data_size);
+      auto &st = cabana::app_state();
 
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
@@ -148,6 +150,20 @@ static void render_signal_list(const MessageId &id, const uint8_t *data, int dat
       }
       ImGui::TableNextColumn();
       ImGui::TextDisabled("[%d|%d]", sig.start_bit, sig.size);
+      ImGui::TableNextColumn();
+
+      bool plotted = st.hasChartSignal(id, sig.name);
+      std::string plot_id = "##plot_" + sig.name;
+      if (ImGui::Checkbox(plot_id.c_str(), &plotted)) {
+        if (plotted) {
+          st.addSignalToCharts(id, sig.name, ImGui::GetIO().KeyShift);
+        } else {
+          st.removeSignalFromCharts(id, sig.name);
+        }
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", plotted ? "Close Plot" : "Show Plot\nShift-click to add to selected chart");
+      }
     }
 
     ImGui::EndTable();
