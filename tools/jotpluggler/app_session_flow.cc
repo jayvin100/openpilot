@@ -792,6 +792,9 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
         state->show_deprecated_fields = !state->show_deprecated_fields;
         rebuild_browser_nodes(session, state);
       }
+      if (ImGui::MenuItem("Show FPS", nullptr, state->show_fps_overlay)) {
+        state->show_fps_overlay = !state->show_fps_overlay;
+      }
       ImGui::Separator();
       if (ImGui::MenuItem("Reset Plot View")) {
         reset_shared_range(state, *session);

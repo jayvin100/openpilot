@@ -1,4 +1,48 @@
+bool default_fps_overlay_enabled() {
+  static const bool enabled = []() {
+    const char *raw = std::getenv("JOTP_SHOW_FPS");
+    if (raw == nullptr || raw[0] == '\0') {
+      return false;
+    }
+    const std::string value = lowercase(trim_copy(raw));
+    return !(value == "0" || value == "false" || value == "no" || value == "off");
+  }();
+  return enabled;
+}
+
+void draw_fps_overlay(const UiState &state, float top_offset) {
+  if (!state.show_fps_overlay) {
+    return;
+  }
+  ImGuiViewport *viewport = ImGui::GetMainViewport();
+  const ImGuiIO &io = ImGui::GetIO();
+  const float fps = io.Framerate;
+  char label[32] = {};
+  std::snprintf(label, sizeof(label), "%.1f fps", fps);
+
+  const ImVec2 padding(10.0f, 8.0f);
+  const ImVec2 margin(12.0f, 10.0f);
+  app_push_mono_font();
+  ImFont *font = ImGui::GetFont();
+  const float font_size = ImGui::GetFontSize();
+  const ImVec2 text_size = ImGui::CalcTextSize(label);
+  app_pop_mono_font();
+  const ImVec2 size(text_size.x + padding.x * 2.0f, text_size.y + padding.y * 2.0f);
+  const ImVec2 pos(viewport->Pos.x + viewport->Size.x - size.x - margin.x,
+                   viewport->Pos.y + top_offset + margin.y);
+  ImDrawList *draw_list = ImGui::GetForegroundDrawList(viewport);
+  const ImVec2 max(pos.x + size.x, pos.y + size.y);
+  draw_list->AddRectFilled(pos, max, ImGui::GetColorU32(color_rgb(248, 249, 251, 0.92f)), 4.0f);
+  draw_list->AddRect(pos, max, ImGui::GetColorU32(color_rgb(182, 188, 196, 0.95f)), 4.0f);
+  draw_list->AddText(font, font_size, ImVec2(pos.x + padding.x, pos.y + padding.y),
+                     ImGui::GetColorU32(color_rgb(57, 62, 69)), label, nullptr);
+}
+
 void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
+  if (!state->fps_overlay_initialized) {
+    state->show_fps_overlay = default_fps_overlay_enabled();
+    state->fps_overlay_initialized = true;
+  }
   ensure_shared_range(state, *session);
   if (state->follow_latest) {
     update_follow_range(state, *session);
@@ -39,6 +83,7 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   }
   draw_status_bar(*session, ui, state);
   draw_popups(session, state);
+  draw_fps_overlay(*state, menu_height);
 }
 
 void save_framebuffer_png(const fs::path &output_path, int width, int height) {

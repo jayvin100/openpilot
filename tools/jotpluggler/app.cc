@@ -21,6 +21,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <unordered_set>
 #include <unistd.h>
 
 #include "third_party/json11/json11.hpp"
@@ -1196,6 +1197,13 @@ struct PreparedCurve {
   std::vector<double> ys;
 };
 
+struct StateBlock {
+  double t0 = 0.0;
+  double t1 = 0.0;
+  int value = 0;
+  std::string label;
+};
+
 struct PaneEnumContext {
   std::vector<const EnumInfo *> enums;
 };
@@ -1226,6 +1234,101 @@ bool curves_are_bool_like(const std::vector<PreparedCurve> &prepared_curves) {
     }
   }
   return true;
+}
+
+bool curve_is_state_like(const PreparedCurve &curve) {
+  if (!curve.display_info.integer_like || curve.xs.size() < 2 || curve.xs.size() != curve.ys.size()) {
+    return false;
+  }
+  if (curve.enum_info != nullptr) {
+    return true;
+  }
+  std::unordered_set<int> distinct_values;
+  for (double value : curve.ys) {
+    if (!std::isfinite(value)) {
+      continue;
+    }
+    distinct_values.insert(static_cast<int>(std::llround(value)));
+    if (distinct_values.size() > 12) {
+      return false;
+    }
+  }
+  return !distinct_values.empty();
+}
+
+bool curves_use_state_blocks(const std::vector<PreparedCurve> &prepared_curves) {
+  if (prepared_curves.empty()) {
+    return false;
+  }
+  for (const PreparedCurve &curve : prepared_curves) {
+    if (!curve_is_state_like(curve)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+ImU32 state_block_color(int value, float alpha = 1.0f) {
+  static constexpr std::array<std::array<uint8_t, 3>, 8> kPalette = {{
+    {{111, 143, 175}},
+    {{0, 163, 108}},
+    {{255, 195, 0}},
+    {{199, 0, 57}},
+    {{123, 97, 255}},
+    {{0, 150, 136}},
+    {{214, 48, 49}},
+    {{52, 73, 94}},
+  }};
+  const size_t index = static_cast<size_t>(std::abs(value)) % kPalette.size();
+  return ImGui::GetColorU32(color_rgb(kPalette[index], alpha));
+}
+
+std::string state_block_label(const PreparedCurve &curve, int value) {
+  if (curve.enum_info != nullptr && value >= 0 && static_cast<size_t>(value) < curve.enum_info->names.size()) {
+    const std::string &name = curve.enum_info->names[static_cast<size_t>(value)];
+    if (!name.empty()) {
+      return name;
+    }
+  }
+  return std::to_string(value);
+}
+
+std::vector<StateBlock> build_state_blocks(const PreparedCurve &curve) {
+  std::vector<StateBlock> blocks;
+  if (curve.xs.size() < 2 || curve.xs.size() != curve.ys.size()) {
+    return blocks;
+  }
+
+  int current_value = static_cast<int>(std::llround(curve.ys.front()));
+  double start_time = curve.xs.front();
+  for (size_t i = 1; i < curve.xs.size(); ++i) {
+    const int value = static_cast<int>(std::llround(curve.ys[i]));
+    if (value == current_value) {
+      continue;
+    }
+    const double end_time = curve.xs[i];
+    if (end_time > start_time) {
+      blocks.push_back(StateBlock{
+        .t0 = start_time,
+        .t1 = end_time,
+        .value = current_value,
+        .label = state_block_label(curve, current_value),
+      });
+    }
+    current_value = value;
+    start_time = end_time;
+  }
+
+  const double final_time = curve.xs.back();
+  if (final_time >= start_time) {
+    blocks.push_back(StateBlock{
+      .t0 = start_time,
+      .t1 = final_time,
+      .value = current_value,
+      .label = state_block_label(curve, current_value),
+    });
+  }
+  return blocks;
 }
 
 void app_decimate_samples_impl(const std::vector<double> &xs_in,
@@ -1503,7 +1606,12 @@ bool build_curve_series(const AppSession &session,
   if (state.has_tracker_time) {
     prepared->legend_value = app_sample_xy_value_at_time(transformed_xs, transformed_ys, stairs, state.tracker_time);
   }
-  app_decimate_samples(std::move(transformed_xs), std::move(transformed_ys), max_points, &prepared->xs, &prepared->ys);
+  if (stairs) {
+    prepared->xs = std::move(transformed_xs);
+    prepared->ys = std::move(transformed_ys);
+  } else {
+    app_decimate_samples(std::move(transformed_xs), std::move(transformed_ys), max_points, &prepared->xs, &prepared->ys);
+  }
   prepared->stairs = stairs;
   return prepared->xs.size() > 1 && prepared->xs.size() == prepared->ys.size();
 }
@@ -1592,6 +1700,126 @@ PlotBounds compute_plot_bounds(const Pane &pane,
   bounds.y_min = min_value;
   bounds.y_max = max_value;
   return bounds;
+}
+
+void draw_state_blocks_pane(const std::vector<PreparedCurve> &prepared_curves, UiState *state) {
+  if (prepared_curves.empty() || !state->has_shared_range || state->x_view_max <= state->x_view_min) {
+    return;
+  }
+
+  ImDrawList *draw_list = ImPlot::GetPlotDrawList();
+  const ImVec2 plot_min = ImPlot::GetPlotPos();
+  const ImVec2 plot_size = ImPlot::GetPlotSize();
+  const int curve_count = static_cast<int>(prepared_curves.size());
+  if (plot_size.x <= 2.0f || plot_size.y <= 2.0f || curve_count <= 0) {
+    return;
+  }
+
+  float label_width = 0.0f;
+  if (curve_count > 1) {
+    for (const PreparedCurve &curve : prepared_curves) {
+      label_width = std::max(label_width, ImGui::CalcTextSize(curve.label.c_str()).x);
+    }
+    label_width = std::clamp(label_width + 14.0f, 72.0f, std::min(160.0f, plot_size.x * 0.35f));
+  }
+
+  const float row_height = plot_size.y / static_cast<float>(curve_count);
+  const float blocks_min_x = plot_min.x + label_width;
+  const float blocks_max_x = plot_min.x + plot_size.x;
+  const float blocks_width = std::max(1.0f, blocks_max_x - blocks_min_x);
+  const double x_span = std::max(1.0e-9, state->x_view_max - state->x_view_min);
+
+  struct HoveredBlock {
+    int curve_index = -1;
+    StateBlock block;
+  };
+  std::optional<HoveredBlock> hovered;
+
+  const ImVec2 mouse_pos = ImGui::GetMousePos();
+  const bool plot_hovered = ImPlot::IsPlotHovered();
+
+  for (int curve_index = 0; curve_index < curve_count; ++curve_index) {
+    const PreparedCurve &curve = prepared_curves[static_cast<size_t>(curve_index)];
+    const float y0 = plot_min.y + row_height * static_cast<float>(curve_index);
+    const float y1 = y0 + row_height;
+    const std::vector<StateBlock> blocks = build_state_blocks(curve);
+
+    if (curve_index > 0) {
+      draw_list->AddLine(ImVec2(plot_min.x, y0), ImVec2(plot_min.x + plot_size.x, y0),
+                         IM_COL32(210, 214, 220, 255), 1.0f);
+    }
+    if (curve_count > 1) {
+      draw_list->AddLine(ImVec2(blocks_min_x, y0), ImVec2(blocks_min_x, y1),
+                         IM_COL32(210, 214, 220, 255), 1.0f);
+      const float label_left = plot_min.x + 6.0f;
+      const float label_right = std::max(label_left + 12.0f, blocks_min_x - 6.0f);
+      ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(120, 128, 138));
+      ImGui::RenderTextEllipsis(draw_list,
+                                ImVec2(label_left, y0 + 4.0f),
+                                ImVec2(label_right, y1 - 4.0f),
+                                label_right,
+                                curve.label.c_str(),
+                                nullptr,
+                                nullptr);
+      ImGui::PopStyleColor();
+    }
+
+    for (const StateBlock &block : blocks) {
+      const double visible_t0 = std::max(block.t0, state->x_view_min);
+      const double visible_t1 = std::min(block.t1, state->x_view_max);
+      if (visible_t1 <= visible_t0) {
+        continue;
+      }
+      const float x0 = blocks_min_x + static_cast<float>((visible_t0 - state->x_view_min) / x_span) * blocks_width;
+      const float x1 = blocks_min_x + static_cast<float>((visible_t1 - state->x_view_min) / x_span) * blocks_width;
+      const ImU32 fill_color = state_block_color(block.value, 0.15f);
+      const ImU32 line_color = state_block_color(block.value, 0.90f);
+      draw_list->AddRectFilled(ImVec2(x0, y0), ImVec2(std::max(x1, x0 + 1.0f), y1), fill_color);
+      draw_list->AddLine(ImVec2(x0, y0), ImVec2(x0, y1), line_color, 2.0f);
+
+      const float block_width = x1 - x0;
+      if (block_width > 14.0f) {
+        const float text_left = x0 + 6.0f;
+        const float text_right = x1 - 6.0f;
+        if (text_right > text_left) {
+          ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(state_block_color(block.value, 0.80f)));
+          ImGui::RenderTextEllipsis(draw_list,
+                                    ImVec2(text_left, y0 + 4.0f),
+                                    ImVec2(text_right, y1 - 4.0f),
+                                    text_right,
+                                    block.label.c_str(),
+                                    nullptr,
+                                    nullptr);
+          ImGui::PopStyleColor();
+        }
+      }
+
+      if (plot_hovered && mouse_pos.x >= blocks_min_x && mouse_pos.x <= blocks_max_x && mouse_pos.y >= y0 && mouse_pos.y <= y1) {
+        const double hover_time = state->x_view_min + static_cast<double>((mouse_pos.x - blocks_min_x) / blocks_width) * x_span;
+        if (hover_time >= block.t0 && hover_time <= block.t1) {
+          hovered = HoveredBlock{
+            .curve_index = curve_index,
+            .block = block,
+          };
+        }
+      }
+    }
+  }
+
+  if (hovered.has_value()) {
+    const HoveredBlock &info = *hovered;
+    ImGui::BeginTooltip();
+    if (curve_count > 1) {
+      ImGui::Text("%s: %s (%d)", prepared_curves[static_cast<size_t>(info.curve_index)].label.c_str(),
+                  info.block.label.c_str(), info.block.value);
+    } else {
+      ImGui::Text("%s (%d)", info.block.label.c_str(), info.block.value);
+    }
+    ImGui::Separator();
+    ImGui::Text("%.3fs -> %.3fs", info.block.t0, info.block.t1);
+    ImGui::Text("duration: %.3fs", info.block.t1 - info.block.t0);
+    ImGui::EndTooltip();
+  }
 }
 
 void persist_shared_range_to_tab(WorkspaceTab *tab, const UiState &state) {
@@ -1743,6 +1971,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   const PlotBounds bounds = compute_plot_bounds(*pane, prepared_curves, *state);
   PaneEnumContext enum_context;
   PaneValueFormatContext pane_value_format;
+  const bool state_block_mode = curves_use_state_blocks(prepared_curves);
   bool all_enum_curves = !prepared_curves.empty();
   size_t max_legend_label_width = 0;
   for (const PreparedCurve &curve : prepared_curves) {
@@ -1770,14 +1999,20 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   ImPlot::PushStyleColor(ImPlotCol_AxisText, color_rgb(95, 103, 112));
 
   ImPlotFlags plot_flags = ImPlotFlags_NoTitle | ImPlotFlags_NoMenus;
+  if (state_block_mode) {
+    plot_flags |= ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText;
+  }
   if (supported_count == 0) {
     plot_flags |= ImPlotFlags_NoLegend;
   }
 
   const ImPlotAxisFlags x_axis_flags = ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight;
   ImPlotAxisFlags y_axis_flags = ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight;
+  if (state_block_mode) {
+    y_axis_flags |= ImPlotAxisFlags_NoDecorations;
+  }
   const bool explicit_y = pane->range.has_y_limit_min || pane->range.has_y_limit_max;
-  if (!explicit_y && supported_count > 0) {
+  if (!state_block_mode && !explicit_y && supported_count > 0) {
     y_axis_flags |= ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_RangeFit;
   }
 
@@ -1787,7 +2022,9 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   if (ImPlot::BeginPlot("##plot", plot_size, plot_flags)) {
     ImPlot::SetupAxes(nullptr, nullptr, x_axis_flags, y_axis_flags);
     ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f");
-    if (all_enum_curves && !enum_context.enums.empty()) {
+    if (state_block_mode) {
+      ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
+    } else if (all_enum_curves && !enum_context.enums.empty()) {
       ImPlot::SetupAxisFormat(ImAxis_Y1, format_enum_axis_tick, &enum_context);
     } else if (pane_value_format.valid) {
       ImPlot::SetupAxisFormat(ImAxis_Y1, format_numeric_axis_tick, &pane_value_format);
@@ -1801,27 +2038,33 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
         : state->route_x_min;
       ImPlot::SetupAxisLimitsConstraints(ImAxis_X1, x_constraint_min, state->route_x_max);
     }
-    ImPlot::SetupMouseText(ImPlotLocation_SouthEast, ImPlotMouseTextFlags_NoAuxAxes);
-    if (explicit_y || supported_count == 0) {
+    if (!state_block_mode) {
+      ImPlot::SetupMouseText(ImPlotLocation_SouthEast, ImPlotMouseTextFlags_NoAuxAxes);
+    }
+    if (!state_block_mode && (explicit_y || supported_count == 0)) {
       ImPlot::SetupAxisLimits(ImAxis_Y1, bounds.y_min, bounds.y_max, ImPlotCond_Always);
     }
-    if (supported_count > 0) {
+    if (!state_block_mode && supported_count > 0) {
       ImPlot::SetupLegend(ImPlotLocation_NorthEast);
     }
 
-    for (size_t i = 0; i < prepared_curves.size(); ++i) {
-      const PreparedCurve &curve = prepared_curves[i];
-      std::string series_id = curve_legend_label(curve, has_cursor_time, max_legend_label_width) + "##curve" + std::to_string(i);
-      ImPlotSpec spec;
-      spec.LineColor = color_rgb(curve.color);
-      spec.LineWeight = curve.line_weight;
-      spec.Flags = ImPlotLineFlags_SkipNaN;
-      if (!curve.xs.empty() && curve.xs.size() == curve.ys.size()) {
-        if (curve.stairs) {
-          spec.Flags = ImPlotStairsFlags_PreStep;
-          ImPlot::PlotStairs(series_id.c_str(), curve.xs.data(), curve.ys.data(), static_cast<int>(curve.xs.size()), spec);
-        } else {
-          ImPlot::PlotLine(series_id.c_str(), curve.xs.data(), curve.ys.data(), static_cast<int>(curve.xs.size()), spec);
+    if (state_block_mode) {
+      draw_state_blocks_pane(prepared_curves, state);
+    } else {
+      for (size_t i = 0; i < prepared_curves.size(); ++i) {
+        const PreparedCurve &curve = prepared_curves[i];
+        std::string series_id = curve_legend_label(curve, has_cursor_time, max_legend_label_width) + "##curve" + std::to_string(i);
+        ImPlotSpec spec;
+        spec.LineColor = color_rgb(curve.color);
+        spec.LineWeight = curve.line_weight;
+        spec.Flags = ImPlotLineFlags_SkipNaN;
+        if (!curve.xs.empty() && curve.xs.size() == curve.ys.size()) {
+          if (curve.stairs) {
+            spec.Flags = ImPlotStairsFlags_PreStep;
+            ImPlot::PlotStairs(series_id.c_str(), curve.xs.data(), curve.ys.data(), static_cast<int>(curve.xs.size()), spec);
+          } else {
+            ImPlot::PlotLine(series_id.c_str(), curve.xs.data(), curve.ys.data(), static_cast<int>(curve.xs.size()), spec);
+          }
         }
       }
     }
