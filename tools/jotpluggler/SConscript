@@ -45,7 +45,7 @@ libs = [replay_lib, common, messaging, visionipc, cereal, imgui_static, glfw_sta
 if arch == "Darwin":
   frameworks = ["OpenGL", "Cocoa", "IOKit", "CoreFoundation", "CoreVideo"]
 else:
-  libs += ["GL", "dl"]
+  libs += ["GL", "dl", "va", "va-drm", "drm"]
 
 program = jot_env.Program("jotpluggler", objects, LIBS=libs, FRAMEWORKS=frameworks)
 jot_env.Depends(program, generated_dbc_stamp)

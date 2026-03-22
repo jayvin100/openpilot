@@ -137,6 +137,8 @@ def parse_transform(curve_elem: ET.Element) -> dict:
     result = {"transform": "derivative"}
     if options is not None:
       dt = options.get("dTime")
+      if dt is None and options.get("radioChecked") == "radioCustom":
+        dt = options.get("lineEdit")
       if dt is not None:
         result["derivative_dt"] = float(dt)
     return result

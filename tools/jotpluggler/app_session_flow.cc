@@ -787,6 +787,48 @@ void draw_route_id_chip(AppSession *session, UiState *state) {
   draw_route_info_popup(session, state, ImVec2(std::max(window->Pos.x + 16.0f, chip_max.x - 360.0f), chip_max.y + 6.0f));
 }
 
+std::string format_cache_bytes(uint64_t bytes) {
+  char buf[64];
+  if (bytes >= (1ULL << 30)) {
+    std::snprintf(buf, sizeof(buf), "%.1f GiB", static_cast<double>(bytes) / static_cast<double>(1ULL << 30));
+  } else if (bytes >= (1ULL << 20)) {
+    std::snprintf(buf, sizeof(buf), "%.1f MiB", static_cast<double>(bytes) / static_cast<double>(1ULL << 20));
+  } else if (bytes >= (1ULL << 10)) {
+    std::snprintf(buf, sizeof(buf), "%.1f KiB", static_cast<double>(bytes) / static_cast<double>(1ULL << 10));
+  } else {
+    std::snprintf(buf, sizeof(buf), "%llu B", static_cast<unsigned long long>(bytes));
+  }
+  return std::string(buf);
+}
+
+MapCacheStats directory_cache_stats(const fs::path &root) {
+  MapCacheStats stats;
+  std::error_code ec;
+  if (!fs::exists(root, ec)) {
+    return stats;
+  }
+  fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
+  for (const fs::directory_entry &entry : it) {
+    if (ec) {
+      ec.clear();
+      continue;
+    }
+    const fs::file_status status = entry.symlink_status(ec);
+    if (ec || !fs::is_regular_file(status)) {
+      ec.clear();
+      continue;
+    }
+    const uintmax_t size = entry.file_size(ec);
+    if (!ec) {
+      stats.bytes += static_cast<uint64_t>(size);
+      ++stats.files;
+    } else {
+      ec.clear();
+    }
+  }
+  return stats;
+}
+
 float draw_main_menu_bar(AppSession *session, UiState *state) {
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f, 5.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(9.0f, 6.0f));
@@ -829,6 +871,9 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
       }
       if (ImGui::MenuItem("Show FPS", nullptr, state->show_fps_overlay)) {
         state->show_fps_overlay = !state->show_fps_overlay;
+      }
+      if (ImGui::MenuItem("Preferences...")) {
+        state->open_preferences = true;
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Reset Plot View")) {

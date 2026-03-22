@@ -1,6 +1,7 @@
 #include "tools/jotpluggler/jotpluggler.h"
 #include "tools/jotpluggler/app_camera.h"
 #include "tools/jotpluggler/app_map.h"
+#include "system/hardware/hw.h"
 #include "imgui_impl_glfw.h"
 
 #include "imgui_internal.h"
@@ -908,41 +909,6 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       }
       ImGui::EndCombo();
     }
-    if (session->map_data) {
-      const auto format_bytes = [](uint64_t bytes) {
-        char buf[64];
-        if (bytes >= (1ULL << 30)) {
-          std::snprintf(buf, sizeof(buf), "%.1f GiB", static_cast<double>(bytes) / static_cast<double>(1ULL << 30));
-        } else if (bytes >= (1ULL << 20)) {
-          std::snprintf(buf, sizeof(buf), "%.1f MiB", static_cast<double>(bytes) / static_cast<double>(1ULL << 20));
-        } else if (bytes >= (1ULL << 10)) {
-          std::snprintf(buf, sizeof(buf), "%.1f KiB", static_cast<double>(bytes) / static_cast<double>(1ULL << 10));
-        } else {
-          std::snprintf(buf, sizeof(buf), "%llu B", static_cast<unsigned long long>(bytes));
-        }
-        return std::string(buf);
-      };
-      const MapCacheStats cache = session->map_data->cacheStats();
-      ImGui::TextDisabled("Map cache: %s in %zu file%s",
-                          format_bytes(cache.bytes).c_str(),
-                          cache.files,
-                          cache.files == 1 ? "" : "s");
-      const bool has_trace = !session->route_data.gps_trace.points.empty();
-      const float cache_button_gap = ImGui::GetStyle().ItemSpacing.x;
-      const float cache_row_width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-      const float cache_button_width = std::max(1.0f, (cache_row_width - cache_button_gap) * 0.5f);
-      ImGui::BeginDisabled(!has_trace);
-      if (ImGui::Button("Preload Map", ImVec2(cache_button_width, 0.0f))) {
-        session->map_data->ensureTrace(session->route_data.gps_trace);
-        state->status_text = "Started map preload";
-      }
-      ImGui::SameLine(0.0f, cache_button_gap);
-      ImGui::EndDisabled();
-      if (ImGui::Button("Clear Cache", ImVec2(cache_button_width, 0.0f))) {
-        session->map_data->clearCache();
-        state->status_text = "Cleared map cache";
-      }
-    }
     ImGui::SeparatorText("Layout");
     const std::vector<std::string> layouts = available_layout_names();
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1833,26 +1799,26 @@ bool draw_pane_close_button_overlay() {
   const ImVec2 window_pos = ImGui::GetWindowPos();
   const ImVec2 content_min = ImGui::GetWindowContentRegionMin();
   const ImVec2 content_max = ImGui::GetWindowContentRegionMax();
-  const ImRect rect(ImVec2(window_pos.x + content_max.x - 18.0f, window_pos.y + content_min.y + 2.0f),
-                    ImVec2(window_pos.x + content_max.x - 2.0f, window_pos.y + content_min.y + 18.0f));
+  const ImRect rect(ImVec2(window_pos.x + content_max.x - 42.0f, window_pos.y + content_min.y + 4.0f),
+                    ImVec2(window_pos.x + content_max.x - 4.0f, window_pos.y + content_min.y + 42.0f));
   const bool hovered = ImGui::IsMouseHoveringRect(rect.Min, rect.Max, false);
   const bool held = hovered && ImGui::IsMouseDown(ImGuiMouseButton_Left);
   if (hovered) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
   }
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
-  const float pad = 4.5f;
+  const float pad = 11.0f;
   const ImU32 color = hovered || held
     ? ImGui::GetColorU32(color_rgb(72, 79, 88))
     : ImGui::GetColorU32(color_rgb(138, 146, 156));
   draw_list->AddLine(ImVec2(rect.Min.x + pad, rect.Min.y + pad),
                      ImVec2(rect.Max.x - pad, rect.Max.y - pad),
                      color,
-                     1.5f);
+                     2.4f);
   draw_list->AddLine(ImVec2(rect.Min.x + pad, rect.Max.y - pad),
                      ImVec2(rect.Max.x - pad, rect.Min.y + pad),
                      color,
-                     1.5f);
+                     2.4f);
   return hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 }
 
@@ -2731,6 +2697,10 @@ void draw_pane_windows(AppSession *session, UiState *state) {
     return;
   }
 
+  std::optional<std::pair<int, PaneMenuAction>> pending_menu_action;
+  std::optional<int> pending_close_pane;
+  std::optional<PaneDropAction> pending_drop_action;
+
   for (size_t i = 0; i < tab->panes.size(); ++i) {
     Pane &pane = tab->panes[i];
     std::optional<PaneMenuAction> menu_action;
@@ -2765,20 +2735,31 @@ void draw_pane_windows(AppSession *session, UiState *state) {
     ImGui::End();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(5);
-    if (menu_action.has_value() && apply_pane_menu_action(session, state, static_cast<int>(i), *menu_action)) {
-      return;
+    if (!pending_menu_action.has_value() && menu_action.has_value()) {
+      pending_menu_action = std::make_pair(static_cast<int>(i), *menu_action);
     }
-    if (close_pane_requested) {
-      PaneMenuAction action;
-      action.kind = PaneMenuActionKind::Close;
-      action.pane_index = static_cast<int>(i);
-      if (apply_pane_menu_action(session, state, static_cast<int>(i), action)) {
-        return;
-      }
+    if (!pending_menu_action.has_value() && !pending_close_pane.has_value() && close_pane_requested) {
+      pending_close_pane = static_cast<int>(i);
     }
-    if (drop_action.has_value() && apply_pane_drop_action(session, state, *drop_action)) {
-      return;
+    if (!pending_menu_action.has_value() && !pending_close_pane.has_value()
+        && !pending_drop_action.has_value() && drop_action.has_value()) {
+      pending_drop_action = *drop_action;
     }
+  }
+
+  if (pending_menu_action.has_value()) {
+    apply_pane_menu_action(session, state, pending_menu_action->first, pending_menu_action->second);
+    return;
+  }
+  if (pending_close_pane.has_value()) {
+    PaneMenuAction action;
+    action.kind = PaneMenuActionKind::Close;
+    action.pane_index = *pending_close_pane;
+    apply_pane_menu_action(session, state, *pending_close_pane, action);
+    return;
+  }
+  if (pending_drop_action.has_value()) {
+    apply_pane_drop_action(session, state, *pending_drop_action);
   }
 }
 

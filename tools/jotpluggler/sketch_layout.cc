@@ -1625,9 +1625,9 @@ void build_camera_index(const std::map<int, SegmentLogs> &segments,
 
   const std::string prefix = "/" + std::string(index_name);
   const RouteSeries *segment_numbers = find_route_series(route_data, prefix + "/segmentNum");
-  const RouteSeries *decode_indices = find_route_series(route_data, prefix + "/segmentIdEncode");
+  const RouteSeries *decode_indices = find_route_series(route_data, prefix + "/segmentId");
   if (decode_indices == nullptr) {
-    decode_indices = find_route_series(route_data, prefix + "/segmentId");
+    decode_indices = find_route_series(route_data, prefix + "/segmentIdEncode");
   }
   const RouteSeries *frame_ids = find_route_series(route_data, prefix + "/frameId");
   if (segment_numbers == nullptr || decode_indices == nullptr) {

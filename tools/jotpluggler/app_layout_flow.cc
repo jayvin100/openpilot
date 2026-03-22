@@ -224,6 +224,7 @@ void draw_popups(AppSession *session, UiState *state) {
   if (state->open_load_layout || state->open_save_layout) { sync_layout_buffers(state, *session); }
   open_popup(state->open_load_layout, "Load Layout");
   open_popup(state->open_save_layout, "Save Layout");
+  open_popup(state->open_preferences, "Preferences");
   open_popup(state->axis_limits.open, "Edit Axis Limits");
 
   if (ImGui::BeginPopupModal("Open Route", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -300,6 +301,35 @@ void draw_popups(AppSession *session, UiState *state) {
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
       sync_layout_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+  if (ImGui::BeginPopupModal("Preferences", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (session->map_data) {
+      const MapCacheStats map_cache = session->map_data->cacheStats();
+      const MapCacheStats download_cache = directory_cache_stats(Path::download_cache_root());
+      ImGui::TextUnformatted("Map");
+      ImGui::Separator();
+      ImGui::Text("Map cache: %s in %zu file%s",
+                  format_cache_bytes(map_cache.bytes).c_str(),
+                  map_cache.files,
+                  map_cache.files == 1 ? "" : "s");
+      if (ImGui::Button("Clear Map Cache", ImVec2(120.0f, 0.0f))) {
+        session->map_data->clearCache();
+        state->status_text = "Cleared map cache";
+      }
+      ImGui::Spacing();
+      ImGui::TextUnformatted("comma Download Cache");
+      ImGui::Separator();
+      ImGui::Text("Download cache: %s in %zu file%s",
+                  format_cache_bytes(download_cache.bytes).c_str(),
+                  download_cache.files,
+                  download_cache.files == 1 ? "" : "s");
+      ImGui::TextDisabled("%s", Path::download_cache_root().c_str());
+      ImGui::Spacing();
+    }
+    if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();

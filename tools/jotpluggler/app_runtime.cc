@@ -22,7 +22,10 @@
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <memory>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <unistd.h>
 
 #include "system/camerad/cameras/nv12_info.h"
@@ -617,6 +620,12 @@ struct SidebarCameraFeed::Impl {
     uint64_t generation = 0;
   };
 
+  struct PreloadTask {
+    int segment = -1;
+    std::string path;
+    uint64_t generation = 0;
+  };
+
   struct DecodeResult {
     RequestKey key;
     bool success = false;
@@ -630,16 +639,25 @@ struct SidebarCameraFeed::Impl {
   static constexpr size_t kCachedFrames = 8;
   static constexpr int kPrefetchAhead = 2;
   static constexpr int kImmediateNearbyFrameDistance = 8;
+  static constexpr int kPreloadWorkerCount = 2;
 
   Impl() {
-    worker = std::thread([this]() { worker_loop(); });
+    demand_worker = std::thread([this]() { demand_worker_loop(); });
+    for (int i = 0; i < kPreloadWorkerCount; ++i) {
+      preload_workers.emplace_back([this]() { preload_worker_loop(); });
+    }
   }
 
   ~Impl() {
     stop.store(true);
     cv.notify_all();
-    if (worker.joinable()) {
-      worker.join();
+    if (demand_worker.joinable()) {
+      demand_worker.join();
+    }
+    for (std::thread &worker : preload_workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
     }
     destroy_texture();
   }
@@ -657,9 +675,27 @@ struct SidebarCameraFeed::Impl {
       pending_request.reset();
       pending_result.reset();
       cached_results.clear();
+      preload_queue.clear();
+      preload_focus_segment = -1;
       ++route_generation;
       latest_request_serial = 0;
+      int initial_focus_segment = -1;
+      if (!route_index.entries.empty()) {
+        initial_focus_segment = route_index.entries.front().segment;
+      } else {
+        for (const CameraSegmentFile &segment_file : route_index.segment_files) {
+          if (!segment_file.path.empty()) {
+            initial_focus_segment = segment_file.segment;
+            break;
+          }
+        }
+      }
+      if (initial_focus_segment >= 0) {
+        rebuild_preload_queue_locked(initial_focus_segment);
+      }
     }
+    abort_demand_work.store(true);
+    abort_preload_work.store(true);
     active_request.reset();
     displayed_request.reset();
     failed_request.reset();
@@ -683,15 +719,24 @@ struct SidebarCameraFeed::Impl {
     }
     try_upload_nearby_cached_result(request->key);
 
+    bool focus_changed = false;
     {
       std::lock_guard<std::mutex> lock(mutex);
+      if (preload_focus_segment != request->key.segment) {
+        rebuild_preload_queue_locked(request->key.segment);
+        focus_changed = true;
+      }
       request->serial = ++latest_request_serial;
       request->generation = route_generation;
       pending_request = request;
     }
+    abort_demand_work.store(true);
+    if (focus_changed) {
+      abort_preload_work.store(true);
+    }
     active_request = request->key;
     failed_request.reset();
-    cv.notify_one();
+    cv.notify_all();
   }
 
   void draw(float width, bool loading) {
@@ -936,18 +981,129 @@ struct SidebarCameraFeed::Impl {
     return pending_request.has_value() && pending_request->serial != serial;
   }
 
-  void worker_loop() {
-    std::unique_ptr<FrameReader> reader;
-    std::string loaded_path;
-    uint64_t loaded_generation = 0;
-    VisionBuf buffer;
+  void rebuild_preload_queue_locked(int focus_segment) {
+    std::vector<PreloadTask> ordered;
+    ordered.reserve(route_index.segment_files.size());
+    for (const CameraSegmentFile &segment_file : route_index.segment_files) {
+      if (segment_file.path.empty()) continue;
+      if (segment_file.segment == focus_segment) continue;
+      ordered.push_back(PreloadTask{
+        .segment = segment_file.segment,
+        .path = segment_file.path,
+        .generation = route_generation,
+      });
+    }
+    std::sort(ordered.begin(), ordered.end(), [&](const PreloadTask &a, const PreloadTask &b) {
+      const int distance_a = std::abs(a.segment - focus_segment);
+      const int distance_b = std::abs(b.segment - focus_segment);
+      if (distance_a != distance_b) return distance_a < distance_b;
+      return a.segment < b.segment;
+    });
+    preload_queue.assign(ordered.begin(), ordered.end());
+    preload_focus_segment = focus_segment;
+  }
+
+  std::shared_ptr<FrameReader> find_loaded_reader_locked(int segment, uint64_t generation) {
+    if (readers_generation != generation) {
+      readers.clear();
+      loading_segments.clear();
+      readers_generation = generation;
+    }
+    auto it = readers.find(segment);
+    return it != readers.end() ? it->second : nullptr;
+  }
+
+  std::shared_ptr<FrameReader> ensure_reader_loaded(int segment,
+                                                    const std::string &path,
+                                                    uint64_t generation,
+                                                    const char *reason,
+                                                    std::atomic<bool> *abort_flag,
+                                                    bool wait_for_inflight) {
+    while (!stop.load()) {
+      {
+        std::unique_lock<std::mutex> lock(readers_mutex);
+        if (std::shared_ptr<FrameReader> cached = find_loaded_reader_locked(segment, generation)) {
+          return cached;
+        }
+        if (loading_segments.find(segment) != loading_segments.end()) {
+          if (!wait_for_inflight) {
+            return nullptr;
+          }
+          readers_cv.wait(lock, [&]() {
+            return stop.load()
+                || readers_generation != generation
+                || loading_segments.find(segment) == loading_segments.end();
+          });
+          continue;
+        }
+        loading_segments.insert(segment);
+      }
+
+      auto reader = std::make_shared<FrameReader>();
+      const auto load_begin = std::chrono::steady_clock::now();
+      const bool loaded = reader->load(decoder_camera_type(camera_view), path, false, abort_flag, true);
+
+      {
+        std::lock_guard<std::mutex> lock(readers_mutex);
+        if (readers_generation != generation) {
+          readers.clear();
+          loading_segments.clear();
+          readers_generation = generation;
+        }
+        loading_segments.erase(segment);
+        if (loaded) {
+          readers[segment] = reader;
+        }
+      }
+      readers_cv.notify_all();
+
+      if (!loaded) {
+        return nullptr;
+      }
+      if (camera_timing_logging_enabled()) {
+        const double load_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - load_begin).count();
+        std::fprintf(stderr, "camera[%s] %s-load seg=%d %.1fms\n",
+                     camera_view_name(camera_view), reason, segment, load_ms);
+      }
+      return reader;
+    }
+    return nullptr;
+  }
+
+  void preload_worker_loop() {
+    while (true) {
+      std::optional<PreloadTask> preload;
+      {
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [&]() { return stop.load() || !preload_queue.empty(); });
+        if (stop.load()) {
+          break;
+        }
+        preload = preload_queue.front();
+        preload_queue.pop_front();
+      }
+
+      abort_preload_work.store(false);
+      {
+        std::lock_guard<std::mutex> lock(readers_mutex);
+        if (find_loaded_reader_locked(preload->segment, preload->generation)) {
+          continue;
+        }
+      }
+      ensure_reader_loaded(preload->segment, preload->path, preload->generation, "preload",
+                           &abort_preload_work, false);
+    }
+  }
+
+  void demand_worker_loop() {
+    uint64_t handled_serial = 0;
+    VisionBuf decode_buffer;
     bool buffer_allocated = false;
     int buffer_width = 0;
     int buffer_height = 0;
-    uint64_t handled_serial = 0;
 
     while (true) {
-      DecodeRequest request;
+      std::optional<DecodeRequest> request;
       {
         std::unique_lock<std::mutex> lock(mutex);
         cv.wait(lock, [&]() {
@@ -955,72 +1111,67 @@ struct SidebarCameraFeed::Impl {
         });
         if (stop.load()) break;
         request = *pending_request;
-        handled_serial = request.serial;
+        handled_serial = request->serial;
       }
 
-      DecodeResult result{.key = request.key};
-      if (!reader || loaded_path != request.path || loaded_generation != request.generation) {
-        reader = std::make_unique<FrameReader>();
-        loaded_path.clear();
-        loaded_generation = 0;
-        if (buffer_allocated) {
-          buffer.free();
-          buffer_allocated = false;
-          buffer_width = 0;
-          buffer_height = 0;
-        }
-        if (!reader->load(decoder_camera_type(camera_view), request.path, false, &stop, true)) {
-          publish_result(request, std::move(result));
-          continue;
-        }
-        loaded_path = request.path;
-        loaded_generation = request.generation;
+      abort_demand_work.store(false);
+
+      DecodeResult result{.key = request->key};
+      std::shared_ptr<FrameReader> reader = ensure_reader_loaded(request->key.segment, request->path,
+                                                                 request->generation, "demand",
+                                                                 &abort_demand_work, true);
+      if (!reader) {
+        publish_result(*request, std::move(result));
+        continue;
+      }
+      if (has_newer_pending_request(request->serial)) {
+        continue;
       }
 
       const auto decode_begin = std::chrono::steady_clock::now();
-      if (!ensure_decode_buffer(reader.get(), &buffer, buffer_allocated, buffer_width, buffer_height) ||
-          !reader->get(request.key.decode_index, &buffer)) {
-        publish_result(request, std::move(result));
+      if (!ensure_decode_buffer(reader.get(), &decode_buffer, buffer_allocated, buffer_width, buffer_height) ||
+          !reader->get(request->key.decode_index, &decode_buffer)) {
+        publish_result(*request, std::move(result));
         continue;
       }
 
       result.width = reader->width;
       result.height = reader->height;
       result.rgba.resize(static_cast<size_t>(result.width) * static_cast<size_t>(result.height) * 4U, 0);
-      libyuv::NV12ToABGR(buffer.y,
-                         static_cast<int>(buffer.stride),
-                         buffer.uv,
-                         static_cast<int>(buffer.stride),
+      libyuv::NV12ToABGR(decode_buffer.y,
+                         static_cast<int>(decode_buffer.stride),
+                         decode_buffer.uv,
+                         static_cast<int>(decode_buffer.stride),
                          result.rgba.data(),
                          result.width * 4,
                          result.width,
                          result.height);
       result.success = true;
       result.decode_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - decode_begin).count();
-      publish_result(request, std::move(result));
+      publish_result(*request, std::move(result));
 
       for (int offset = 1; offset <= kPrefetchAhead; ++offset) {
-        if (stop.load() || has_newer_pending_request(request.serial)) {
+        if (stop.load() || has_newer_pending_request(request->serial)) {
           break;
         }
-        const int next_index = request.key.decode_index + offset;
+        const int next_index = request->key.decode_index + offset;
         if (next_index < 0 || next_index >= static_cast<int>(reader->getFrameCount())) {
           break;
         }
-        if (!reader->get(next_index, &buffer)) {
+        if (!reader->get(next_index, &decode_buffer)) {
           break;
         }
         DecodeResult prefetched{
-          .key = RequestKey{.segment = request.key.segment, .decode_index = next_index},
+          .key = RequestKey{.segment = request->key.segment, .decode_index = next_index},
           .success = true,
           .width = reader->width,
           .height = reader->height,
         };
         prefetched.rgba.resize(static_cast<size_t>(prefetched.width) * static_cast<size_t>(prefetched.height) * 4U, 0);
-        libyuv::NV12ToABGR(buffer.y,
-                           static_cast<int>(buffer.stride),
-                           buffer.uv,
-                           static_cast<int>(buffer.stride),
+        libyuv::NV12ToABGR(decode_buffer.y,
+                           static_cast<int>(decode_buffer.stride),
+                           decode_buffer.uv,
+                           static_cast<int>(decode_buffer.stride),
                            prefetched.rgba.data(),
                            prefetched.width * 4,
                            prefetched.width,
@@ -1030,24 +1181,34 @@ struct SidebarCameraFeed::Impl {
     }
 
     if (buffer_allocated) {
-      buffer.free();
+      decode_buffer.free();
     }
   }
 
   mutable std::mutex mutex;
   std::condition_variable cv;
-  std::thread worker;
+  std::thread demand_worker;
+  std::vector<std::thread> preload_workers;
   std::atomic<bool> stop{false};
+  std::atomic<bool> abort_demand_work{false};
+  std::atomic<bool> abort_preload_work{false};
   CameraFeedIndex route_index;
   CameraViewKind camera_view = CameraViewKind::Road;
   std::optional<DecodeRequest> pending_request;
   std::optional<DecodeResult> pending_result;
+  std::deque<PreloadTask> preload_queue;
+  int preload_focus_segment = -1;
   std::deque<DecodeResult> cached_results;
   uint64_t latest_request_serial = 0;
   uint64_t route_generation = 1;
   std::optional<RequestKey> active_request;
   std::optional<RequestKey> displayed_request;
   std::optional<RequestKey> failed_request;
+  std::mutex readers_mutex;
+  std::condition_variable readers_cv;
+  std::unordered_map<int, std::shared_ptr<FrameReader>> readers;
+  std::unordered_set<int> loading_segments;
+  uint64_t readers_generation = 0;
   GLuint texture = 0;
   int texture_width = 0;
   int texture_height = 0;

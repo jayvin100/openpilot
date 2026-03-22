@@ -603,6 +603,7 @@ struct UiState {
   bool open_stream = false;
   bool open_load_layout = false;
   bool open_save_layout = false;
+  bool open_preferences = false;
   bool request_close = false;
   bool request_reset_layout = false;
   bool request_save_layout = false;
