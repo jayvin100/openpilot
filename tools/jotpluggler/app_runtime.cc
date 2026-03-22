@@ -697,26 +697,45 @@ struct SidebarCameraFeed::Impl {
   void draw(float width, bool loading) {
     const float preview_width = std::max(1.0f, width);
     const float preview_height = preview_width * preview_aspect();
-    drawSized(ImVec2(preview_width, preview_height), loading);
+    drawSized(ImVec2(preview_width, preview_height), loading, false);
     ImGui::Spacing();
   }
 
-  void drawSized(ImVec2 size, bool loading) {
+  void drawSized(ImVec2 size, bool loading, bool fit_to_pane) {
     size.x = std::max(1.0f, size.x);
     size.y = std::max(1.0f, size.y);
     const float aspect = preview_aspect();
     ImVec2 frame_size = size;
-    if (aspect > 0.0f) {
+    ImVec2 top_left = ImGui::GetCursorScreenPos();
+    ImVec2 uv0(0.0f, 0.0f);
+    ImVec2 uv1(1.0f, 1.0f);
+    if (aspect > 0.0f && !fit_to_pane) {
       frame_size.y = std::min(size.y, size.x * aspect);
       frame_size.x = std::min(size.x, frame_size.y / aspect);
+      top_left = ImVec2(top_left.x + (size.x - frame_size.x) * 0.5f,
+                        top_left.y + (size.y - frame_size.y) * 0.5f);
+    } else if (aspect > 0.0f && fit_to_pane) {
+      const float src_aspect = 1.0f / aspect;
+      const float dst_aspect = size.x / size.y;
+      if (dst_aspect > src_aspect) {
+        const float visible_v = std::clamp(src_aspect / dst_aspect, 0.0f, 1.0f);
+        const float v_pad = (1.0f - visible_v) * 0.5f;
+        uv0.y = v_pad;
+        uv1.y = 1.0f - v_pad;
+      } else if (dst_aspect < src_aspect) {
+        const float visible_u = std::clamp(dst_aspect / src_aspect, 0.0f, 1.0f);
+        const float u_pad = (1.0f - visible_u) * 0.5f;
+        uv0.x = u_pad;
+        uv1.x = 1.0f - u_pad;
+      }
     }
-    const ImVec2 top_left(ImGui::GetCursorScreenPos().x + (size.x - frame_size.x) * 0.5f,
-                          ImGui::GetCursorScreenPos().y + (size.y - frame_size.y) * 0.5f);
     ImGui::InvisibleButton("##camera_feed_sized", size);
     if (texture != 0) {
       ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(texture),
                                            top_left,
-                                           ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y));
+                                           ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y),
+                                           uv0,
+                                           uv1);
     } else {
       ImDrawList *draw_list = ImGui::GetWindowDrawList();
       draw_list->AddRectFilled(top_left, ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y), IM_COL32(213, 217, 223, 255));
@@ -1057,6 +1076,6 @@ void SidebarCameraFeed::draw(float width, bool loading) {
   impl_->draw(width, loading);
 }
 
-void SidebarCameraFeed::drawSized(ImVec2 size, bool loading) {
-  impl_->drawSized(size, loading);
+void SidebarCameraFeed::drawSized(ImVec2 size, bool loading, bool fit_to_pane) {
+  impl_->drawSized(size, loading, fit_to_pane);
 }

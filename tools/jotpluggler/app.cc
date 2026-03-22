@@ -1,4 +1,5 @@
 #include "tools/jotpluggler/jotpluggler.h"
+#include "tools/jotpluggler/app_camera.h"
 #include "tools/jotpluggler/app_map.h"
 #include "imgui_impl_glfw.h"
 
@@ -418,10 +419,17 @@ void sync_ui_state(UiState *state, const SketchLayout &layout) {
     }
     const int pane_count = static_cast<int>(layout.tabs[i].panes.size());
     state->tabs[i].map_panes.resize(static_cast<size_t>(std::max(0, pane_count)));
+    state->tabs[i].camera_panes.resize(static_cast<size_t>(std::max(0, pane_count)));
     state->tabs[i].active_pane_index = pane_count <= 0
       ? 0
       : std::clamp(state->tabs[i].active_pane_index, 0, pane_count - 1);
   }
+}
+
+void resize_tab_pane_state(TabUiState *tab_state, size_t pane_count) {
+  if (tab_state == nullptr) return;
+  tab_state->map_panes.resize(pane_count);
+  tab_state->camera_panes.resize(pane_count);
 }
 
 void sync_route_buffers(UiState *state, const AppSession &session) {
@@ -771,6 +779,42 @@ const char *special_item_label(std::string_view item_id) {
   return "Item";
 }
 
+constexpr std::array<std::pair<const char *, const char *>, 5> kBrowserSpecialItems = {{
+  {"map", "Map"},
+  {"camera_road", "Road Camera"},
+  {"camera_driver", "Driver Camera"},
+  {"camera_wide_road", "Wide Road Camera"},
+  {"camera_qroad", "qRoad Camera"},
+}};
+
+void draw_browser_special_item(AppSession *session, UiState *state, const char *item_id, const char *label) {
+  const ImGuiStyle &style = ImGui::GetStyle();
+  const ImVec2 row_size(std::max(1.0f, ImGui::GetContentRegionAvail().x), ImGui::GetFrameHeight());
+  ImGui::PushID(item_id);
+  ImGui::InvisibleButton("##special_data_row", row_size);
+  const bool hovered = ImGui::IsItemHovered();
+  const bool held = ImGui::IsItemActive();
+  const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  if (hovered) {
+    const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_HeaderActive : ImGuiCol_HeaderHovered);
+    draw_list->AddRectFilled(rect.Min, rect.Max, bg, 0.0f);
+  }
+  ImGui::RenderTextEllipsis(draw_list,
+                            ImVec2(rect.Min.x + style.FramePadding.x, rect.Min.y + style.FramePadding.y),
+                            ImVec2(rect.Max.x - style.FramePadding.x, rect.Max.y),
+                            rect.Max.x - style.FramePadding.x,
+                            label,
+                            nullptr,
+                            nullptr);
+  if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+    ImGui::SetDragDropPayload("JOTP_SPECIAL_ITEM", item_id, std::strlen(item_id) + 1);
+    ImGui::TextUnformatted(label);
+    ImGui::EndDragDropSource();
+  }
+  ImGui::PopID();
+}
+
 std::array<uint8_t, 3> app_next_curve_color(const Pane &pane) {
   static constexpr std::array<std::array<uint8_t, 3>, 10> PALETTE = {{
     {35, 107, 180},
@@ -899,48 +943,6 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
         state->status_text = "Cleared map cache";
       }
     }
-    ImGui::Spacing();
-
-    ImGui::SeparatorText("Data");
-    const std::array<std::pair<const char *, const char *>, 5> special_items = {{
-      {"map", "Map"},
-      {"camera_road", "Road Camera"},
-      {"camera_driver", "Driver Camera"},
-      {"camera_wide_road", "Wide Road Camera"},
-      {"camera_qroad", "qRoad Camera"},
-    }};
-    for (const auto &[item_id, label] : special_items) {
-      const ImGuiStyle &style = ImGui::GetStyle();
-      const ImVec2 row_size(std::max(1.0f, ImGui::GetContentRegionAvail().x), ImGui::GetFrameHeight());
-      ImGui::PushID(item_id);
-      const bool clicked = ImGui::InvisibleButton("##special_data_row", row_size);
-      const bool hovered = ImGui::IsItemHovered();
-      const bool held = ImGui::IsItemActive();
-      const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-      ImDrawList *draw_list = ImGui::GetWindowDrawList();
-      if (hovered) {
-        const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_HeaderActive : ImGuiCol_HeaderHovered);
-        draw_list->AddRectFilled(rect.Min, rect.Max, bg, 0.0f);
-      }
-      ImGui::RenderTextEllipsis(draw_list,
-                                ImVec2(rect.Min.x + style.FramePadding.x, rect.Min.y + style.FramePadding.y),
-                                ImVec2(rect.Max.x - style.FramePadding.x, rect.Max.y),
-                                rect.Max.x - style.FramePadding.x,
-                                label,
-                                nullptr,
-                                nullptr);
-      if (clicked) {
-        apply_special_item_to_active_pane(session, state, item_id);
-      }
-      if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-        ImGui::SetDragDropPayload("JOTP_SPECIAL_ITEM", item_id, std::strlen(item_id) + 1);
-        ImGui::TextUnformatted(label);
-        ImGui::EndDragDropSource();
-      }
-      ImGui::PopID();
-    }
-    ImGui::Spacing();
-
     ImGui::SeparatorText("Layout");
     const std::vector<std::string> layouts = available_layout_names();
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -979,7 +981,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     ImGui::EndDisabled();
     ImGui::Spacing();
 
-    ImGui::SeparatorText("Timeseries List");
+    ImGui::SeparatorText("Data Sources");
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##browser_filter", "Search...", state->browser_filter.data(), state->browser_filter.size());
     const float footer_height = ImGui::GetFrameHeightWithSpacing()
@@ -987,17 +989,26 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
                               + 16.0f
                               + (show_load_progress ? (ImGui::GetFrameHeightWithSpacing() + 12.0f) : 0.0f);
     const float browser_height = std::max(1.0f, ImGui::GetContentRegionAvail().y - footer_height);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 2.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 3.0f));
     if (ImGui::BeginChild("##timeseries_browser", ImVec2(0.0f, browser_height), true)) {
       const std::string filter = lowercase(string_from_buffer(state->browser_filter));
       std::vector<std::string> visible_paths;
       for (const BrowserNode &node : session->browser_nodes) {
         collect_visible_leaf_paths(node, filter, &visible_paths);
       }
+      for (const auto &[item_id, label] : kBrowserSpecialItems) {
+        draw_browser_special_item(session, state, item_id, label);
+      }
+      ImGui::Dummy(ImVec2(0.0f, 2.0f));
+      ImGui::Separator();
+      ImGui::Dummy(ImVec2(0.0f, 2.0f));
       for (const BrowserNode &node : session->browser_nodes) {
         draw_browser_node(session, node, state, filter, visible_paths);
       }
     }
     ImGui::EndChild();
+    ImGui::PopStyleVar(2);
 
     ImGui::SeparatorText("Custom Series");
     if (ImGui::Button("Create...", ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
@@ -1130,16 +1141,21 @@ bool pane_is_empty_for_special_item(const Pane &pane) {
   return pane.kind == PaneKind::Plot && pane.curves.empty();
 }
 
+bool pane_can_accept_special_item(const Pane &pane) {
+  return pane_is_empty_for_special_item(pane) || pane.kind == PaneKind::Map || pane.kind == PaneKind::Camera;
+}
+
 bool convert_pane_to_map(WorkspaceTab *tab, TabUiState *tab_state, int pane_index) {
   if (tab == nullptr || tab_state == nullptr) return false;
   if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) return false;
   Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
+  const PaneKind previous_kind = pane.kind;
   if (pane.kind == PaneKind::Map) {
     tab_state->active_pane_index = pane_index;
     return false;
   }
   pane.kind = PaneKind::Map;
-  if (pane.title == UNTITLED_PANE_TITLE) {
+  if (pane.title == UNTITLED_PANE_TITLE || previous_kind != PaneKind::Plot) {
     pane.title = "Map";
   }
   tab_state->active_pane_index = pane_index;
@@ -1157,6 +1173,8 @@ bool convert_pane_to_camera(WorkspaceTab *tab, TabUiState *tab_state, int pane_i
   pane.kind = PaneKind::Camera;
   pane.camera_view = view;
   pane.title = camera_view_label(view);
+  resize_tab_pane_state(tab_state, tab->panes.size());
+  tab_state->camera_panes[static_cast<size_t>(pane_index)].fit_to_pane = true;
   tab_state->active_pane_index = pane_index;
   return true;
 }
@@ -1169,8 +1187,8 @@ bool apply_special_item_to_active_pane(AppSession *session, UiState *state, std:
     state->status_text = "No active pane";
     return false;
   }
-  if (!pane_is_empty_for_special_item(tab->panes[static_cast<size_t>(tab_state->active_pane_index)])) {
-    state->status_text = std::string(special_item_label(item_id)) + " can only be added to an empty pane";
+  if (!pane_can_accept_special_item(tab->panes[static_cast<size_t>(tab_state->active_pane_index)])) {
+    state->status_text = std::string(special_item_label(item_id)) + " can only replace another special pane or use an empty pane";
     return false;
   }
 
@@ -1187,7 +1205,7 @@ bool apply_special_item_to_active_pane(AppSession *session, UiState *state, std:
     state->status_text = std::string(special_item_label(item_id)) + " already shown in pane";
     return false;
   }
-  tab_state->map_panes.resize(tab->panes.size());
+  resize_tab_pane_state(tab_state, tab->panes.size());
   state->undo.push(before_layout);
   if (mark_layout_dirty(session, state)) {
     state->status_text = std::string(special_item_label(item_id)) + " added to active pane";
@@ -2395,12 +2413,14 @@ std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_inde
         return action;
       };
       if (const ImGuiPayload *p = try_accept("JOTP_BROWSER_PATHS"); p && p->Delivery) {
-        PaneDropAction action;
-        action.from_browser = true;
-        action.browser_paths = decode_browser_drag_payload(static_cast<const char *>(p->Data));
-        return deliver(std::move(action));
+        if (zone.zone != PaneDropZone::Center || target_pane.kind == PaneKind::Plot) {
+          PaneDropAction action;
+          action.from_browser = true;
+          action.browser_paths = decode_browser_drag_payload(static_cast<const char *>(p->Data));
+          return deliver(std::move(action));
+        }
       }
-      if (zone.zone == PaneDropZone::Center ? pane_is_empty_for_special_item(target_pane) : true) {
+      if (zone.zone == PaneDropZone::Center ? pane_can_accept_special_item(target_pane) : true) {
         if (const ImGuiPayload *p = try_accept("JOTP_SPECIAL_ITEM"); p && p->Delivery) {
           PaneDropAction action;
           action.special_item_id = static_cast<const char *>(p->Data);
@@ -2408,9 +2428,11 @@ std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_inde
         }
       }
       if (const ImGuiPayload *p = try_accept("JOTP_PANE_CURVE"); p && p->Delivery) {
-        PaneDropAction action;
-        action.curve_ref = *static_cast<const PaneCurveDragPayload *>(p->Data);
-        return deliver(std::move(action));
+        if (zone.zone != PaneDropZone::Center || target_pane.kind == PaneKind::Plot) {
+          PaneDropAction action;
+          action.curve_ref = *static_cast<const PaneCurveDragPayload *>(p->Data);
+          return deliver(std::move(action));
+        }
       }
       ImGui::EndDragDropTarget();
     }
@@ -2496,7 +2518,7 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
   if (dock_changed) {
     mark_tab_dock_dirty(state, state->active_tab_index);
   }
-  tab_state->map_panes.resize(tab->panes.size());
+  resize_tab_pane_state(tab_state, tab->panes.size());
   bool autosave_ok = true;
   if (layout_changed) {
     state->undo.push(before_layout);
@@ -2506,18 +2528,6 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
     state->status_text = "Workspace updated";
   }
   return true;
-}
-
-void draw_camera_pane(AppSession *session, UiState *state, const Pane &pane) {
-  SidebarCameraFeed *feed = session->pane_camera_feeds[static_cast<size_t>(pane.camera_view)].get();
-  if (feed == nullptr) {
-    ImGui::TextDisabled("Camera unavailable");
-    return;
-  }
-  if (state->has_tracker_time) {
-    feed->update(state->tracker_time);
-  }
-  feed->drawSized(ImGui::GetContentRegionAvail(), session->async_route_loading);
 }
 
 bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropAction &action) {
@@ -2530,8 +2540,8 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
       if (action.target_pane_index < 0 || action.target_pane_index >= static_cast<int>(tab->panes.size())) {
         return false;
       }
-      if (!pane_is_empty_for_special_item(tab->panes[static_cast<size_t>(action.target_pane_index)])) {
-        state->status_text = std::string(special_item_label(action.special_item_id)) + " can only be added to an empty pane";
+      if (!pane_can_accept_special_item(tab->panes[static_cast<size_t>(action.target_pane_index)])) {
+        state->status_text = std::string(special_item_label(action.special_item_id)) + " can only replace another special pane or use an empty pane";
         return false;
       }
       const SketchLayout before_layout = session->layout;
@@ -2547,7 +2557,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
         state->status_text = std::string(special_item_label(action.special_item_id)) + " already shown in pane";
         return false;
       }
-      tab_state->map_panes.resize(tab->panes.size());
+      resize_tab_pane_state(tab_state, tab->panes.size());
       state->undo.push(before_layout);
       if (mark_layout_dirty(session, state)) {
         state->status_text = std::string(special_item_label(action.special_item_id)) + " added to pane";
@@ -2557,7 +2567,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
     const SketchLayout before_layout = session->layout;
     if (split_pane(tab, action.target_pane_index, action.zone)) {
       tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
-      tab_state->map_panes.resize(tab->panes.size());
+      resize_tab_pane_state(tab_state, tab->panes.size());
       bool changed = false;
       if (action.special_item_id == "map") {
         changed = convert_pane_to_map(tab, tab_state, tab_state->active_pane_index);
@@ -2589,7 +2599,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
     const SketchLayout before_layout = session->layout;
     if (split_pane(tab, action.target_pane_index, action.zone)) {
       tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
-      tab_state->map_panes.resize(tab->panes.size());
+      resize_tab_pane_state(tab_state, tab->panes.size());
       int inserted_count = 0;
       for (const std::string &path : action.browser_paths) {
         if (app_find_route_series(*session, path) == nullptr) continue;
@@ -2645,7 +2655,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
   const SketchLayout before_layout = session->layout;
   if (split_pane(tab, action.target_pane_index, action.zone, curve)) {
     tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
-    tab_state->map_panes.resize(tab->panes.size());
+    resize_tab_pane_state(tab_state, tab->panes.size());
     mark_tab_dock_dirty(state, state->active_tab_index);
     state->undo.push(before_layout);
     if (mark_layout_dirty(session, state)) {
@@ -2743,16 +2753,14 @@ void draw_pane_windows(AppSession *session, UiState *state) {
       if (pane.kind == PaneKind::Map) {
         draw_map_pane(session, state, &pane, static_cast<int>(i));
       } else if (pane.kind == PaneKind::Camera) {
-        draw_camera_pane(session, state, pane);
+        draw_camera_pane(session, state, tab_state, static_cast<int>(i), pane);
       } else {
         draw_plot(*session, &pane, state);
       }
       draw_pane_frame_overlay();
       close_pane_requested = draw_pane_close_button_overlay();
       menu_action = draw_pane_context_menu(*tab, static_cast<int>(i));
-      if (pane.kind == PaneKind::Plot) {
-        drop_action = draw_pane_drop_target(state->active_tab_index, static_cast<int>(i), pane);
-      }
+      drop_action = draw_pane_drop_target(state->active_tab_index, static_cast<int>(i), pane);
     }
     ImGui::End();
     ImGui::PopStyleVar();

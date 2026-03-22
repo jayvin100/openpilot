@@ -487,10 +487,15 @@ struct TabUiState {
     double center_lon = 0.0;
   };
 
+  struct CameraPaneState {
+    bool fit_to_pane = true;
+  };
+
   bool dock_needs_build = true;
   int active_pane_index = 0;
   int runtime_id = 0;
   std::vector<MapPaneState> map_panes;
+  std::vector<CameraPaneState> camera_panes;
 };
 
 struct CustomSeriesEditorState {
@@ -933,7 +938,7 @@ public:
   void setCameraIndex(const CameraFeedIndex &camera_index, CameraViewKind view);
   void update(double tracker_time);
   void draw(float width, bool loading);
-  void drawSized(ImVec2 size, bool loading);
+  void drawSized(ImVec2 size, bool loading, bool fit_to_pane = false);
 
 private:
   struct Impl;
