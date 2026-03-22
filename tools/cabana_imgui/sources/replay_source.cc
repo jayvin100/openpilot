@@ -113,10 +113,9 @@ bool ReplaySource::eventFilter(const Event *event) {
 bool ReplaySource::pollEvents() {
   bool changed = false;
 
-  // TODO: merge segments in background thread when charts/history are wired
-  // For now, just acknowledge the merge without processing events on the main thread.
-  // The live message list works from eventFilter alone.
-  segments_merged_.store(false);
+  if (segments_merged_.load(std::memory_order_relaxed) && mergeSegments(1)) {
+    changed = true;
+  }
 
   // Copy dirty messages to UI at throttled rate
   if (msgs_dirty_.exchange(false, std::memory_order_relaxed)) {
@@ -128,11 +127,13 @@ bool ReplaySource::pollEvents() {
   return changed;
 }
 
-void ReplaySource::mergeSegments() {
+bool ReplaySource::mergeSegments(size_t max_segments) {
+  size_t merged_segments = 0;
   auto event_data = replay_->getEventData();
   for (const auto &[n, seg] : event_data->segments) {
     if (processed_segments_.count(n)) continue;
     processed_segments_.insert(n);
+    merged_segments++;
 
     std::vector<const CanEvent *> new_events;
     new_events.reserve(seg->log->events.size());
@@ -152,6 +153,10 @@ void ReplaySource::mergeSegments() {
       events_[id].push_back(e);
     }
     all_events_.insert(all_events_.end(), new_events.begin(), new_events.end());
+
+    if (merged_segments >= max_segments) {
+      break;
+    }
   }
 
   // Sort all events by time
@@ -161,6 +166,10 @@ void ReplaySource::mergeSegments() {
     std::sort(evts.begin(), evts.end(),
               [](const CanEvent *a, const CanEvent *b) { return a->mono_time < b->mono_time; });
   }
+
+  const bool has_more = processed_segments_.size() < event_data->segments.size();
+  segments_merged_.store(has_more, std::memory_order_relaxed);
+  return merged_segments > 0;
 }
 
 const CanEvent *ReplaySource::allocEvent(uint64_t mono_time, const cereal::CanData::Reader &c) {

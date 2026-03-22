@@ -58,7 +58,7 @@ public:
   Replay *replay() { return replay_.get(); }
 
 private:
-  void mergeSegments();
+  bool mergeSegments(size_t max_segments);
   bool eventFilter(const Event *event);
   const CanEvent *allocEvent(uint64_t mono_time, const cereal::CanData::Reader &c);
 

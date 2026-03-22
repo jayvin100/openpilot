@@ -1,5 +1,6 @@
 #include "ui/panes/detail_pane.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -153,6 +154,92 @@ static void render_signal_list(const MessageId &id, const uint8_t *data, int dat
   }
 }
 
+static std::string format_signal_value(const cabana::dbc::Signal &sig, double value) {
+  char buf[64];
+  if (sig.factor == 1.0 && sig.offset == 0.0) {
+    snprintf(buf, sizeof(buf), "%.0f", value);
+  } else {
+    snprintf(buf, sizeof(buf), "%.2f", value);
+  }
+  return buf;
+}
+
+static std::string format_hex_data(const uint8_t *data, int data_size) {
+  std::string hex;
+  hex.reserve(data_size * 3);
+  char buf[4];
+  for (int i = 0; i < data_size; ++i) {
+    if (i > 0) hex.push_back(' ');
+    snprintf(buf, sizeof(buf), "%02X", data[i]);
+    hex += buf;
+  }
+  return hex;
+}
+
+static void render_history_view(const MessageId &id, cabana::ReplaySource *src) {
+  auto it = src->eventsMap().find(id);
+  if (it == src->eventsMap().end() || it->second.empty()) {
+    ImGui::TextDisabled("Waiting for indexed CAN events...");
+    return;
+  }
+
+  const auto *dbc_msg = cabana::dbc::dbc_manager().msg(id.address);
+  const bool has_signals = dbc_msg && !dbc_msg->signals.empty();
+  static bool hex_mode = false;
+  if (has_signals) {
+    ImGui::Checkbox("Hex", &hex_mode);
+    ImGui::SameLine();
+  }
+  const int row_count = std::min<size_t>(it->second.size(), 250);
+  ImGui::TextDisabled("Latest %d / %zu events", row_count, it->second.size());
+  ImGui::Separator();
+
+  const bool show_hex = hex_mode || !has_signals;
+  const int column_count = show_hex ? 2 : 1 + (int)dbc_msg->signals.size();
+  if (ImGui::BeginTable("##history", column_count,
+                        ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                        ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                        ImGuiTableFlags_Resizable)) {
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+    if (show_hex) {
+      ImGui::TableSetupColumn("Data", ImGuiTableColumnFlags_WidthStretch);
+    } else {
+      for (const auto &sig : dbc_msg->signals) {
+        std::string label = sig.unit.empty() ? sig.name : (sig.name + " (" + sig.unit + ")");
+        ImGui::TableSetupColumn(label.c_str(), ImGuiTableColumnFlags_WidthFixed, 96.0f);
+      }
+    }
+    ImGui::TableHeadersRow();
+
+    ImGuiListClipper clipper;
+    clipper.Begin(row_count);
+    while (clipper.Step()) {
+      for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+        const auto *e = it->second[it->second.size() - 1 - row];
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("%.3f", src->replay()->toSeconds(e->mono_time));
+
+        if (show_hex) {
+          ImGui::TableNextColumn();
+          const std::string hex = format_hex_data(e->dat, e->size);
+          ImGui::TextUnformatted(hex.c_str());
+        } else {
+          for (const auto &sig : dbc_msg->signals) {
+            ImGui::TableNextColumn();
+            const double value = sig.getValue(e->dat, e->size);
+            const std::string formatted = format_signal_value(sig, value);
+            ImGui::TextUnformatted(formatted.c_str());
+          }
+        }
+      }
+    }
+
+    ImGui::EndTable();
+  }
+}
+
 void detail() {
   ImGui::Begin("Detail");
 
@@ -227,7 +314,7 @@ void detail() {
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("History")) {
-      ImGui::TextDisabled("History view not yet implemented");
+      render_history_view(id, src);
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
