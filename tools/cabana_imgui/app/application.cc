@@ -42,6 +42,10 @@ static std::string window_title(const std::string &route) {
   return route.empty() ? "Cabana" : ("Cabana - " + route);
 }
 
+bool Application::videoEnabled() const {
+  return (replay_flags_ & REPLAY_FLAG_NO_VIPC) == 0;
+}
+
 bool Application::parseArgs(int argc, char *argv[]) {
   static struct option long_opts[] = {
     {"demo", no_argument, nullptr, 'd'},

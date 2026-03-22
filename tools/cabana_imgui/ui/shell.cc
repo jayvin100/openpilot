@@ -15,23 +15,26 @@ namespace shell {
 
 static bool first_frame = true;
 static constexpr float STATUS_BAR_HEIGHT = 20.0f;
+static constexpr float LEFT_DOCK_RATIO = 0.21f;
+static constexpr float RIGHT_DOCK_RATIO = 0.36f;
+static constexpr float RIGHT_TOP_RATIO = 0.58f;
 
 static void setup_default_layout(ImGuiID dockspace_id) {
   ImGui::DockBuilderRemoveNode(dockspace_id);
   ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
   ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetMainViewport()->Size);
 
-  // Left: Messages (25%)
+  // Left: Messages
   ImGuiID left, remainder;
-  ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.22f, &left, &remainder);
+  ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, LEFT_DOCK_RATIO, &left, &remainder);
 
-  // Right: Video+Charts (25%), Center: Detail
+  // Right: Video+Charts, Center: Detail
   ImGuiID right, center;
-  ImGui::DockBuilderSplitNode(remainder, ImGuiDir_Right, 0.30f, &right, &center);
+  ImGui::DockBuilderSplitNode(remainder, ImGuiDir_Right, RIGHT_DOCK_RATIO, &right, &center);
 
-  // Right split: Video top (45%), Charts bottom (55%)
+  // Right split: Video top, Charts bottom
   ImGuiID right_top, right_bottom;
-  ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.55f, &right_top, &right_bottom);
+  ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, RIGHT_TOP_RATIO, &right_top, &right_bottom);
 
   ImGui::DockBuilderDockWindow("Messages", left);
   ImGui::DockBuilderDockWindow("Detail", center);
@@ -119,10 +122,12 @@ void render() {
   ImGui::PopStyleVar(3);
 
   ImGuiID dockspace_id = ImGui::GetID("CabanaDockSpace");
+  auto &st = cabana::app_state();
 
-  if (first_frame) {
+  if (first_frame || st.reset_layout_requested) {
     setup_default_layout(dockspace_id);
     first_frame = false;
+    st.reset_layout_requested = false;
   }
 
   ImGui::DockSpace(dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_None);

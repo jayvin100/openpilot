@@ -1,6 +1,7 @@
 #include "ui/panes/messages_pane.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -74,22 +75,26 @@ void messages() {
     }
   }
 
-  // Info row
+  // Summary row
   int total_msgs = (int)rows.size();
   auto &dbc = cabana::dbc::dbc_manager();
-  ImGui::Text("%d Messages (%d DBC Messages, %d Signals)",
-              total_msgs, dbc.msgCount(), dbc.signalCount());
-  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 96);
+  ImGui::Text("%d Messages", total_msgs);
+  ImGui::SameLine();
+  ImGui::TextDisabled("(%d DBC Messages, %d Signals)", dbc.msgCount(), dbc.signalCount());
+
+  // Search row
   static char search[256] = "";
-  ImGui::SetNextItemWidth(100);
+  ImGui::SetNextItemWidth(-FLT_MIN);
   ImGui::InputTextWithHint("##search", "Search", search, sizeof(search));
 
-  // Filter buttons
+  // Filter actions are still pending parity wiring.
+  ImGui::BeginDisabled();
   flat_button("Suppress Highlighted");
   ImGui::SameLine();
-  flat_button("Clear CRCs");
+  flat_button("Clear CRC");
   ImGui::SameLine();
-  flat_button("Suppress Signals");
+  flat_button("Hide Signals");
+  ImGui::EndDisabled();
 
   ImGui::Separator();
 

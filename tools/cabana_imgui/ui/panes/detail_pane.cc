@@ -27,7 +27,7 @@ static void render_splash() {
     ImGui::PushFont(splash, 52.0f * cabana::theme::dpi_scale());
     ImVec2 sz = ImGui::CalcTextSize(text);
     ImGui::SetCursorPos(ImVec2(cx - sz.x * 0.5f, cy));
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 0.50f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.58f, 0.58f, 0.62f));
     ImGui::TextUnformatted(text);
     ImGui::PopStyleColor();
     ImGui::PopFont();
@@ -37,7 +37,7 @@ static void render_splash() {
   {
     const char *sub = st.route_loading ? "Loading route data..." :
                      !st.route_load_error.empty() ? "Route load failed" :
-                     "<-Select a message to view details";
+                     "Select a message to view bytes, signals, and history";
     float sw = ImGui::CalcTextSize(sub).x;
     ImGui::SetCursorPosX(cx - sw * 0.5f);
     ImGui::TextDisabled("%s", sub);
@@ -55,7 +55,7 @@ static void render_splash() {
   };
   shortcut("Pause", "Space");
   shortcut("Help", "F1");
-  shortcut("WhatsThis", "Shift+F1");
+  shortcut("What's This", "Shift+F1");
 }
 
 // Color for a byte value (simple heat map)

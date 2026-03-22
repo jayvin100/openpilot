@@ -1,5 +1,6 @@
 #include "ui/panes/video_pane.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -19,40 +20,98 @@ static bool icon_button(const char *id, std::string_view icon_id) {
   return ImGui::Button(label.c_str());
 }
 
+static std::string ellipsize_middle(const std::string &text, float max_width) {
+  if (text.empty() || ImGui::CalcTextSize(text.c_str()).x <= max_width) {
+    return text;
+  }
+
+  constexpr const char *ellipsis = "...";
+  if (ImGui::CalcTextSize(ellipsis).x > max_width) {
+    return {};
+  }
+
+  size_t head = text.size() / 2;
+  size_t tail = text.size() - head;
+  while (head > 2 && tail > 2) {
+    std::string result = text.substr(0, head) + ellipsis + text.substr(text.size() - tail);
+    if (ImGui::CalcTextSize(result.c_str()).x <= max_width) {
+      return result;
+    }
+    if (head >= tail) {
+      --head;
+    } else {
+      --tail;
+    }
+  }
+
+  return ellipsis;
+}
+
+static void render_meta_row(const char *label, const std::string &value) {
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextDisabled("%s", label);
+  ImGui::SameLine(74.0f);
+  const float max_width = std::max(40.0f, ImGui::GetContentRegionAvail().x);
+  const std::string display = ellipsize_middle(value, max_width);
+  ImGui::TextUnformatted(display.c_str());
+  if (display != value && ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", value.c_str());
+  }
+}
+
+static void draw_empty_video_state(const char *headline, const char *detail) {
+  ImVec2 avail = ImGui::GetContentRegionAvail();
+  float video_h = std::max(120.0f, avail.y * 0.55f);
+  ImVec2 p = ImGui::GetCursorScreenPos();
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, ImVec2(p.x + avail.x, p.y + video_h), IM_COL32(7, 7, 7, 255), 2.0f);
+  dl->AddRect(p, ImVec2(p.x + avail.x, p.y + video_h), IM_COL32(70, 70, 70, 255), 2.0f);
+
+  const ImVec2 headline_size = ImGui::CalcTextSize(headline);
+  const ImVec2 detail_size = ImGui::CalcTextSize(detail);
+  const float center_x = p.x + avail.x * 0.5f;
+  const float center_y = p.y + video_h * 0.5f;
+
+  dl->AddText(ImVec2(center_x - headline_size.x * 0.5f, center_y - 16.0f),
+              IM_COL32(208, 208, 208, 255), headline);
+  dl->AddText(ImVec2(center_x - detail_size.x * 0.5f, center_y + 6.0f),
+              IM_COL32(145, 145, 145, 255), detail);
+  ImGui::Dummy(ImVec2(avail.x, video_h));
+}
+
 void video() {
   ImGui::Begin("Video");
 
   auto &st = cabana::app_state();
   auto *src = app() ? app()->source() : nullptr;
+  const bool video_enabled = app() ? app()->videoEnabled() : true;
 
   // Route info header
   if (!st.route_name.empty()) {
-    ImGui::Text("ROUTE: %s", st.route_name.c_str());
+    render_meta_row("Route", st.route_name);
     if (!st.car_fingerprint.empty()) {
-      ImGui::SameLine();
-      ImGui::TextDisabled("FINGERPRINT: %s", st.car_fingerprint.c_str());
+      render_meta_row("Fingerprint", st.car_fingerprint);
     }
   } else {
-    ImGui::TextUnformatted("ROUTE:");
-    ImGui::SameLine();
-    ImGui::TextDisabled(st.route_loading ? "(loading route...)" : "(no route loaded)");
+    render_meta_row("Route", st.route_loading ? "Loading route..." : "No route loaded");
   }
 
   if (!st.route_load_error.empty()) {
-    ImGui::SameLine();
     ImGui::TextColored(ImVec4(0.85f, 0.35f, 0.35f, 1.0f), "load failed");
   }
 
   ImGui::Separator();
 
-  // Video area (black)
+  if (!src) {
+    draw_empty_video_state(st.route_loading ? "Loading route..." : "Video unavailable",
+                           st.route_loading ? "Waiting for replay data" : "Open a route to view video");
+  } else if (!video_enabled) {
+    draw_empty_video_state("Video disabled", "Replay started with --no-vipc");
+  } else {
+    draw_empty_video_state("Video preview unavailable", "Video rendering is not wired yet");
+  }
+
   ImVec2 avail = ImGui::GetContentRegionAvail();
-  float video_h = avail.y * 0.55f;
-  if (video_h < 60) video_h = 60;
-  ImVec2 p = ImGui::GetCursorScreenPos();
-  ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + avail.x, p.y + video_h),
-                                            IM_COL32(0, 0, 0, 255));
-  ImGui::Dummy(ImVec2(avail.x, video_h));
 
   // Timeline bar
   {

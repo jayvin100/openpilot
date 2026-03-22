@@ -13,7 +13,6 @@
 #include "core/app_state.h"
 #include "dbc/dbc_manager.h"
 #include "sources/replay_source.h"
-#include "ui/bootstrap_icons.h"
 
 namespace cabana {
 namespace panes {
@@ -21,13 +20,6 @@ namespace panes {
 namespace {
 
 constexpr int kMaxPlotPoints = 1500;
-
-static bool icon_button(const char *id, std::string_view icon_id) {
-  const char *g = cabana::icons::glyph(icon_id);
-  if (g[0] == '\0') return ImGui::Button(id);
-  std::string label = std::string(g) + "##" + id;
-  return ImGui::Button(label.c_str());
-}
 
 static const cabana::dbc::Signal *find_signal(const ChartSignalRef &ref) {
   const auto *msg = cabana::dbc::dbc_manager().msg(ref.msg_id.address);
@@ -95,6 +87,40 @@ static void render_chart_series_controls(const ChartDefinition &chart, int chart
   }
 }
 
+static void render_chart_toolbar(AppState &st) {
+  if (ImGui::Button("New Chart")) {
+    st.addEmptyChart();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("New Tab")) {
+    st.newChartTab();
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("%d total", st.totalChartCount());
+
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Window");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(std::min(180.0f, ImGui::GetContentRegionAvail().x));
+  ImGui::SliderFloat("##range", &st.chart_range_sec, 1.0f, 60.0f, "%.0f s");
+
+  ImGui::BeginDisabled(st.selected_chart < 0);
+  if (ImGui::Button("Split")) {
+    st.splitChart(st.selected_chart);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Remove")) {
+    st.removeChart(st.selected_chart);
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(st.totalChartCount() == 0);
+  if (ImGui::Button("Clear All")) {
+    st.clearCharts();
+  }
+  ImGui::EndDisabled();
+}
+
 }  // namespace
 
 void charts() {
@@ -105,50 +131,22 @@ void charts() {
   auto &initial_tab = st.ensureChartTab();
   (void)initial_tab;
 
-  if (icon_button("new_chart", "file-plus")) {
-    st.addEmptyChart();
-  }
-  ImGui::SameLine();
-  if (icon_button("new_tab", "window-stack")) {
-    st.newChartTab();
-  }
-  ImGui::SameLine();
-  ImGui::Text("Charts: %d", st.totalChartCount());
-  ImGui::SameLine();
-  ImGui::TextDisabled("Type: Line");
-  ImGui::SameLine();
-
-  ImGui::SetNextItemWidth(100);
-  ImGui::SliderFloat("##range", &st.chart_range_sec, 1.0f, 60.0f, "%.0f s");
-
-  ImGui::SameLine();
-  ImGui::BeginDisabled(st.selected_chart < 0);
-  if (icon_button("split_chart", "layout-split")) {
-    st.splitChart(st.selected_chart);
-  }
-  ImGui::SameLine();
-  if (icon_button("remove_chart", "x-lg")) {
-    st.removeChart(st.selected_chart);
-  }
-  ImGui::EndDisabled();
-  ImGui::SameLine();
-  ImGui::BeginDisabled(st.totalChartCount() == 0);
-  if (icon_button("remove_all", "x-square")) {
-    st.clearCharts();
-  }
-  ImGui::EndDisabled();
+  render_chart_toolbar(st);
 
   int active_tab_index = st.current_chart_tab;
   int remove_tab_index = -1;
   if (ImGui::BeginTabBar("##chart_tabs", ImGuiTabBarFlags_AutoSelectNewTabs)) {
     for (int i = 0; i < (int)st.chart_tabs.size(); ++i) {
       auto &tab = st.chart_tabs[i];
-      std::string label = "Tab " + std::to_string(i + 1) + " (" + std::to_string(tab.charts.size()) + ")";
+      std::string label = "Tab " + std::to_string(i + 1);
       bool open = true;
       bool *open_ptr = st.chart_tabs.size() > 1 ? &open : nullptr;
       if (ImGui::BeginTabItem(label.c_str(), open_ptr)) {
         active_tab_index = i;
         ImGui::EndTabItem();
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%zu chart%s", tab.charts.size(), tab.charts.size() == 1 ? "" : "s");
       }
       if (!open) {
         remove_tab_index = i;
@@ -165,7 +163,8 @@ void charts() {
   const auto *tab = st.activeChartTab();
   if (!tab || tab->charts.empty()) {
     ImGui::Separator();
-    ImGui::TextDisabled("No charts in this tab. Use the signal plot toggles or create an empty chart and Shift-click a signal.");
+    ImGui::TextDisabled("No charts open in this tab.");
+    ImGui::TextDisabled("Use Plot in Signals to add one.");
     ImGui::End();
     return;
   }
@@ -202,6 +201,7 @@ void charts() {
     if (ImGui::Selectable(chart_title(chart).c_str(), selected, 0, ImVec2(-1, 0))) {
       st.selected_chart = chart_idx;
     }
+    ImGui::TextDisabled("%zu signal%s", chart.signals.size(), chart.signals.size() == 1 ? "" : "s");
 
     if (!chart.signals.empty()) {
       render_chart_series_controls(chart, chart_idx, &pending_remove_signal);

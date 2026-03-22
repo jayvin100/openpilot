@@ -42,6 +42,7 @@ struct AppState {
   // Selection state
   bool has_selection = false;
   MessageId selected_msg;
+  bool reset_layout_requested = false;
 
   // Chart state
   float chart_range_sec = 7.0f;

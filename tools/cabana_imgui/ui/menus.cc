@@ -46,7 +46,9 @@ void render() {
       ImGui::Separator();
       ImGui::MenuItem("Messages", nullptr, nullptr);
       ImGui::Separator();
-      if (ImGui::MenuItem("Reset Window Layout")) {}
+      if (ImGui::MenuItem("Reset Window Layout")) {
+        cabana::app_state().reset_layout_requested = true;
+      }
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Tools")) {

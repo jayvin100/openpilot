@@ -17,6 +17,7 @@ public:
   void shutdown();
 
   cabana::ReplaySource *source() { return source_.get(); }
+  bool videoEnabled() const;
 
 private:
   bool parseArgs(int argc, char *argv[]);
