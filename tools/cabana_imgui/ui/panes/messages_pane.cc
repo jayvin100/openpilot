@@ -49,20 +49,25 @@ void messages() {
   // Read messages from source (already on main thread, no copy needed)
   static std::vector<MsgRow> rows;
   static int last_msg_count = 0;
+  static const cabana::ReplaySource *last_src = nullptr;
+  static std::string last_dbc_name;
 
   if (src) {
     const auto &msgs = src->messages();
+    const std::string loaded_dbc_name = cabana::dbc::dbc_manager().loadedName();
 
-    if ((int)msgs.size() != last_msg_count) {
+    if (src != last_src || loaded_dbc_name != last_dbc_name || (int)msgs.size() != last_msg_count) {
+      last_src = src;
+      last_dbc_name = loaded_dbc_name;
       last_msg_count = (int)msgs.size();
       rows.clear();
       rows.reserve(msgs.size());
       auto &dbc = cabana::dbc::dbc_manager();
       for (const auto &[id, m] : msgs) {
-        const char *dbc_name = dbc.msgName(id.address);
+        const char *msg_name = dbc.msgName(id.address);
         std::string name;
-        if (dbc_name) {
-          name = dbc_name;
+        if (msg_name) {
+          name = msg_name;
         } else {
           char hex[16];
           snprintf(hex, sizeof(hex), "0x%X", id.address);
@@ -83,6 +88,11 @@ void messages() {
         }
       }
     }
+  } else if (last_src != nullptr) {
+    rows.clear();
+    last_msg_count = 0;
+    last_src = nullptr;
+    last_dbc_name.clear();
   }
 
   // Summary row
@@ -159,8 +169,7 @@ void messages() {
           !ImGui::GetIO().WantTextInput) {
         auto select_visible = [&](int visible_index) {
           visible_index = std::clamp(visible_index, 0, (int)visible.size() - 1);
-          st.has_selection = true;
-          st.selected_msg = rows[visible[visible_index]].id;
+          st.setSelectedMessage(rows[visible[visible_index]].id);
           scroll_to_visible_row = visible_index;
         };
 
@@ -182,8 +191,7 @@ void messages() {
           if (ImGui::Selectable(r.name.c_str(), is_selected,
                                 ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick,
                                 ImVec2(-FLT_MIN, 0.0f))) {
-            st.has_selection = true;
-            st.selected_msg = r.id;
+            st.setSelectedMessage(r.id);
             scroll_to_visible_row = row;
           }
           if (scroll_to_visible_row == row) {

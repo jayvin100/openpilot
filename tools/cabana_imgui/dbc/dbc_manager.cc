@@ -39,6 +39,22 @@ bool DbcManager::loadFromFile(const std::string &path) {
   return true;
 }
 
+bool DbcManager::save() {
+  if (!dbc_ || !dbc_->save()) {
+    return false;
+  }
+  loaded_name_ = dbc_->filename();
+  return true;
+}
+
+bool DbcManager::saveAs(const std::string &path) {
+  if (!dbc_ || !dbc_->saveAs(path)) {
+    return false;
+  }
+  loaded_name_ = dbc_->filename();
+  return true;
+}
+
 bool DbcManager::loadFromOpendbc(const std::string &name) {
   fs::path root = repo_root();
   fs::path dbc_path = root / "opendbc" / "dbc" / (name + ".dbc");

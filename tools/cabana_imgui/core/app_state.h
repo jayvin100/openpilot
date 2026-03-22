@@ -22,6 +22,12 @@ struct ChartTabState {
   std::vector<ChartDefinition> charts;
 };
 
+enum class DetailTab {
+  Binary = 0,
+  Signals,
+  History,
+};
+
 struct AppState {
   std::atomic<bool> quit_requested{false};
   std::atomic<bool> paused{false};
@@ -42,9 +48,15 @@ struct AppState {
   // Selection state
   bool has_selection = false;
   MessageId selected_msg;
+  DetailTab current_detail_tab = DetailTab::Binary;
   bool reset_layout_requested = false;
   bool show_help_overlay = false;
   bool settings_dirty = false;
+
+  // Persisted recent state
+  std::string active_dbc_file;
+  std::vector<std::string> recent_dbc_files;
+  std::vector<std::string> recent_routes;
 
   // Chart state
   float chart_range_sec = 7.0f;
@@ -53,6 +65,11 @@ struct AppState {
   int next_chart_tab_id = 1;
   std::vector<ChartTabState> chart_tabs;
 
+  void setSelectedMessage(const MessageId &msg_id);
+  void clearSelection();
+  void setCurrentDetailTab(DetailTab tab);
+  void rememberRecentDbc(const std::string &path);
+  void rememberRecentRoute(const std::string &route);
   ChartTabState &ensureChartTab();
   ChartTabState *activeChartTab();
   const ChartTabState *activeChartTab() const;

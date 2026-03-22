@@ -256,6 +256,17 @@ static void render_history_view(const MessageId &id, cabana::ReplaySource *src) 
   }
 }
 
+static void render_detail_tab_button(const char *label, DetailTab tab, AppState &st) {
+  const bool selected = st.current_detail_tab == tab;
+  ImGui::PushStyleColor(ImGuiCol_Header, selected ? ImVec4(0.17f, 0.30f, 0.45f, 0.95f) : ImVec4(0.18f, 0.18f, 0.18f, 0.9f));
+  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.24f, 0.36f, 0.50f, 0.95f));
+  ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.20f, 0.33f, 0.48f, 1.0f));
+  if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_None, ImVec2(0, 22.0f))) {
+    st.setCurrentDetailTab(tab);
+  }
+  ImGui::PopStyleColor(3);
+}
+
 void detail() {
   ImGui::Begin("Detail");
 
@@ -304,36 +315,39 @@ void detail() {
 
   ImGui::Separator();
 
-  // Tab bar: Binary | Signals | History
-  if (ImGui::BeginTabBar("##detail_tabs")) {
-    if (ImGui::BeginTabItem("Binary")) {
+  // App-owned tab strip keeps persistence deterministic across reloads.
+  ImGui::BeginGroup();
+  render_detail_tab_button("Binary", DetailTab::Binary, st);
+  ImGui::SameLine();
+  render_detail_tab_button("Signals", DetailTab::Signals, st);
+  ImGui::SameLine();
+  render_detail_tab_button("History", DetailTab::History, st);
+  ImGui::EndGroup();
+  ImGui::Separator();
+
+  switch (st.current_detail_tab) {
+    case DetailTab::Binary:
       if (data && data_size > 0) {
         render_binary_view(id, data, data_size);
       } else {
         ImGui::TextDisabled("No data");
       }
-
-      // Show signals below binary view
       ImGui::Spacing();
       ImGui::Separator();
       if (data && data_size > 0) {
         render_signal_list(id, data, data_size);
       }
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Signals")) {
+      break;
+    case DetailTab::Signals:
       if (data && data_size > 0) {
         render_signal_list(id, data, data_size);
       } else {
         ImGui::TextDisabled("No data");
       }
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("History")) {
+      break;
+    case DetailTab::History:
       render_history_view(id, src);
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
+      break;
   }
 
   ImGui::End();

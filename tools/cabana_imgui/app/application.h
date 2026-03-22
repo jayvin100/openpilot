@@ -15,6 +15,11 @@ public:
   bool init(int argc, char *argv[]);
   int run();
   void shutdown();
+  void openRoute(const std::string &route);
+  void closeRoute();
+  bool openDbcFile(const std::string &path);
+  bool saveDbc();
+  bool saveDbcAs(const std::string &path);
 
   cabana::ReplaySource *source() { return source_.get(); }
   bool videoEnabled() const;

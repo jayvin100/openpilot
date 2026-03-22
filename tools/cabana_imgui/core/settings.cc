@@ -93,6 +93,42 @@ json11::Json serializeTab(const ChartTabState &tab) {
   };
 }
 
+json11::Json serializeStringArray(const std::vector<std::string> &values) {
+  json11::Json::array items;
+  items.reserve(values.size());
+  for (const auto &value : values) {
+    items.push_back(value);
+  }
+  return items;
+}
+
+const char *detailTabName(DetailTab tab) {
+  switch (tab) {
+    case DetailTab::Binary: return "binary";
+    case DetailTab::Signals: return "signals";
+    case DetailTab::History: return "history";
+  }
+  return "binary";
+}
+
+std::optional<DetailTab> parseDetailTab(const std::string &value) {
+  if (value == "binary") return DetailTab::Binary;
+  if (value == "signals") return DetailTab::Signals;
+  if (value == "history") return DetailTab::History;
+  return std::nullopt;
+}
+
+void parseStringArray(const json11::Json &json, std::vector<std::string> &target) {
+  if (!json.is_array()) return;
+  target.clear();
+  for (const auto &item : json.array_items()) {
+    const std::string value = item.string_value();
+    if (!value.empty()) {
+      target.push_back(value);
+    }
+  }
+}
+
 std::optional<ChartSignalRef> parseSignal(const json11::Json &json) {
   const auto &object = json.object_items();
   auto msg_id_it = object.find("message_id");
@@ -188,6 +224,38 @@ bool load(AppState &state) {
     state.chart_range_sec = std::clamp((float)range_it->second.number_value(), 1.0f, 60.0f);
   }
 
+  auto selected_msg_it = object.find("selected_message");
+  if (selected_msg_it != object.end()) {
+    auto msg_id = parseMessageId(selected_msg_it->second.string_value());
+    if (msg_id.has_value()) {
+      state.has_selection = true;
+      state.selected_msg = *msg_id;
+    }
+  }
+
+  auto detail_tab_it = object.find("current_detail_tab");
+  if (detail_tab_it != object.end()) {
+    auto tab = parseDetailTab(detail_tab_it->second.string_value());
+    if (tab.has_value()) {
+      state.current_detail_tab = *tab;
+    }
+  }
+
+  auto active_dbc_it = object.find("active_dbc_file");
+  if (active_dbc_it != object.end()) {
+    state.active_dbc_file = active_dbc_it->second.string_value();
+  }
+
+  auto recent_dbc_it = object.find("recent_dbc_files");
+  if (recent_dbc_it != object.end()) {
+    parseStringArray(recent_dbc_it->second, state.recent_dbc_files);
+  }
+
+  auto recent_routes_it = object.find("recent_routes");
+  if (recent_routes_it != object.end()) {
+    parseStringArray(recent_routes_it->second, state.recent_routes);
+  }
+
   auto current_tab_it = object.find("current_chart_tab");
   if (current_tab_it != object.end() && current_tab_it->second.is_number()) {
     state.current_chart_tab = current_tab_it->second.int_value();
@@ -238,6 +306,11 @@ bool save(const AppState &state) {
   }
 
   const json11::Json json = json11::Json::object{
+    {"selected_message", state.has_selection ? state.selected_msg.toString() : std::string()},
+    {"current_detail_tab", detailTabName(state.current_detail_tab)},
+    {"active_dbc_file", state.active_dbc_file},
+    {"recent_dbc_files", serializeStringArray(state.recent_dbc_files)},
+    {"recent_routes", serializeStringArray(state.recent_routes)},
     {"chart_range_sec", state.chart_range_sec},
     {"current_chart_tab", state.current_chart_tab},
     {"selected_chart", state.selected_chart},

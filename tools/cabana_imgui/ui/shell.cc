@@ -3,7 +3,10 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 
+#include "app/application.h"
 #include "core/app_state.h"
+#include "dbc/dbc_manager.h"
+#include "ui/file_dialogs.h"
 #include "ui/help_overlay.h"
 #include "ui/menus.h"
 #include "ui/panes/messages_pane.h"
@@ -112,9 +115,22 @@ static void render_route_load_overlay() {
 void render() {
   ImGuiViewport *viewport = ImGui::GetMainViewport();
   auto &st = cabana::app_state();
+  ImGuiIO &io = ImGui::GetIO();
 
-  if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F1)) {
+  if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F1)) {
     st.show_help_overlay = !st.show_help_overlay;
+  }
+  if (!io.WantTextInput && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) {
+    cabana::file_dialogs::requestOpenDbc();
+  }
+  if (!io.WantTextInput && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+    if (cabana::dbc::dbc_manager().dbc()) {
+      if (io.KeyShift || cabana::dbc::dbc_manager().loadedName().empty()) {
+        cabana::file_dialogs::requestSaveDbcAs();
+      } else if (app()) {
+        app()->saveDbc();
+      }
+    }
   }
 
   // Full-screen dockspace (leave room for status bar at bottom)
@@ -156,6 +172,7 @@ void render() {
   // Status bar
   render_status_bar();
   render_route_load_overlay();
+  cabana::file_dialogs::render();
   cabana::help_overlay::render();
 }
 

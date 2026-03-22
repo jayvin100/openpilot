@@ -20,10 +20,13 @@ public:
   bool loadFromFingerprint(const std::string &fingerprint);
 
   // Accessors
+  DbcFile *dbc() { return dbc_.get(); }
   const DbcFile *dbc() const { return dbc_.get(); }
   const std::string &loadedName() const { return loaded_name_; }
   int msgCount() const { return dbc_ ? (int)dbc_->messages().size() : 0; }
   int signalCount() const { return dbc_ ? dbc_->signalCount() : 0; }
+  bool save();
+  bool saveAs(const std::string &path);
 
   // Look up message name by address
   const char *msgName(uint32_t address) const;

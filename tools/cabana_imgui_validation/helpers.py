@@ -24,8 +24,11 @@ XVFB_RESOLUTION = "1920x1080x24"
 MIN_WINDOW_SIZE = 50
 
 SIGNAL_PLOT_X = 1418
-SIGNAL_PLOT_Y0 = 164
+SIGNAL_PLOT_Y0 = 172
 SIGNAL_PLOT_ROW_STEP = 22
+DETAIL_TAB_BINARY = (272, 40)
+DETAIL_TAB_SIGNALS = (309, 40)
+DETAIL_TAB_HISTORY = (345, 40)
 CHART_NEW_TAB = (1550, 660)
 CHART_SPLIT = (1480, 690)
 CHART_REMOVE = (1540, 690)
@@ -52,34 +55,47 @@ class XvfbCabana:
 
   def start(self):
     """Launch cabana under xvfb-run and wait for a visible window to appear."""
-    env = os.environ.copy()
-    # Use a clean config directory so saved window state doesn't interfere
-    if self.clean_config:
-      self._tmpdir = tempfile.mkdtemp(prefix="cabana_test_")
-      env["XDG_CONFIG_HOME"] = self._tmpdir
-    env.update(self.env_extra)
+    last_error = None
+    for attempt in range(3):
+      self._cached_env = None
+      self.display = None
+      self.wid = None
 
-    cmd = [
-      "xvfb-run",
-      "-a",  # auto-pick display number
-      "-s", f"-screen 0 {XVFB_RESOLUTION}",
-      CABANA_BIN,
-    ] + self.args
+      env = os.environ.copy()
+      # Use a clean config directory so saved window state doesn't interfere
+      if self.clean_config:
+        self._tmpdir = tempfile.mkdtemp(prefix="cabana_test_")
+        env["XDG_CONFIG_HOME"] = self._tmpdir
+      env.update(self.env_extra)
 
-    self.proc = subprocess.Popen(
-      cmd,
-      env=env,
-      stdout=subprocess.PIPE,
-      stderr=subprocess.PIPE,
-      start_new_session=True,  # so we can kill the whole process group
-    )
+      cmd = [
+        "xvfb-run",
+        "-a",  # auto-pick display number
+        "-s", f"-screen 0 {XVFB_RESOLUTION}",
+        CABANA_BIN,
+      ] + self.args
 
-    try:
-      # Wait for a real window to appear
-      self.wid = self._wait_for_window()
-    except Exception:
-      self.kill()
-      raise
+      self.proc = subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,  # so we can kill the whole process group
+      )
+
+      try:
+        # Wait for a real window to appear
+        self.wid = self._wait_for_window()
+        return self
+      except Exception as err:
+        last_error = err
+        self.kill()
+        if attempt < 2:
+          time.sleep(1.0)
+          continue
+        raise
+    if last_error is not None:
+      raise last_error
     return self
 
   def _close_process_streams(self):
@@ -302,6 +318,10 @@ class XvfbCabana:
     """Send a keystroke to the focused window."""
     return self.xdotool("key", "--window", self.wid, key)
 
+  def type_text(self, text, delay_ms=1):
+    """Type text into the focused window."""
+    return self.xdotool("type", "--delay", str(delay_ms), "--clearmodifiers", text)
+
   def key_down(self, key):
     """Press and hold a key against the focused window."""
     return self.xdotool("keydown", "--window", self.wid, key)
@@ -460,11 +480,49 @@ def click_signal_plot(cabana, signal_index=0, merge=False):
   time.sleep(0.8)
 
 
+def activate_detail_tab(cabana, tab_name):
+  """Activate one of the Detail tabs by name."""
+  tab_map = {
+    "binary": DETAIL_TAB_BINARY,
+    "signals": DETAIL_TAB_SIGNALS,
+    "history": DETAIL_TAB_HISTORY,
+  }
+  cabana.focus()
+  cabana.click(*tab_map[tab_name])
+  time.sleep(0.6)
+
+
+def open_dbc_path(cabana, path):
+  """Use the real Ctrl+O flow to open a DBC path."""
+  cabana.focus()
+  cabana.send_key("ctrl+o")
+  time.sleep(0.6)
+  cabana.send_key("ctrl+a")
+  time.sleep(0.1)
+  cabana.type_text(path)
+  time.sleep(0.3)
+  cabana.send_key("Return")
+  time.sleep(1.2)
+
+
+def save_dbc_as_path(cabana, path):
+  """Use the real Ctrl+Shift+S flow to save the current DBC."""
+  cabana.focus()
+  cabana.send_key("ctrl+shift+s")
+  time.sleep(1.0)
+  cabana.send_key("ctrl+a")
+  time.sleep(0.2)
+  cabana.type_text(path)
+  time.sleep(0.5)
+  cabana.send_key("Return")
+  time.sleep(1.5)
+
+
 def create_chart_tab(cabana):
   """Create a new chart tab from the chart toolbar."""
   cabana.focus()
   cabana.click(*CHART_NEW_TAB)
-  time.sleep(0.6)
+  time.sleep(1.0)
 
 
 def activate_chart_tab(cabana, tab_index):

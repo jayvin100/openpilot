@@ -55,13 +55,28 @@ bool DbcFile::load(const std::string &filename) {
   if (!f.is_open()) return false;
   std::string content((std::istreambuf_iterator<char>(f)),
                        std::istreambuf_iterator<char>());
+  raw_content_ = content;
+  filename_ = filename;
   name_ = filename;
   parse(content);
   return true;
 }
 
 bool DbcFile::loadFromString(const std::string &content) {
+  raw_content_ = content;
+  filename_.clear();
   parse(content);
+  return true;
+}
+
+bool DbcFile::save() const {
+  if (filename_.empty()) return false;
+  return writeContents(filename_);
+}
+
+bool DbcFile::saveAs(const std::string &filename) {
+  if (!writeContents(filename)) return false;
+  filename_ = filename;
   return true;
 }
 
@@ -74,6 +89,13 @@ int DbcFile::signalCount() const {
   int count = 0;
   for (const auto &[_, m] : msgs_) count += (int)m.signals.size();
   return count;
+}
+
+bool DbcFile::writeContents(const std::string &filename) const {
+  std::ofstream output(filename);
+  if (!output.is_open()) return false;
+  output << raw_content_;
+  return output.good();
 }
 
 void DbcFile::parse(const std::string &content) {

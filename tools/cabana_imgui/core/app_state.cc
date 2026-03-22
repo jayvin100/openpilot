@@ -6,14 +6,60 @@ namespace cabana {
 
 namespace {
 
+constexpr size_t kMaxRecentEntries = 10;
+
 bool signal_matches(const ChartSignalRef &signal, const MessageId &msg_id, const std::string &signal_name) {
   return signal.msg_id == msg_id && signal.signal_name == signal_name;
+}
+
+void push_recent(std::vector<std::string> &items, const std::string &value) {
+  if (value.empty()) return;
+  items.erase(std::remove(items.begin(), items.end(), value), items.end());
+  items.insert(items.begin(), value);
+  if (items.size() > kMaxRecentEntries) {
+    items.resize(kMaxRecentEntries);
+  }
 }
 
 }  // namespace
 
 void AppState::markSettingsDirty() {
   settings_dirty = true;
+}
+
+void AppState::setSelectedMessage(const MessageId &msg_id) {
+  if (!has_selection || selected_msg != msg_id) {
+    has_selection = true;
+    selected_msg = msg_id;
+    markSettingsDirty();
+  }
+}
+
+void AppState::clearSelection() {
+  if (has_selection) {
+    has_selection = false;
+    markSettingsDirty();
+  }
+}
+
+void AppState::setCurrentDetailTab(DetailTab tab) {
+  if (current_detail_tab != tab) {
+    current_detail_tab = tab;
+    markSettingsDirty();
+  }
+}
+
+void AppState::rememberRecentDbc(const std::string &path) {
+  if (path.empty()) return;
+  active_dbc_file = path;
+  push_recent(recent_dbc_files, path);
+  markSettingsDirty();
+}
+
+void AppState::rememberRecentRoute(const std::string &route) {
+  if (route.empty()) return;
+  push_recent(recent_routes, route);
+  markSettingsDirty();
 }
 
 ChartTabState &AppState::ensureChartTab() {

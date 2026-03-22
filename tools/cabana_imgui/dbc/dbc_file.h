@@ -42,15 +42,22 @@ public:
   // Load from string content
   bool loadFromString(const std::string &content);
 
+  bool save() const;
+  bool saveAs(const std::string &filename);
+
   const std::map<uint32_t, Message> &messages() const { return msgs_; }
   const Message *msg(uint32_t address) const;
   int signalCount() const;
+  const std::string &filename() const { return filename_; }
 
 private:
   void parse(const std::string &content);
+  bool writeContents(const std::string &filename) const;
 
   std::map<uint32_t, Message> msgs_;
   std::string name_;
+  std::string filename_;
+  std::string raw_content_;
 };
 
 }  // namespace dbc

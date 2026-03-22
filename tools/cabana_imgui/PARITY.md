@@ -12,7 +12,8 @@
 
 ## DBC
 - [x] automatic DBC selection from fingerprint — `wired`
-- [ ] manual DBC open/new/save/save-as — `not started`
+- [x] manual DBC open/save/save-as — `wired`
+- [ ] manual DBC new file — `not started`
 - [ ] DBC clipboard import/export — `not started`
 - [ ] DBC management per bus/source — `not started`
 - [x] route metadata and fingerprint display — `wired`
@@ -46,9 +47,9 @@
 - [ ] export to CSV — `not started`
 
 ## App State
-- [x] settings persistence — `partial (chart state + dock layout)`
-- [ ] recent files — `not started`
-- [x] session restore — `partial (chart tabs + active tab + dock layout)`
+- [x] settings persistence — `partial (chart state + dock layout + selection/detail/dbc recents)`
+- [x] recent files/state — `partial (recent routes + recent dbc files)`
+- [x] session restore — `partial (chart tabs + dock layout + selected message + detail tab + last route/dbc)`
 - [ ] undo/redo command stack — `not started`
 - [x] help overlay — `wired`
 

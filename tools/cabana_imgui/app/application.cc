@@ -146,11 +146,21 @@ bool Application::init(int argc, char *argv[]) {
 
   auto &st = cabana::app_state();
   cabana::settings::load(st);
+  if (route_.empty() && !st.recent_routes.empty()) {
+    route_ = st.recent_routes.front();
+  }
+  if (dbc_file_.empty() && !st.active_dbc_file.empty()) {
+    dbc_file_ = st.active_dbc_file;
+  }
   st.route_name.clear();
   st.car_fingerprint.clear();
   st.route_loading = false;
   st.route_load_error.clear();
   st.show_help_overlay = false;
+
+  if (route_.empty() && !dbc_file_.empty()) {
+    openDbcFile(dbc_file_);
+  }
 
   // Kick route loading to a background thread so the first frame appears immediately.
   if (!route_.empty()) {
@@ -193,7 +203,10 @@ int Application::run() {
       if (!fp.empty() && fp != st.car_fingerprint) {
         st.car_fingerprint = fp;
         if (!cabana::dbc::dbc_manager().dbc()) {
-          cabana::dbc::dbc_manager().loadFromFingerprint(fp);
+          if (cabana::dbc::dbc_manager().loadFromFingerprint(fp)) {
+            st.rememberRecentDbc(cabana::dbc::dbc_manager().loadedName());
+            dbc_file_ = cabana::dbc::dbc_manager().loadedName();
+          }
         }
       }
     }
@@ -275,9 +288,10 @@ void Application::pollReplayLoad() {
       st.route_name = source_->routeName();
       st.car_fingerprint = source_->carFingerprint();
       st.route_load_error.clear();
+      st.rememberRecentRoute(st.route_name);
 
       if (!dbc_file_.empty()) {
-        cabana::dbc::dbc_manager().loadFromFile(dbc_file_);
+        openDbcFile(dbc_file_);
       }
 
       std::string title = window_title(st.route_name);
@@ -289,6 +303,79 @@ void Application::pollReplayLoad() {
 
   st.route_loading = false;
   replay_load_state_.reset();
+}
+
+void Application::openRoute(const std::string &route) {
+  if (route.empty()) return;
+
+  auto &st = cabana::app_state();
+  source_.reset();
+  replay_load_state_.reset();
+
+  route_ = route;
+  st.route_name.clear();
+  st.car_fingerprint.clear();
+  st.route_loading = false;
+  st.route_load_error.clear();
+  st.current_sec = 0;
+  st.min_sec = 0;
+  st.max_sec = 0;
+  st.paused = false;
+
+  glfwSetWindowTitle(window, window_title(route_).c_str());
+  beginReplayLoad();
+}
+
+void Application::closeRoute() {
+  auto &st = cabana::app_state();
+  replay_load_state_.reset();
+  source_.reset();
+  route_.clear();
+  st.route_name.clear();
+  st.car_fingerprint.clear();
+  st.route_loading = false;
+  st.route_load_error.clear();
+  st.current_sec = 0;
+  st.min_sec = 0;
+  st.max_sec = 0;
+  st.paused = false;
+  glfwSetWindowTitle(window, window_title(std::string()).c_str());
+}
+
+bool Application::openDbcFile(const std::string &path) {
+  if (path.empty()) return false;
+  if (!cabana::dbc::dbc_manager().loadFromFile(path)) {
+    return false;
+  }
+
+  dbc_file_ = cabana::dbc::dbc_manager().loadedName();
+  auto &st = cabana::app_state();
+  st.rememberRecentDbc(dbc_file_);
+  return true;
+}
+
+bool Application::saveDbc() {
+  auto &dbc = cabana::dbc::dbc_manager();
+  if (!dbc.save()) {
+    return false;
+  }
+
+  dbc_file_ = dbc.loadedName();
+  cabana::app_state().rememberRecentDbc(dbc_file_);
+  return true;
+}
+
+bool Application::saveDbcAs(const std::string &path) {
+  if (path.empty()) return false;
+
+  auto &dbc = cabana::dbc::dbc_manager();
+  if (!dbc.saveAs(path)) {
+    return false;
+  }
+
+  dbc_file_ = dbc.loadedName();
+  cabana::app_state().rememberRecentDbc(dbc_file_);
+  return true;
 }
 
 void Application::shutdown() {
