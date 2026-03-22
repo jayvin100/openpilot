@@ -216,21 +216,6 @@ void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *st
     ImGui::TextUnformatted(status_text);
     ImGui::PopStyleColor();
 
-    char tracker_text[96] = {};
-    if (session.route_data.has_time_range) {
-      const double span = std::max(0.0, state->x_view_max - state->x_view_min);
-      std::snprintf(tracker_text, sizeof(tracker_text), "t %.3f  span %.1fs",
-                    state->has_tracker_time ? state->tracker_time : 0.0, span);
-    } else {
-      std::snprintf(tracker_text, sizeof(tracker_text), "t 0.000");
-    }
-    const float tracker_x = std::max(status_x + ImGui::CalcTextSize(status_text).x + 16.0f,
-                                     ui.content_w - ImGui::CalcTextSize(tracker_text).x - 10.0f);
-    const ImVec2 tracker_size = ImGui::CalcTextSize(tracker_text);
-    ImGui::SetCursorPos(ImVec2(std::max(tracker_x, ui.content_w - tracker_size.x - 10.0f), row_y + 2.0f));
-    app_push_mono_font();
-    ImGui::TextUnformatted(tracker_text);
-    app_pop_mono_font();
   }
   ImGui::End();
   ImGui::PopStyleColor(2);

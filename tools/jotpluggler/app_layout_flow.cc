@@ -26,6 +26,9 @@ bool reset_layout(AppSession *session, UiState *state) {
 
 bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg) {
   try {
+    const bool preserve_shared_range = session->route_data.has_time_range && state->has_shared_range;
+    const double preserved_x_min = state->x_view_min;
+    const double preserved_x_max = state->x_view_max;
     const fs::path layout_path = resolve_layout_path(layout_arg);
     session->autosave_path = autosave_path_for_layout(layout_path);
     const bool load_draft = fs::exists(session->autosave_path);
@@ -38,7 +41,14 @@ bool reload_layout(AppSession *session, UiState *state, const std::string &layou
     sync_ui_state(state, session->layout);
     sync_layout_buffers(state, *session);
     mark_all_docks_dirty(state);
-    reset_shared_range(state, *session);
+    if (preserve_shared_range) {
+      state->has_shared_range = true;
+      state->x_view_min = preserved_x_min;
+      state->x_view_max = preserved_x_max;
+      clamp_shared_range(state, *session);
+    } else {
+      reset_shared_range(state, *session);
+    }
     state->status_text = std::string(load_draft ? "Loaded layout draft " : "Loaded layout ")
       + layout_path.filename().string();
     return true;

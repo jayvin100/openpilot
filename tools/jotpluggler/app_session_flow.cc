@@ -429,7 +429,7 @@ bool draw_route_chip_text_button(const char *id,
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     draw_list->AddRectFilled(ImVec2(pos.x - 5.0f, pos.y - 1.0f),
                              ImVec2(pos.x + size.x + 5.0f, pos.y + size.y + 2.0f),
-                             ImGui::GetColorU32(color_rgb(225, 231, 239, 0.95f)), 5.0f);
+                             ImGui::GetColorU32(color_rgb(225, 231, 239, 0.95f)), 0.0f);
   }
   draw_list->AddText(pos, color, text.data(), text.data() + text.size());
   if (tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
@@ -615,8 +615,8 @@ void draw_route_id_chip(AppSession *session, UiState *state) {
   const float chip_w = chip_pad_x * 2.0f + dongle_size.x + sep_size.x + log_size.x + sep_size.x
                      + slice_size.x + sep_size.x + selector_size.x + 10.0f + info_size;
   const float menu_right = window->Pos.x + window->Size.x - 8.0f;
-  const float menu_left_limit = window->Pos.x + 70.0f;
-  const float chip_x = std::max(menu_left_limit, menu_right - chip_w);
+  const float cursor_x = ImGui::GetCursorScreenPos().x + 4.0f;
+  const float chip_x = std::clamp(cursor_x, window->Pos.x + 48.0f, std::max(window->Pos.x + 48.0f, menu_right - chip_w));
   const float chip_y = std::floor(window->Pos.y + std::max(0.0f, (window->Size.y - chip_h) * 0.5f));
   const ImVec2 chip_min(chip_x, chip_y);
   const ImVec2 chip_max(chip_x + chip_w, chip_y + chip_h);
@@ -624,8 +624,8 @@ void draw_route_id_chip(AppSession *session, UiState *state) {
   const ImU32 chip_bg = ImGui::GetColorU32(color_rgb(247, 249, 252));
   const ImU32 chip_border = ImGui::GetColorU32(color_rgb(184, 191, 200));
   const ImU32 sep = ImGui::GetColorU32(color_rgb(162, 170, 178));
-  draw_list->AddRectFilled(chip_min, chip_max, chip_bg, 8.0f);
-  draw_list->AddRect(chip_min, chip_max, chip_border, 8.0f, 0, 1.0f);
+  draw_list->AddRectFilled(chip_min, chip_max, chip_bg, 0.0f);
+  draw_list->AddRect(chip_min, chip_max, chip_border, 0.0f, 0, 1.0f);
 
   float x = chip_x + chip_pad_x;
   const bool dongle_click = draw_route_chip_text_button(
@@ -806,6 +806,7 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
       }
       ImGui::EndMenu();
     }
+    ImGui::SameLine(0.0f, 8.0f);
     draw_route_id_chip(session, state);
     height = ImGui::GetWindowSize().y;
     ImGui::EndMainMenuBar();

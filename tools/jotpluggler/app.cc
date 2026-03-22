@@ -330,7 +330,7 @@ void configure_style() {
   plot_style.LegendPadding = ImVec2(6.0f, 5.0f);
   plot_style.LegendInnerPadding = ImVec2(6.0f, 3.0f);
   plot_style.LegendSpacing = ImVec2(7.0f, 2.0f);
-  plot_style.PlotPadding = ImVec2(4.0f, 5.0f);
+  plot_style.PlotPadding = ImVec2(4.0f, 8.0f);
   plot_style.FitPadding = ImVec2(0.02f, 0.4f);
 
   ImPlot::MapInputDefault();
@@ -1205,6 +1205,29 @@ struct PaneValueFormatContext {
   bool valid = false;
 };
 
+bool curves_are_bool_like(const std::vector<PreparedCurve> &prepared_curves) {
+  if (prepared_curves.empty()) {
+    return false;
+  }
+  for (const PreparedCurve &curve : prepared_curves) {
+    if (!curve.display_info.integer_like || curve.ys.empty()) {
+      return false;
+    }
+    bool found_finite = false;
+    for (double value : curve.ys) {
+      if (!std::isfinite(value)) continue;
+      found_finite = true;
+      if (std::abs(value) > 0.01 && std::abs(value - 1.0) > 0.01) {
+        return false;
+      }
+    }
+    if (!found_finite) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void app_decimate_samples_impl(const std::vector<double> &xs_in,
                            const std::vector<double> &ys_in,
                            int max_points,
@@ -1346,6 +1369,21 @@ int format_numeric_axis_tick(double value, char *buf, int size, void *user_data)
   if (ctx == nullptr || !ctx->valid) {
     return std::snprintf(buf, size, "%.6g", value);
   }
+  if (ctx->format.integer_like) {
+    const double nearest_int = std::round(value);
+    if (std::abs(value - nearest_int) > 1.0e-6) {
+      int decimals = 1;
+      while (decimals < 4) {
+        const double scale = std::pow(10.0, decimals);
+        const double rounded = std::round(value * scale) / scale;
+        if (std::abs(value - rounded) <= 1.0e-6) {
+          break;
+        }
+        ++decimals;
+      }
+      return std::snprintf(buf, size, "%.*f", decimals, value);
+    }
+  }
   return std::snprintf(buf, size, ctx->format.fmt, value);
 }
 
@@ -1366,12 +1404,13 @@ void merge_pane_value_format(PaneValueFormatContext *ctx, const SeriesFormat &fo
                 ctx->format.total_width, ctx->format.decimals);
 }
 
-std::string curve_legend_label(const PreparedCurve &curve, bool has_cursor_time) {
+std::string curve_legend_label(const PreparedCurve &curve, bool has_cursor_time, size_t label_width) {
   if (!has_cursor_time) return curve.label;
   if (!curve.legend_value.has_value()) return curve.label;
   const std::string value_text = format_display_value(*curve.legend_value, curve.display_info, curve.enum_info);
   if (value_text.empty()) return curve.label;
-  return curve.label + "  " + value_text;
+  const size_t padded_width = std::max(label_width, curve.label.size());
+  return curve.label + std::string(padded_width - curve.label.size() + 2, ' ') + value_text;
 }
 
 bool build_curve_series(const AppSession &session,
@@ -1494,13 +1533,28 @@ bool draw_close_icon_button(const char *id, bool draw_icon, ImVec2 size = ImVec2
 
 bool draw_pane_close_button_overlay() {
   const ImVec2 window_pos = ImGui::GetWindowPos();
+  const ImVec2 content_min = ImGui::GetWindowContentRegionMin();
   const ImVec2 content_max = ImGui::GetWindowContentRegionMax();
-  const ImVec2 button_pos(window_pos.x + content_max.x - 18.0f, window_pos.y + 4.0f);
+  const ImVec2 button_pos(window_pos.x + content_max.x - 18.0f, window_pos.y + content_min.y + 2.0f);
   ImGui::SetCursorScreenPos(button_pos);
   ImGui::PushID("pane_close_overlay");
   const bool clicked = draw_close_icon_button("##pane_close", true, ImVec2(16.0f, 16.0f));
   ImGui::PopID();
   return clicked;
+}
+
+void draw_pane_frame_overlay() {
+  const ImVec2 window_pos = ImGui::GetWindowPos();
+  const ImVec2 content_min = ImGui::GetWindowContentRegionMin();
+  const ImVec2 content_max = ImGui::GetWindowContentRegionMax();
+  const ImRect frame_rect(ImVec2(window_pos.x + content_min.x, window_pos.y + content_min.y),
+                          ImVec2(window_pos.x + content_max.x, window_pos.y + content_max.y));
+  ImGui::GetWindowDrawList()->AddRect(frame_rect.Min,
+                                      frame_rect.Max,
+                                      ImGui::GetColorU32(color_rgb(186, 190, 196)),
+                                      0.0f,
+                                      0,
+                                      1.0f);
 }
 
 PlotBounds compute_plot_bounds(const Pane &pane,
@@ -1522,6 +1576,10 @@ PlotBounds compute_plot_bounds(const Pane &pane,
   if (!found) {
     min_value = 0.0;
     max_value = 1.0;
+  }
+  if (curves_are_bool_like(prepared_curves)) {
+    min_value = std::min(min_value, 0.0);
+    max_value = std::max(max_value, 1.0);
   }
   ensure_non_degenerate_range(&min_value, &max_value, PLOT_Y_PAD_FRACTION, 0.1);
   if (pane.range.has_y_limit_min) {
@@ -1686,7 +1744,9 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   PaneEnumContext enum_context;
   PaneValueFormatContext pane_value_format;
   bool all_enum_curves = !prepared_curves.empty();
+  size_t max_legend_label_width = 0;
   for (const PreparedCurve &curve : prepared_curves) {
+    max_legend_label_width = std::max(max_legend_label_width, curve.label.size());
     if (curve.enum_info != nullptr) {
       enum_context.enums.push_back(curve.enum_info);
     } else {
@@ -1751,7 +1811,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
 
     for (size_t i = 0; i < prepared_curves.size(); ++i) {
       const PreparedCurve &curve = prepared_curves[i];
-      std::string series_id = curve_legend_label(curve, has_cursor_time) + "##curve" + std::to_string(i);
+      std::string series_id = curve_legend_label(curve, has_cursor_time, max_legend_label_width) + "##curve" + std::to_string(i);
       ImPlotSpec spec;
       spec.LineColor = color_rgb(curve.color);
       spec.LineWeight = curve.line_weight;
@@ -2172,8 +2232,9 @@ void draw_pane_windows(AppSession *session, UiState *state) {
           || (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && ImGui::IsMouseClicked(0))) {
         tab_state->active_pane_index = static_cast<int>(i);
       }
-      close_pane_requested = draw_pane_close_button_overlay();
       draw_plot(*session, &pane, state);
+      draw_pane_frame_overlay();
+      close_pane_requested = draw_pane_close_button_overlay();
       menu_action = draw_pane_context_menu(*tab, static_cast<int>(i));
       drop_action = draw_pane_drop_target(state->active_tab_index, static_cast<int>(i));
     }
@@ -2230,6 +2291,7 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
       TabActionKind pending_action = TabActionKind::None;
       int pending_tab_index = -1;
       bool custom_series_tab_open = state->custom_series.open;
+      bool suppress_aux_tabs_this_frame = state->request_close_tab && session->layout.tabs.size() == 1;
       for (size_t i = 0; i < session->layout.tabs.size(); ++i) {
         const WorkspaceTab &tab = session->layout.tabs[i];
         const TabUiState &tab_ui = state->tabs[i];
@@ -2249,6 +2311,9 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
         if (!tab_open) {
           pending_action = TabActionKind::Close;
           pending_tab_index = static_cast<int>(i);
+          if (session->layout.tabs.size() == 1) {
+            suppress_aux_tabs_this_frame = true;
+          }
         }
         if (ImGui::BeginPopupContextItem()) {
           if (ImGui::MenuItem("New Tab")) {
@@ -2282,26 +2347,28 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
           ImGui::EndTabItem();
         }
       }
-      ImGuiTabItemFlags logs_flags = ImGuiTabItemFlags_None;
-      if (state->logs.request_select) {
-        logs_flags |= ImGuiTabItemFlags_SetSelected;
-      }
-      if (ImGui::BeginTabItem("Logs##workspace_logs", nullptr, logs_flags)) {
-        state->logs.request_select = false;
-        state->logs.selected = true;
-        draw_logs_tab(session, state);
-        ImGui::EndTabItem();
-      }
-      if (custom_series_tab_open) {
-        ImGuiTabItemFlags custom_flags = ImGuiTabItemFlags_None;
-        if (state->custom_series.request_select) {
-          custom_flags |= ImGuiTabItemFlags_SetSelected;
+      if (!suppress_aux_tabs_this_frame) {
+        ImGuiTabItemFlags logs_flags = ImGuiTabItemFlags_None;
+        if (state->logs.request_select) {
+          logs_flags |= ImGuiTabItemFlags_SetSelected;
         }
-        if (ImGui::BeginTabItem("Custom Series##workspace_custom_series", &custom_series_tab_open, custom_flags)) {
-          state->custom_series.request_select = false;
-          state->custom_series.selected = true;
-          draw_custom_series_editor(session, state);
+        if (ImGui::BeginTabItem("Logs##workspace_logs", nullptr, logs_flags)) {
+          state->logs.request_select = false;
+          state->logs.selected = true;
+          draw_logs_tab(session, state);
           ImGui::EndTabItem();
+        }
+        if (custom_series_tab_open) {
+          ImGuiTabItemFlags custom_flags = ImGuiTabItemFlags_None;
+          if (state->custom_series.request_select) {
+            custom_flags |= ImGuiTabItemFlags_SetSelected;
+          }
+          if (ImGui::BeginTabItem("Custom Series##workspace_custom_series", &custom_series_tab_open, custom_flags)) {
+            state->custom_series.request_select = false;
+            state->custom_series.selected = true;
+            draw_custom_series_editor(session, state);
+            ImGui::EndTabItem();
+          }
         }
       }
       ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));

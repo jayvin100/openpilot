@@ -386,16 +386,30 @@ void draw_custom_series_preview(const AppSession &session, CustomSeriesEditorSta
     std::vector<double> plot_xs;
     std::vector<double> plot_ys;
     app_decimate_samples(preview_xs, preview_ys, 1200, &plot_xs, &plot_ys);
+    const double preview_x_min = preview_xs.front();
+    const double preview_x_max = preview_xs.back() > preview_xs.front()
+      ? preview_xs.back()
+      : preview_xs.front() + 1e-6;
+    std::string plot_id = "##custom_series_preview";
+    if (editor->preview_is_result) {
+      plot_id += "_result_";
+      plot_id += editor->name.empty() ? preview_label : editor->name;
+    } else if (!editor->linked_source.empty()) {
+      plot_id += "_input_";
+      plot_id += editor->linked_source;
+    }
     ImGui::TextUnformatted(preview_label.c_str());
     if (!editor->linked_source.empty() && !editor->preview_is_result) {
       ImGui::SameLine();
       ImGui::TextDisabled("%s", editor->linked_source.c_str());
     }
-    if (ImPlot::BeginPlot("##custom_series_preview",
+    if (ImPlot::BeginPlot(plot_id.c_str(),
                           ImVec2(-1.0f, std::max(180.0f, ImGui::GetContentRegionAvail().y - 6.0f)),
                           ImPlotFlags_NoTitle | ImPlotFlags_NoMenus | ImPlotFlags_NoLegend)) {
       ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight,
                         ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight | ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_RangeFit);
+      ImPlot::SetupAxisLimitsConstraints(ImAxis_X1, preview_x_min, preview_x_max);
+      ImPlot::SetupAxisLimits(ImAxis_X1, preview_x_min, preview_x_max, ImPlotCond_Once);
       ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f");
       ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
       ImPlotSpec spec;
