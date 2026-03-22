@@ -35,6 +35,7 @@ cabana_srcs = [
   'ui/menus.cc',
   'ui/file_dialogs.cc',
   'ui/help_overlay.cc',
+  'ui/tools_windows.cc',
   'ui/bootstrap_icons.cc',
   'ui/panes/messages_pane.cc',
   'ui/panes/detail_pane.cc',

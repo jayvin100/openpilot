@@ -7,7 +7,7 @@ Test opening various menus and dialogs through the menu bar.
 import pytest
 import time
 
-from ..helpers import DEMO_ROUTE, XvfbCabana, wait_for_demo_route  # noqa: TID251
+from ..helpers import DEMO_ROUTE, TOOLS_MENU, XvfbCabana, wait_for_demo_route  # noqa: TID251
 
 pytestmark = pytest.mark.xdist_group("cabana_demo_route")
 WORKFLOW_TIMEOUT = 90
@@ -33,7 +33,7 @@ class TestMenus:
       wait_for_demo_route(c)
 
       # Click on "Tools" in the menu bar
-      c.click(170, 12)
+      c.click(*TOOLS_MENU)
       time.sleep(1)
 
       path = c.screenshot("workflow_tools_menu.png")

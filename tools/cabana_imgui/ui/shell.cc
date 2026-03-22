@@ -14,6 +14,7 @@
 #include "ui/panes/detail_pane.h"
 #include "ui/panes/video_pane.h"
 #include "ui/panes/charts_pane.h"
+#include "ui/tools_windows.h"
 
 namespace cabana {
 namespace shell {
@@ -191,6 +192,7 @@ void render() {
   render_status_bar();
   render_route_load_overlay();
   cabana::file_dialogs::render();
+  cabana::tools_windows::render();
   cabana::help_overlay::render();
 }
 

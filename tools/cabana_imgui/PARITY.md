@@ -43,7 +43,8 @@
 
 ## Tools
 - [ ] find signal — `not started`
-- [ ] find similar bits — `not started`
+- [x] find similar bits — `wired`
+- [x] route info — `wired`
 - [x] export to CSV — `wired (route-wide CAN dump)`
 
 ## App State
@@ -55,7 +56,7 @@
 
 ## UI Shell
 - [x] dockspace layout — `wired`
-- [x] menu bar (File, Edit, View, Tools, Help) — `partial (DBC file flows + opendbc/export + clipboard/new + per-source DBC management + edit message/add signal + layout/help)`
+- [x] menu bar (File, Edit, View, Tools, Help) — `partial (DBC file flows + opendbc/export + clipboard/new + per-source DBC management + find similar bits/route info + edit message/add signal + layout/help)`
 - [x] messages pane — `wired`
 - [x] detail pane with tabs — `wired`
 - [x] charts pane — `wired`

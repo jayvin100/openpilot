@@ -14,6 +14,7 @@
 #include "dbc/dbc_manager.h"
 #include "ui/file_dialogs.h"
 #include "ui/panes/detail_pane.h"
+#include "ui/tools_windows.h"
 
 namespace cabana {
 namespace menus {
@@ -298,10 +299,14 @@ void render() {
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Tools")) {
-      if (ImGui::MenuItem("Find Signal")) {}
-      if (ImGui::MenuItem("Find Similar Bits")) {}
+      ImGui::MenuItem("Find Signal", nullptr, false, false);
+      if (ImGui::MenuItem("Find Similar Bits")) {
+        cabana::tools_windows::requestFindSimilarBits();
+      }
       ImGui::Separator();
-      if (ImGui::MenuItem("Route Info")) {}
+      if (ImGui::MenuItem("Route Info")) {
+        cabana::tools_windows::requestRouteInfo();
+      }
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Help")) {

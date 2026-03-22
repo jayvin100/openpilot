@@ -46,6 +46,9 @@ FILE_MENU_EXIT = (30, 295)
 FILE_MENU_MANAGE_DBCS = (60, 124)
 FILE_MENU_OPENDBC_SUBMENU = (132, 160)
 FILE_MENU_OPENDBC_SUBMENU_X = 290
+TOOLS_MENU = (102, 12)
+TOOLS_MENU_FIND_SIMILAR_BITS = (100, 44)
+TOOLS_MENU_ROUTE_INFO = (100, 68)
 EDIT_MENU = (38, 12)
 EDIT_MENU_UNDO = (78, 28)
 EDIT_MENU_REDO = (78, 44)
@@ -786,3 +789,21 @@ def quit_via_menu(cabana, timeout=5):
     return cabana.proc.returncode
   except subprocess.TimeoutExpired:
     return cabana.close(timeout=timeout)
+
+
+def open_find_similar_bits_window(cabana):
+  """Use Tools -> Find Similar Bits."""
+  cabana.focus()
+  cabana.click(*TOOLS_MENU)
+  time.sleep(0.4)
+  cabana.click(*TOOLS_MENU_FIND_SIMILAR_BITS)
+  time.sleep(1.0)
+
+
+def open_route_info_window(cabana):
+  """Use Tools -> Route Info."""
+  cabana.focus()
+  cabana.click(*TOOLS_MENU)
+  time.sleep(0.4)
+  cabana.click(*TOOLS_MENU_ROUTE_INFO)
+  time.sleep(1.0)
