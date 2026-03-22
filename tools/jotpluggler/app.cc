@@ -782,6 +782,12 @@ const char *camera_view_label(CameraViewKind view) {
   }
 }
 
+CameraViewKind sidebar_preview_camera_view(const AppSession &session) {
+  return session.route_data.road_camera.entries.empty() && !session.route_data.qroad_camera.entries.empty()
+    ? CameraViewKind::QRoad
+    : CameraViewKind::Road;
+}
+
 std::optional<CameraViewKind> camera_view_from_special_item(std::string_view item_id) {
   if (item_id == "camera_road") return CameraViewKind::Road;
   if (item_id == "camera_driver") return CameraViewKind::Driver;
@@ -867,7 +873,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     const RouteLoadSnapshot load = session->route_loader ? session->route_loader->snapshot() : RouteLoadSnapshot{};
     const bool show_load_progress = session->route_loader && (load.active || load.total_segments > 0);
     const bool streaming = session->data_mode == SessionDataMode::Stream;
-    SidebarCameraFeed *sidebar_camera = session->pane_camera_feeds[static_cast<size_t>(CameraViewKind::Road)].get();
+    SidebarCameraFeed *sidebar_camera = session->pane_camera_feeds[static_cast<size_t>(sidebar_preview_camera_view(*session))].get();
     if (show_camera_feed && sidebar_camera != nullptr) {
       sidebar_camera->draw(ImGui::GetContentRegionAvail().x, load.active);
     } else if (streaming) {
@@ -1000,11 +1006,17 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     }
     if (show_load_progress) {
       const float total = static_cast<float>(std::max<size_t>(1, load.total_segments));
+      const bool finalizing = load.active
+                           && load.total_segments > 0
+                           && load.segments_downloaded >= load.total_segments
+                           && load.segments_parsed >= load.total_segments;
       const float progress = load.total_segments == 0
         ? 0.0f
-        : std::clamp(static_cast<float>(load.segments_downloaded + load.segments_parsed) / (2.0f * total), 0.0f, 1.0f);
+        : (finalizing
+            ? 0.99f
+            : std::clamp(static_cast<float>(load.segments_downloaded + load.segments_parsed) / (2.0f * total), 0.0f, 0.99f));
       ImGui::Dummy(ImVec2(0.0f, 8.0f));
-      ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0.0f), nullptr);
+      ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0.0f), finalizing ? "Finalizing..." : nullptr);
     }
   }
   ImGui::End();

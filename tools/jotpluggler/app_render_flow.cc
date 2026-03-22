@@ -69,7 +69,7 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
     state->playback_playing = !state->playback_playing;
   }
   advance_playback(state, *session);
-  SidebarCameraFeed *sidebar_camera = session->pane_camera_feeds[static_cast<size_t>(CameraViewKind::Road)].get();
+  SidebarCameraFeed *sidebar_camera = session->pane_camera_feeds[static_cast<size_t>(sidebar_preview_camera_view(*session))].get();
   if (show_camera_feed && sidebar_camera != nullptr && state->has_tracker_time) {
     sidebar_camera->update(state->tracker_time);
   }

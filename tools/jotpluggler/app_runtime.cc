@@ -186,13 +186,20 @@ struct TerminalRouteProgress::Impl {
       overall = 1.0;
       detail = "Ready";
     } else if (progress.total_segments > 0) {
-      const double total_work = static_cast<double>(progress.total_segments) * 2.0;
-      const double complete_work = static_cast<double>(progress.segments_downloaded + progress.segments_parsed);
-      overall = total_work <= 0.0 ? 0.0 : std::clamp(complete_work / total_work, 0.0, 1.0);
-      std::ostringstream desc;
-      desc << "Downloaded " << progress.segments_downloaded << "/" << progress.total_segments
-           << "  Parsed " << progress.segments_parsed << "/" << progress.total_segments;
-      detail = desc.str();
+      const bool finalizing = progress.segments_downloaded >= progress.total_segments
+                           && progress.segments_parsed >= progress.total_segments;
+      if (finalizing) {
+        overall = 0.99;
+        detail = "Finalizing route data";
+      } else {
+        const double total_work = static_cast<double>(progress.total_segments) * 2.0;
+        const double complete_work = static_cast<double>(progress.segments_downloaded + progress.segments_parsed);
+        overall = total_work <= 0.0 ? 0.0 : std::clamp(complete_work / total_work, 0.0, 0.99);
+        std::ostringstream desc;
+        desc << "Downloaded " << progress.segments_downloaded << "/" << progress.total_segments
+             << "  Parsed " << progress.segments_parsed << "/" << progress.total_segments;
+        detail = desc.str();
+      }
     }
 
     render(overall, detail);
