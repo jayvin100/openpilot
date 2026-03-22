@@ -38,8 +38,8 @@
 - [x] layout persistence — `wired`
 
 ## Video
-- [x] video display — `skeleton only`
-- [x] video synchronization — `skeleton only`
+- [x] video display — `wired for replay VIPC frames`
+- [x] video synchronization — `partial (replay timeline + transport/video playback wired; live video pending)`
 
 ## Tools
 - [x] find signal — `wired`

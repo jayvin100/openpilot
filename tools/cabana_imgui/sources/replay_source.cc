@@ -28,8 +28,20 @@ bool ReplaySource::load(const std::string &route, const std::string &data_dir,
                         uint32_t flags, bool auto_source) {
   route_name_ = route;
 
+  std::vector<std::string> allow = {"can", "carParams"};
+  if ((flags & REPLAY_FLAG_NO_VIPC) == 0) {
+    allow.push_back("roadEncodeIdx");
+    allow.push_back("thumbnail");
+    if (flags & REPLAY_FLAG_DCAM) {
+      allow.push_back("driverEncodeIdx");
+    }
+    if (flags & REPLAY_FLAG_ECAM) {
+      allow.push_back("wideRoadEncodeIdx");
+    }
+  }
+
   replay_.reset(new Replay(route,
-                           {"can", "carParams"},  // minimal allow list for now
+                           allow,
                            {}, nullptr, flags, data_dir, auto_source));
   replay_->setSegmentCacheLimit(cabana::app_state().cached_minutes);
 

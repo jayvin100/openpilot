@@ -119,8 +119,9 @@ void render() {
 
       ImGui::SeparatorText("Current Build Notes");
       ImGui::BulletText("Route replay, detail views, history, and charts are wired.");
-      ImGui::BulletText("Video playback UI is present, but rendered video is not wired yet.");
-      ImGui::BulletText("Live sources, DBC editing, and session persistence are still pending.");
+      ImGui::BulletText("Replay video playback is wired, including transport controls and the scrub timeline.");
+      ImGui::BulletText("Live CAN sources are wired; live video and hardware-backed validation are still pending.");
+      ImGui::BulletText("DBC editing and session restore are wired in the ImGui app.");
     }
     ImGui::EndChild();
 
