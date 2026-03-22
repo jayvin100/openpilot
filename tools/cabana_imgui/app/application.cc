@@ -16,6 +16,7 @@
 #include <GLFW/glfw3.h>
 
 #include "core/app_state.h"
+#include "core/command_stack.h"
 #include "core/settings.h"
 #include "dbc/dbc_manager.h"
 #include "sources/replay_source.h"
@@ -204,6 +205,7 @@ int Application::run() {
         st.car_fingerprint = fp;
         if (!cabana::dbc::dbc_manager().dbc()) {
           if (cabana::dbc::dbc_manager().loadFromFingerprint(fp)) {
+            cabana::command_stack().clear();
             st.rememberRecentDbc(cabana::dbc::dbc_manager().loadedName());
             dbc_file_ = cabana::dbc::dbc_manager().loadedName();
           }
@@ -348,6 +350,7 @@ bool Application::openDbcFile(const std::string &path) {
     return false;
   }
 
+  cabana::command_stack().clear();
   dbc_file_ = cabana::dbc::dbc_manager().loadedName();
   auto &st = cabana::app_state();
   st.rememberRecentDbc(dbc_file_);

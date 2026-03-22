@@ -4,6 +4,7 @@
 
 #include "app/application.h"
 #include "core/app_state.h"
+#include "core/command_stack.h"
 #include "dbc/dbc_manager.h"
 #include "ui/file_dialogs.h"
 #include "ui/panes/detail_pane.h"
@@ -15,6 +16,7 @@ void render() {
   auto &st = cabana::app_state();
   auto *application = app();
   auto &dbc = cabana::dbc::dbc_manager();
+  auto &commands = cabana::command_stack();
   const bool has_dbc = dbc.dbc() != nullptr;
 
   if (ImGui::BeginMenuBar()) {
@@ -82,8 +84,12 @@ void render() {
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Edit")) {
-      if (ImGui::MenuItem("Undo", "Ctrl+Z")) {}
-      if (ImGui::MenuItem("Redo", "Ctrl+Y")) {}
+      if (ImGui::MenuItem("Undo", "Ctrl+Z", false, commands.canUndo())) {
+        commands.undo();
+      }
+      if (ImGui::MenuItem("Redo", "Ctrl+Y", false, commands.canRedo())) {
+        commands.redo();
+      }
       ImGui::Separator();
       if (ImGui::MenuItem("Edit Message...", "Ctrl+E", false, cabana::panes::canEditSelectedMessage())) {
         cabana::panes::requestEditSelectedMessage();

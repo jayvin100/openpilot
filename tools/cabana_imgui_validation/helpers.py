@@ -36,9 +36,11 @@ CHART_TAB_X0 = 1485
 CHART_TAB_Y = 710
 CHART_TAB_X_STEP = 60
 FILE_MENU = (15, 12)
+FILE_MENU_SAVE = (60, 199)
 FILE_MENU_SAVE_AS = (60, 215)
 FILE_MENU_EXIT = (30, 295)
 EDIT_MENU = (38, 12)
+EDIT_MENU_UNDO = (78, 28)
 EDIT_MENU_EDIT_MESSAGE = (80, 60)
 EDIT_MENU_ADD_SIGNAL = (80, 76)
 
@@ -524,6 +526,15 @@ def save_dbc_as_path(cabana, path):
   time.sleep(1.5)
 
 
+def save_current_dbc(cabana):
+  """Use the real File -> Save DBC flow to save to the current active path."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_SAVE)
+  time.sleep(1.2)
+
+
 def open_add_signal_via_menu(cabana):
   """Use the real Edit -> Add Signal flow to open the signal editor."""
   cabana.focus()
@@ -539,6 +550,15 @@ def open_edit_message_via_menu(cabana):
   cabana.click(*EDIT_MENU)
   time.sleep(0.4)
   cabana.click(*EDIT_MENU_EDIT_MESSAGE)
+  time.sleep(0.8)
+
+
+def undo_via_menu(cabana):
+  """Use the real Edit -> Undo flow."""
+  cabana.focus()
+  cabana.click(*EDIT_MENU)
+  time.sleep(0.4)
+  cabana.click(*EDIT_MENU_UNDO)
   time.sleep(0.8)
 
 

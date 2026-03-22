@@ -5,6 +5,7 @@
 
 #include "app/application.h"
 #include "core/app_state.h"
+#include "core/command_stack.h"
 #include "dbc/dbc_manager.h"
 #include "ui/file_dialogs.h"
 #include "ui/help_overlay.h"
@@ -116,9 +117,20 @@ void render() {
   ImGuiViewport *viewport = ImGui::GetMainViewport();
   auto &st = cabana::app_state();
   ImGuiIO &io = ImGui::GetIO();
+  auto &commands = cabana::command_stack();
+  const bool allow_shortcuts = !io.WantTextInput;
 
   if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F1)) {
     st.show_help_overlay = !st.show_help_overlay;
+  }
+  if (allow_shortcuts && io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z) && commands.canUndo()) {
+    commands.undo();
+  }
+  if (allow_shortcuts &&
+      ((io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) ||
+       (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))) &&
+      commands.canRedo()) {
+    commands.redo();
   }
   if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_E) && cabana::panes::canEditSelectedMessage()) {
     cabana::panes::requestEditSelectedMessage();

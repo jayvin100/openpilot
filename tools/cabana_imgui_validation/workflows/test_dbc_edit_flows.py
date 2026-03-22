@@ -21,8 +21,10 @@ from ..helpers import (  # noqa: TID251
   open_edit_message_via_menu,
   open_dbc_path,
   reset_layout,
+  save_current_dbc,
   save_dbc_as_path,
   select_first_message,
+  undo_via_menu,
   wait_for_demo_route,
 )
 
@@ -76,6 +78,40 @@ class TestDbcEditFlows:
       finally:
         cabana.kill()
 
+  def test_edit_message_definition_undo_redo(self):
+    with tempfile.TemporaryDirectory(prefix="cabana_edit_message_undo_") as config_home:
+      output_path = Path(config_home) / "edited_message_undo_redo.dbc"
+      cabana = self._setup_with_message(
+        env_extra={"XDG_CONFIG_HOME": config_home},
+        clean_config=False,
+      )
+      try:
+        open_edit_message_via_menu(cabana)
+        cabana.send_key("ctrl+a")
+        time.sleep(0.1)
+        cabana.type_text("CABANA_UNDO_MSG")
+        time.sleep(0.2)
+        cabana.send_key("Return")
+        time.sleep(1.0)
+
+        undo_via_menu(cabana)
+        save_dbc_as_path(cabana, str(output_path))
+        undo_text = output_path.read_text()
+        assert "CABANA_UNDO_MSG" not in undo_text
+
+        cabana.focus()
+        cabana.send_key("ctrl+y")
+        time.sleep(1.0)
+        save_current_dbc(cabana)
+        redo_text = output_path.read_text()
+        assert re.search(r"BO_ \d+ CABANA_UNDO_MSG:", redo_text)
+
+        path = cabana.screenshot("workflow_dbc_message_undo_redo.png")
+        assert cabana.is_alive()
+        assert path.exists()
+      finally:
+        cabana.kill()
+
   def test_binary_selection_adds_signal_definition_and_saves(self):
     with tempfile.TemporaryDirectory(prefix="cabana_add_signal_") as config_home:
       output_path = Path(config_home) / "edited_signal.dbc"
@@ -112,6 +148,38 @@ class TestDbcEditFlows:
         assert 'SG_ CABANA_NEW_SIGNAL : 7|1@1+ (1,0) [0|1] "" XXX' in text
 
         path = cabana.screenshot("workflow_binary_signal_added.png")
+        assert cabana.is_alive()
+        assert path.exists()
+      finally:
+        cabana.kill()
+
+  def test_binary_selection_signal_add_undo(self):
+    with tempfile.TemporaryDirectory(prefix="cabana_add_signal_undo_") as config_home:
+      output_path = Path(config_home) / "edited_signal_undo_redo.dbc"
+      cabana = self._setup_with_message(
+        env_extra={"XDG_CONFIG_HOME": config_home},
+        clean_config=False,
+      )
+      try:
+        cabana.send_key("space")
+        time.sleep(0.8)
+        cabana.click(*BINARY_SELECT_POINT)
+        time.sleep(0.6)
+
+        open_add_signal_via_menu(cabana)
+        cabana.send_key("ctrl+a")
+        time.sleep(0.1)
+        cabana.type_text("CABANA_UNDO_SIGNAL")
+        time.sleep(0.2)
+        cabana.send_key("Return")
+        time.sleep(1.0)
+
+        undo_via_menu(cabana)
+        save_dbc_as_path(cabana, str(output_path))
+        undo_text = output_path.read_text()
+        assert "CABANA_UNDO_SIGNAL" not in undo_text
+
+        path = cabana.screenshot("workflow_binary_signal_undo_redo.png")
         assert cabana.is_alive()
         assert path.exists()
       finally:

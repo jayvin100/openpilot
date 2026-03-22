@@ -11,6 +11,11 @@ namespace dbc {
 
 class DbcManager {
 public:
+  struct Snapshot {
+    bool has_dbc = false;
+    std::string contents;
+  };
+
   // Load DBC from a file path
   bool loadFromFile(const std::string &path);
 
@@ -44,6 +49,8 @@ public:
   bool messageNameExists(const std::string &name, uint32_t ignore_address = UINT32_MAX) const;
   std::string nextMessageName(uint32_t address) const;
   std::string nextSignalName(uint32_t address) const;
+  Snapshot captureSnapshot() const;
+  bool restoreSnapshot(const Snapshot &snapshot);
 
 private:
   void bumpRevision();

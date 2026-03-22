@@ -208,5 +208,33 @@ std::string DbcManager::nextSignalName(uint32_t address) const {
   return "NEW_SIGNAL";
 }
 
+DbcManager::Snapshot DbcManager::captureSnapshot() const {
+  if (!dbc_) {
+    return {};
+  }
+  return Snapshot{
+    .has_dbc = true,
+    .contents = dbc_->contents(),
+  };
+}
+
+bool DbcManager::restoreSnapshot(const Snapshot &snapshot) {
+  if (!snapshot.has_dbc) {
+    dbc_.reset();
+    loaded_name_.clear();
+    bumpRevision();
+    return true;
+  }
+
+  auto f = std::make_unique<DbcFile>();
+  if (!f->loadFromString(snapshot.contents, loaded_name_)) {
+    return false;
+  }
+
+  dbc_ = std::move(f);
+  bumpRevision();
+  return true;
+}
+
 }  // namespace dbc
 }  // namespace cabana

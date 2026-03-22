@@ -40,7 +40,7 @@ public:
   bool load(const std::string &filename);
 
   // Load from string content
-  bool loadFromString(const std::string &content);
+  bool loadFromString(const std::string &content, const std::string &filename = {});
 
   bool save() const;
   bool saveAs(const std::string &filename);
@@ -50,6 +50,7 @@ public:
   const Message *msg(uint32_t address) const;
   int signalCount() const;
   const std::string &filename() const { return filename_; }
+  const std::string &contents() const { return raw_content_; }
 
   void updateMessage(uint32_t address, const std::string &name, uint32_t size,
                      const std::string &transmitter, const std::string &comment);

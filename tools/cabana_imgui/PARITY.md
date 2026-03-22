@@ -50,7 +50,7 @@
 - [x] settings persistence — `partial (chart state + dock layout + selection/detail/dbc recents)`
 - [x] recent files/state — `partial (recent routes + recent dbc files)`
 - [x] session restore — `partial (chart tabs + dock layout + selected message + detail tab + last route/dbc)`
-- [ ] undo/redo command stack — `not started`
+- [x] undo/redo command stack — `wired for DBC message/signal edit flows`
 - [x] help overlay — `wired`
 
 ## UI Shell

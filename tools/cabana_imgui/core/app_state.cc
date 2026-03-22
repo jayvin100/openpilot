@@ -319,6 +319,41 @@ int AppState::totalChartCount() const {
   return total;
 }
 
+AppState::EditSnapshot AppState::captureEditSnapshot() const {
+  return EditSnapshot{
+    .has_selection = has_selection,
+    .selected_msg = selected_msg,
+    .has_bit_selection = has_bit_selection,
+    .bit_selection_anchor = bit_selection_anchor,
+    .bit_selection_start = bit_selection_start,
+    .bit_selection_size = bit_selection_size,
+    .bit_selection_little_endian = bit_selection_little_endian,
+    .current_detail_tab = current_detail_tab,
+    .chart_range_sec = chart_range_sec,
+    .current_chart_tab = current_chart_tab,
+    .selected_chart = selected_chart,
+    .next_chart_tab_id = next_chart_tab_id,
+    .chart_tabs = chart_tabs,
+  };
+}
+
+void AppState::restoreEditSnapshot(const EditSnapshot &snapshot) {
+  has_selection = snapshot.has_selection;
+  selected_msg = snapshot.selected_msg;
+  has_bit_selection = snapshot.has_bit_selection;
+  bit_selection_anchor = snapshot.bit_selection_anchor;
+  bit_selection_start = snapshot.bit_selection_start;
+  bit_selection_size = snapshot.bit_selection_size;
+  bit_selection_little_endian = snapshot.bit_selection_little_endian;
+  current_detail_tab = snapshot.current_detail_tab;
+  chart_range_sec = snapshot.chart_range_sec;
+  current_chart_tab = snapshot.current_chart_tab;
+  selected_chart = snapshot.selected_chart;
+  next_chart_tab_id = std::max(1, snapshot.next_chart_tab_id);
+  chart_tabs = snapshot.chart_tabs;
+  markSettingsDirty();
+}
+
 AppState &app_state() {
   static AppState s;
   return s;

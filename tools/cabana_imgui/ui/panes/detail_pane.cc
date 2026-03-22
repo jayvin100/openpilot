@@ -12,6 +12,7 @@
 
 #include "app/application.h"
 #include "core/app_state.h"
+#include "core/command_stack.h"
 #include "dbc/dbc_manager.h"
 #include "sources/replay_source.h"
 #include "ui/theme.h"
@@ -68,6 +69,19 @@ struct SignalEditorState {
 
 MessageEditorState g_message_editor;
 SignalEditorState g_signal_editor;
+
+template <typename Fn>
+bool apply_dbc_edit_command(const std::string &label, Fn &&fn) {
+  auto &dbc_mgr = cabana::dbc::dbc_manager();
+  auto &st = cabana::app_state();
+  const auto before_dbc = dbc_mgr.captureSnapshot();
+  const auto before_app = st.captureEditSnapshot();
+  if (!fn()) {
+    return false;
+  }
+  cabana::pushSnapshotCommand(label, before_dbc, before_app, dbc_mgr.captureSnapshot(), st.captureEditSnapshot());
+  return true;
+}
 
 void copy_to_buffer(char *dst, size_t dst_size, const std::string &src) {
   std::snprintf(dst, dst_size, "%s", src.c_str());
@@ -241,8 +255,11 @@ bool submit_message_editor() {
     }
   }
 
-  if (!dbc_mgr.updateMessage(g_message_editor.msg_id.address, name, g_message_editor.size,
-                             transmitter, comment)) {
+  const char *label = g_message_editor.existing ? "Edit Message" : "Create Message";
+  if (!apply_dbc_edit_command(label, [&]() {
+        return dbc_mgr.updateMessage(g_message_editor.msg_id.address, name, g_message_editor.size,
+                                     transmitter, comment);
+      })) {
     g_message_editor.error = "Failed to update the message definition.";
     return false;
   }
@@ -314,22 +331,28 @@ bool submit_signal_editor() {
   signal.unit = unit;
   signal.comment = comment;
 
-  bool ok = false;
-  if (g_signal_editor.mode == SignalEditorState::Mode::Add) {
-    ok = dbc_mgr.addSignal(g_signal_editor.msg_id.address, signal);
-  } else {
-    ok = dbc_mgr.updateSignal(g_signal_editor.msg_id.address, g_signal_editor.original_name, signal);
-  }
-  if (!ok) {
+  const char *label = g_signal_editor.mode == SignalEditorState::Mode::Add ? "Add Signal" : "Edit Signal";
+  if (!apply_dbc_edit_command(label, [&]() {
+        bool ok = false;
+        if (g_signal_editor.mode == SignalEditorState::Mode::Add) {
+          ok = dbc_mgr.addSignal(g_signal_editor.msg_id.address, signal);
+        } else {
+          ok = dbc_mgr.updateSignal(g_signal_editor.msg_id.address, g_signal_editor.original_name, signal);
+        }
+        if (!ok) {
+          return false;
+        }
+
+        auto &st = cabana::app_state();
+        if (g_signal_editor.mode == SignalEditorState::Mode::Edit) {
+          st.renameChartSignal(g_signal_editor.msg_id, g_signal_editor.original_name, signal.name);
+        }
+        st.setBitSelection(signal.start_bit, signal.size, signal.is_little_endian);
+        return true;
+      })) {
     g_signal_editor.error = "Failed to update the signal definition.";
     return false;
   }
-
-  auto &st = cabana::app_state();
-  if (g_signal_editor.mode == SignalEditorState::Mode::Edit) {
-    st.renameChartSignal(g_signal_editor.msg_id, g_signal_editor.original_name, signal.name);
-  }
-  st.setBitSelection(signal.start_bit, signal.size, signal.is_little_endian);
   return true;
 }
 
@@ -690,12 +713,17 @@ void render_signal_list(const MessageId &id, const uint8_t *data, int data_size)
     ImGui::EndTable();
   }
 
-  if (!signal_to_remove.empty() &&
-      cabana::dbc::dbc_manager().removeSignal(id.address, signal_to_remove)) {
-    st.removeSignalFromCharts(id, signal_to_remove);
-    if (st.has_bit_selection) {
-      st.clearBitSelection();
-    }
+  if (!signal_to_remove.empty()) {
+    apply_dbc_edit_command("Remove Signal", [&]() {
+      if (!cabana::dbc::dbc_manager().removeSignal(id.address, signal_to_remove)) {
+        return false;
+      }
+      st.removeSignalFromCharts(id, signal_to_remove);
+      if (st.has_bit_selection) {
+        st.clearBitSelection();
+      }
+      return true;
+    });
   }
 }
 
@@ -901,10 +929,17 @@ void detail() {
   }
   if (!dbc_msg) ImGui::EndDisabled();
 
-  if (remove_message && cabana::dbc::dbc_manager().removeMessage(id.address)) {
-    st.removeChartsForMessage(id);
-    st.clearBitSelection();
-    dbc_msg = cabana::dbc::dbc_manager().msg(id.address);
+  if (remove_message) {
+    if (apply_dbc_edit_command("Remove Message", [&]() {
+          if (!cabana::dbc::dbc_manager().removeMessage(id.address)) {
+            return false;
+          }
+          st.removeChartsForMessage(id);
+          st.clearBitSelection();
+          return true;
+        })) {
+      dbc_msg = cabana::dbc::dbc_manager().msg(id.address);
+    }
   }
 
   ImGui::Separator();

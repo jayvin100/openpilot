@@ -29,6 +29,22 @@ enum class DetailTab {
 };
 
 struct AppState {
+  struct EditSnapshot {
+    bool has_selection = false;
+    MessageId selected_msg;
+    bool has_bit_selection = false;
+    int bit_selection_anchor = 0;
+    int bit_selection_start = 0;
+    int bit_selection_size = 0;
+    bool bit_selection_little_endian = true;
+    DetailTab current_detail_tab = DetailTab::Binary;
+    float chart_range_sec = 7.0f;
+    int current_chart_tab = 0;
+    int selected_chart = -1;
+    int next_chart_tab_id = 1;
+    std::vector<ChartTabState> chart_tabs;
+  };
+
   std::atomic<bool> quit_requested{false};
   std::atomic<bool> paused{false};
   std::atomic<bool> segments_merged{false};
@@ -94,6 +110,8 @@ struct AppState {
   void removeChartsForMessage(const MessageId &msg_id);
   bool hasChartSignal(const MessageId &msg_id, const std::string &signal_name) const;
   int totalChartCount() const;
+  EditSnapshot captureEditSnapshot() const;
+  void restoreEditSnapshot(const EditSnapshot &snapshot);
   void markSettingsDirty();
 };
 

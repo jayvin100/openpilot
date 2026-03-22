@@ -62,16 +62,13 @@ bool DbcFile::load(const std::string &filename) {
   if (!f.is_open()) return false;
   std::string content((std::istreambuf_iterator<char>(f)),
                        std::istreambuf_iterator<char>());
+  return loadFromString(content, filename);
+}
+
+bool DbcFile::loadFromString(const std::string &content, const std::string &filename) {
   raw_content_ = content;
   filename_ = filename;
   name_ = filename;
-  parse(content);
-  return true;
-}
-
-bool DbcFile::loadFromString(const std::string &content) {
-  raw_content_ = content;
-  filename_.clear();
   parse(content);
   return true;
 }
