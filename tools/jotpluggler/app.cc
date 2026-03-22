@@ -33,7 +33,8 @@ constexpr const char *UNTITLED_PANE_TITLE = "...";
 constexpr float SIDEBAR_WIDTH = 320.0f;
 constexpr float SIDEBAR_MIN_WIDTH = 220.0f;
 constexpr float SIDEBAR_MAX_WIDTH = 520.0f;
-constexpr float STATUS_BAR_HEIGHT = 38.0f;
+constexpr float TIMELINE_BAR_HEIGHT = 14.0f;
+constexpr float STATUS_BAR_HEIGHT = 52.0f;
 constexpr double MIN_HORIZONTAL_ZOOM_SECONDS = 2.0;
 constexpr double PLOT_Y_PAD_FRACTION = 0.4;
 ImFont *g_ui_font = nullptr;
@@ -1568,7 +1569,11 @@ bool apply_axis_limits_editor(AppSession *session, UiState *state) {
   state->has_shared_range = true;
   state->x_view_min = editor.x_min;
   state->x_view_max = editor.x_max;
-  state->follow_latest = false;
+  if (session->data_mode == SessionDataMode::Stream) {
+    state->follow_latest = infer_stream_follow_state(*state, *session);
+  } else {
+    state->follow_latest = false;
+  }
   state->suppress_range_side_effects = true;
   clamp_shared_range(state, *session);
   persist_shared_range_to_tab(tab, *state);
@@ -1704,7 +1709,11 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   if (std::abs(state->x_view_min - previous_x_min) > 1.0e-6
       || std::abs(state->x_view_max - previous_x_max) > 1.0e-6) {
     if (!state->suppress_range_side_effects) {
-      state->follow_latest = false;
+      if (session.data_mode == SessionDataMode::Stream) {
+        state->follow_latest = infer_stream_follow_state(*state, session);
+      } else {
+        state->follow_latest = false;
+      }
     }
   }
   ImPlot::PopStyleColor(6);
@@ -1870,8 +1879,9 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
     }
     case PaneMenuActionKind::ResetView:
       reset_shared_range(state, *session);
-      state->follow_latest = false;
+      state->follow_latest = session->data_mode == SessionDataMode::Stream;
       state->suppress_range_side_effects = true;
+      clamp_shared_range(state, *session);
       persist_shared_range_to_tab(tab, *state);
       clear_pane_vertical_limits(&tab->panes[static_cast<size_t>(pane_index)]);
       layout_changed = true;
@@ -1879,8 +1889,9 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
       break;
     case PaneMenuActionKind::ResetHorizontal:
       reset_shared_range(state, *session);
-      state->follow_latest = false;
+      state->follow_latest = session->data_mode == SessionDataMode::Stream;
       state->suppress_range_side_effects = true;
+      clamp_shared_range(state, *session);
       persist_shared_range_to_tab(tab, *state);
       layout_changed = true;
       state->status_text = "Horizontal zoom reset";

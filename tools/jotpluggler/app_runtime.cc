@@ -414,7 +414,7 @@ struct StreamPoller::Impl {
           }
 
           StreamExtractBatch batch = accumulator.takeBatch();
-          if (!batch.series.empty() || !batch.logs.empty() || !batch.enum_info.empty()
+          if (!batch.series.empty() || !batch.logs.empty() || !batch.timeline.empty() || !batch.enum_info.empty()
               || !batch.car_fingerprint.empty() || !batch.dbc_name.empty()) {
             std::lock_guard<std::mutex> lock(mutex);
             merge_batch(&pending, &pending_series_slots, &batch);
@@ -468,7 +468,7 @@ struct StreamPoller::Impl {
   bool consume(StreamExtractBatch *batch, std::string *out_error_text) {
     std::lock_guard<std::mutex> lock(mutex);
     const bool has_error = !error_text.empty();
-    const bool has_batch = !pending.series.empty() || !pending.logs.empty() || !pending.enum_info.empty()
+    const bool has_batch = !pending.series.empty() || !pending.logs.empty() || !pending.timeline.empty() || !pending.enum_info.empty()
       || !pending.car_fingerprint.empty() || !pending.dbc_name.empty();
     if (!has_error && !has_batch) return false;
     if (batch != nullptr) {
@@ -508,6 +508,11 @@ struct StreamPoller::Impl {
       dst->logs.insert(dst->logs.end(),
                        std::make_move_iterator(src->logs.begin()),
                        std::make_move_iterator(src->logs.end()));
+    }
+    if (!src->timeline.empty()) {
+      dst->timeline.insert(dst->timeline.end(),
+                           std::make_move_iterator(src->timeline.begin()),
+                           std::make_move_iterator(src->timeline.end()));
     }
     for (auto &[path, info] : src->enum_info) {
       dst->enum_info[path] = std::move(info);
@@ -883,4 +888,3 @@ void SidebarCameraFeed::update(double tracker_time) {
 void SidebarCameraFeed::draw(float width, bool loading) {
   impl_->draw(width, loading);
 }
-

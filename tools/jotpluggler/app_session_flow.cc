@@ -66,6 +66,17 @@ std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab 
   return std::make_pair(min_value, max_value);
 }
 
+bool infer_stream_follow_state(const UiState &state, const AppSession &session) {
+  if (session.data_mode != SessionDataMode::Stream || !state.has_shared_range || !session.route_data.has_time_range) {
+    return false;
+  }
+  const double target_span = std::max(MIN_HORIZONTAL_ZOOM_SECONDS, session.stream_buffer_seconds);
+  const double current_span = std::max(0.0, state.x_view_max - state.x_view_min);
+  const double edge_epsilon = std::max(0.05, target_span * 0.02);
+  return std::abs(state.x_view_max - state.route_x_max) <= edge_epsilon
+      && std::abs(current_span - target_span) <= edge_epsilon;
+}
+
 void ensure_shared_range(UiState *state, const AppSession &session) {
   if (session.route_data.has_time_range) {
     state->route_x_min = session.route_data.x_min;
@@ -146,6 +157,9 @@ void clamp_shared_range(UiState *state, const AppSession &session) {
     }
     if (state->has_tracker_time && session.route_data.has_time_range) {
       state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
+    }
+    if (session.route_data.has_time_range) {
+      state->follow_latest = infer_stream_follow_state(*state, session);
     }
     return;
   }
@@ -280,7 +294,8 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
       ImGui::Separator();
       if (ImGui::MenuItem("Reset Plot View")) {
         reset_shared_range(state, *session);
-        state->follow_latest = false;
+        state->follow_latest = session->data_mode == SessionDataMode::Stream;
+        clamp_shared_range(state, *session);
         state->suppress_range_side_effects = true;
         state->status_text = "Plot view reset";
       }

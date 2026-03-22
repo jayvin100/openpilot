@@ -14,6 +14,10 @@ std::optional<double> stream_batch_extreme_time(const StreamExtractBatch &batch,
     const double t = log_time_fn(batch);
     result = result.has_value() ? cmp(*result, t) : t;
   }
+  if (!batch.timeline.empty()) {
+    const double t = cmp(batch.timeline.front().start_time, batch.timeline.back().end_time);
+    result = result.has_value() ? cmp(*result, t) : t;
+  }
   return result;
 }
 
@@ -40,6 +44,16 @@ bool layout_has_custom_curves(const SketchLayout &layout) {
     }
   }
   return false;
+}
+
+void append_stream_timeline_entries(std::vector<TimelineEntry> *timeline, std::vector<TimelineEntry> entries) {
+  for (TimelineEntry &entry : entries) {
+    if (!timeline->empty() && timeline->back().type == entry.type) {
+      timeline->back().end_time = std::max(timeline->back().end_time, entry.end_time);
+    } else {
+      timeline->push_back(std::move(entry));
+    }
+  }
 }
 
 void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch batch) {
@@ -93,6 +107,9 @@ void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch 
                            return a.mono_time < b.mono_time;
                          });
     }
+  }
+  if (!batch.timeline.empty()) {
+    append_stream_timeline_entries(&session->route_data.timeline, std::move(batch.timeline));
   }
 
   if (new_paths) {

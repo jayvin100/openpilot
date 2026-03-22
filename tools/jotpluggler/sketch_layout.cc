@@ -103,6 +103,7 @@ struct SeriesAccumulator {
 struct LoadedRouteArtifacts {
   std::vector<RouteSeries> series;
   std::vector<LogEntry> logs;
+  std::vector<TimelineEntry> timeline;
   std::unordered_map<std::string, EnumInfo> enum_info;
 };
 
@@ -448,6 +449,36 @@ uint8_t alert_status_to_level(cereal::SelfdriveState::AlertStatus status) {
   return 20;
 }
 
+TimelineEntry::Type alert_status_to_timeline_type(cereal::SelfdriveState::AlertStatus status, bool enabled) {
+  if (!enabled) {
+    return TimelineEntry::Type::None;
+  }
+  switch (status) {
+    case cereal::SelfdriveState::AlertStatus::NORMAL:
+      return TimelineEntry::Type::Engaged;
+    case cereal::SelfdriveState::AlertStatus::USER_PROMPT:
+      return TimelineEntry::Type::AlertInfo;
+    case cereal::SelfdriveState::AlertStatus::CRITICAL:
+      return TimelineEntry::Type::AlertCritical;
+  }
+  return TimelineEntry::Type::Engaged;
+}
+
+void append_timeline_entry(std::vector<TimelineEntry> *timeline, double mono_time, TimelineEntry::Type type) {
+  if (timeline == nullptr) {
+    return;
+  }
+  if (!timeline->empty() && timeline->back().type == type) {
+    timeline->back().end_time = std::max(timeline->back().end_time, mono_time);
+    return;
+  }
+  timeline->push_back(TimelineEntry{
+    .start_time = mono_time,
+    .end_time = mono_time,
+    .type = type,
+  });
+}
+
 double android_wall_time_seconds(uint64_t timestamp) {
   if (timestamp == 0) return 0.0;
   if (timestamp > 1000000000000ULL) return static_cast<double>(timestamp) / 1.0e9;
@@ -607,6 +638,24 @@ void append_log_event(cereal::Event::Which which,
     default:
       break;
   }
+}
+
+std::vector<TimelineEntry> extract_segment_timeline(const std::vector<Event> &events) {
+  std::vector<TimelineEntry> timeline;
+  timeline.reserve(events.size() / 16);
+
+  for (const Event &event_record : events) {
+    if (event_record.which != cereal::Event::Which::SELFDRIVE_STATE) {
+      continue;
+    }
+    capnp::FlatArrayMessageReader event_reader(event_record.data);
+    const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
+    const auto sd = event.getSelfdriveState();
+    const double mono_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
+    append_timeline_entry(&timeline, mono_time, alert_status_to_timeline_type(sd.getAlertStatus(), sd.getEnabled()));
+  }
+
+  return timeline;
 }
 
 std::vector<LogEntry> extract_segment_logs(const std::vector<Event> &events) {
@@ -1283,6 +1332,7 @@ std::vector<RouteSeries> collect_series(SeriesAccumulator &&series) {
 
 RouteData build_route_data(std::vector<RouteSeries> &&series_list,
                            std::vector<LogEntry> &&logs,
+                           std::vector<TimelineEntry> &&timeline,
                            std::unordered_map<std::string, EnumInfo> &&enum_info,
                            std::string car_fingerprint,
                            std::string dbc_name) {
@@ -1329,6 +1379,11 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list,
     route_data.x_min = route_data.logs.front().mono_time;
     route_data.x_max = route_data.logs.back().mono_time;
   }
+  if (!route_data.has_time_range && !timeline.empty()) {
+    route_data.has_time_range = true;
+    route_data.x_min = timeline.front().start_time;
+    route_data.x_max = timeline.back().end_time;
+  }
 
   if (route_data.has_time_range) {
     const double time_offset = route_data.x_min;
@@ -1341,9 +1396,27 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list,
       entry.boot_time = entry.mono_time;
       entry.mono_time -= time_offset;
     }
+    for (TimelineEntry &entry : timeline) {
+      entry.start_time -= time_offset;
+      entry.end_time -= time_offset;
+    }
     route_data.x_max -= time_offset;
     route_data.x_min = 0.0;
   }
+
+  std::sort(timeline.begin(), timeline.end(), [](const TimelineEntry &a, const TimelineEntry &b) {
+    return a.start_time < b.start_time;
+  });
+  std::vector<TimelineEntry> merged_timeline;
+  merged_timeline.reserve(timeline.size());
+  for (TimelineEntry &entry : timeline) {
+    if (!merged_timeline.empty() && merged_timeline.back().type == entry.type) {
+      merged_timeline.back().end_time = std::max(merged_timeline.back().end_time, entry.end_time);
+      continue;
+    }
+    merged_timeline.push_back(std::move(entry));
+  }
+  route_data.timeline = std::move(merged_timeline);
 
   route_data.enum_info = std::move(enum_info);
   route_data.car_fingerprint = std::move(car_fingerprint);
@@ -1491,6 +1564,7 @@ LoadedRouteArtifacts load_route_series_parallel(
   struct SegmentResult {
     SeriesAccumulator series;
     std::vector<LogEntry> logs;
+    std::vector<TimelineEntry> timeline;
   };
 
   const std::vector<std::pair<int, SegmentLogs>> segment_list(segments.begin(), segments.end());
@@ -1552,6 +1626,7 @@ LoadedRouteArtifacts load_route_series_parallel(
       const auto extract_start = LoadStats::Clock::now();
       results[index].series = extract_segment_series(reader.events, schema, can_dbc, skip_raw_can, worker_budget, segment_workers);
       results[index].logs = extract_segment_logs(reader.events);
+      results[index].timeline = extract_segment_timeline(reader.events);
       segment_stats.extract_seconds = std::chrono::duration<double>(LoadStats::Clock::now() - extract_start).count();
       segment_stats.event_count = reader.events.size();
       segment_stats.series_count = populated_series_count(results[index].series);
@@ -1577,16 +1652,23 @@ LoadedRouteArtifacts load_route_series_parallel(
     merge_series_accumulator(&merged, &results[i].series);
   }
   std::vector<LogEntry> logs;
+  std::vector<TimelineEntry> timeline;
   for (SegmentResult &result : results) {
     if (!result.logs.empty()) {
       logs.insert(logs.end(),
                   std::make_move_iterator(result.logs.begin()),
                   std::make_move_iterator(result.logs.end()));
     }
+    if (!result.timeline.empty()) {
+      timeline.insert(timeline.end(),
+                      std::make_move_iterator(result.timeline.begin()),
+                      std::make_move_iterator(result.timeline.end()));
+    }
   }
   LoadedRouteArtifacts artifacts;
   artifacts.series = collect_series(std::move(merged));
   artifacts.logs = std::move(logs);
+  artifacts.timeline = std::move(timeline);
   artifacts.enum_info = std::move(merged.enum_info);
   stats->merge_end = LoadStats::Clock::now();
   return artifacts;
@@ -1634,6 +1716,7 @@ struct StreamAccumulator::Impl {
   const SchemaIndex &schema = SchemaIndex::instance();
   SeriesAccumulator series = make_series_accumulator(schema);
   std::vector<LogEntry> logs;
+  std::vector<TimelineEntry> timeline;
   std::string last_alert_key;
   std::string manual_dbc_name;
   std::string detected_dbc_name;
@@ -1692,6 +1775,11 @@ void StreamAccumulator::appendEvent(cereal::Event::Which which, kj::ArrayPtr<con
                     *impl_->time_offset,
                     &impl_->series);
   append_log_event(which, event, *impl_->time_offset, &impl_->logs, &impl_->last_alert_key);
+  if (which == cereal::Event::Which::SELFDRIVE_STATE) {
+    const auto sd = event.getSelfdriveState();
+    append_timeline_entry(&impl_->timeline, boot_time - *impl_->time_offset,
+                          alert_status_to_timeline_type(sd.getAlertStatus(), sd.getEnabled()));
+  }
 }
 
 StreamExtractBatch StreamAccumulator::takeBatch() {
@@ -1702,7 +1790,8 @@ StreamExtractBatch StreamAccumulator::takeBatch() {
     batch.has_time_offset = true;
     batch.time_offset = *impl_->time_offset;
   }
-  if (impl_->logs.empty() && populated_series_count(impl_->series) == 0 && impl_->series.enum_info.empty()) {
+  if (impl_->logs.empty() && impl_->timeline.empty()
+      && populated_series_count(impl_->series) == 0 && impl_->series.enum_info.empty()) {
     return batch;
   }
 
@@ -1710,8 +1799,10 @@ StreamExtractBatch StreamAccumulator::takeBatch() {
   batch.enum_info = std::move(emitted.enum_info);
   batch.series = collect_series(std::move(emitted));
   batch.logs = std::move(impl_->logs);
+  batch.timeline = std::move(impl_->timeline);
   impl_->series = make_series_accumulator(impl_->schema);
   impl_->logs.clear();
+  impl_->timeline.clear();
   return batch;
 }
 
@@ -1759,6 +1850,7 @@ RouteData load_route_data(const std::string &route_name,
   LoadedRouteArtifacts artifacts = load_route_series_parallel(segments, schema, can_dbc ? &*can_dbc : nullptr, !resolved_dbc.empty(), &stats);
   RouteData route_data = build_route_data(std::move(artifacts.series),
                                           std::move(artifacts.logs),
+                                          std::move(artifacts.timeline),
                                           std::move(artifacts.enum_info),
                                           metadata.car_fingerprint,
                                           resolved_dbc);
@@ -1773,4 +1865,3 @@ const std::vector<std::string> &available_dbc_names() {
   static const std::vector<std::string> names = available_dbc_names_impl();
   return names;
 }
-

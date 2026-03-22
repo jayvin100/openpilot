@@ -146,12 +146,27 @@ struct EnumInfo {
   std::vector<std::string> names;
 };
 
+struct TimelineEntry {
+  enum class Type : uint8_t {
+    None,
+    Engaged,
+    AlertInfo,
+    AlertWarning,
+    AlertCritical,
+  };
+
+  double start_time = 0.0;
+  double end_time = 0.0;
+  Type type = Type::None;
+};
+
 struct RouteData {
   std::vector<RouteSeries> series;
   std::vector<std::string> paths;
   std::vector<std::string> roots;
   CameraFeedIndex road_camera;
   std::vector<LogEntry> logs;
+  std::vector<TimelineEntry> timeline;
   std::unordered_map<std::string, EnumInfo> enum_info;
   std::string car_fingerprint;
   std::string dbc_name;
@@ -163,6 +178,7 @@ struct RouteData {
 struct StreamExtractBatch {
   std::vector<RouteSeries> series;
   std::vector<LogEntry> logs;
+  std::vector<TimelineEntry> timeline;
   std::unordered_map<std::string, EnumInfo> enum_info;
   std::string car_fingerprint;
   std::string dbc_name;
@@ -407,6 +423,14 @@ struct AxisLimitsEditorState {
   double y_max = 1.0;
 };
 
+enum class TimelineDragMode : uint8_t {
+  None,
+  ScrubCursor,
+  PanViewport,
+  ResizeLeft,
+  ResizeRight,
+};
+
 struct UndoStack {
   static constexpr size_t kMaxHistory = 50;
 
@@ -499,6 +523,10 @@ struct UiState {
   double playback_rate = 1.0;
   double playback_step = 0.1;
   double stream_buffer_seconds = 30.0;
+  TimelineDragMode timeline_drag_mode = TimelineDragMode::None;
+  double timeline_drag_anchor_time = 0.0;
+  double timeline_drag_anchor_x_min = 0.0;
+  double timeline_drag_anchor_x_max = 0.0;
   AxisLimitsEditorState axis_limits;
   CustomSeriesEditorState custom_series;
   LogsUiState logs;
