@@ -118,6 +118,13 @@ void AppState::clearDbcAssignments(const SourceSet &sources) {
   markSettingsDirty();
 }
 
+void AppState::clearAllDbcAssignments() {
+  if (active_dbc_files.empty() && active_dbc_file.empty()) return;
+  active_dbc_files.clear();
+  active_dbc_file.clear();
+  markSettingsDirty();
+}
+
 void AppState::clearDbcFileAssignments(const std::string &path) {
   if (path.empty()) return;
 

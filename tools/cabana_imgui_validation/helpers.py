@@ -36,8 +36,11 @@ CHART_TAB_X0 = 1485
 CHART_TAB_Y = 710
 CHART_TAB_X_STEP = 60
 FILE_MENU = (15, 12)
+FILE_MENU_NEW_DBC = (60, 92)
 FILE_MENU_SAVE = (60, 199)
 FILE_MENU_SAVE_AS = (60, 215)
+FILE_MENU_LOAD_CLIPBOARD = (60, 176)
+FILE_MENU_COPY_DBC = (60, 231)
 FILE_MENU_EXIT = (30, 295)
 FILE_MENU_MANAGE_DBCS = (60, 124)
 EDIT_MENU = (38, 12)
@@ -45,9 +48,13 @@ EDIT_MENU_UNDO = (78, 28)
 EDIT_MENU_REDO = (78, 44)
 EDIT_MENU_EDIT_MESSAGE = (80, 60)
 EDIT_MENU_ADD_SIGNAL = (80, 76)
-MANAGE_DBC_MODAL_OPEN_X = 764
-MANAGE_DBC_MODAL_REMOVE_BUS_X = 1049
-MANAGE_DBC_MODAL_ROW_Y0 = 510
+MANAGE_DBC_MODAL_NEW_X = 605
+MANAGE_DBC_MODAL_OPEN_X = 703
+MANAGE_DBC_MODAL_LOAD_CLIPBOARD_X = 815
+MANAGE_DBC_MODAL_SAVE_AS_X = 1001
+MANAGE_DBC_MODAL_COPY_X = 1095
+MANAGE_DBC_MODAL_REMOVE_BUS_X = 1197
+MANAGE_DBC_MODAL_ROW_Y0 = 496
 MANAGE_DBC_MODAL_ROW_STEP = 40
 
 
@@ -315,6 +322,35 @@ class XvfbCabana:
     )
     return path
 
+  def set_clipboard_text(self, text):
+    """Write text into the X11 clipboard for this display."""
+    env = self._xdotool_env()
+    if env is None:
+      raise RuntimeError("Cannot access clipboard — display not discovered yet")
+    subprocess.run(
+      ["xclip", "-selection", "clipboard", "-in"],
+      input=text,
+      text=True,
+      env=env,
+      timeout=10,
+      check=True,
+    )
+
+  def get_clipboard_text(self):
+    """Read text from the X11 clipboard for this display."""
+    env = self._xdotool_env()
+    if env is None:
+      raise RuntimeError("Cannot access clipboard — display not discovered yet")
+    result = subprocess.run(
+      ["xclip", "-selection", "clipboard", "-out"],
+      capture_output=True,
+      text=True,
+      env=env,
+      timeout=10,
+      check=True,
+    )
+    return result.stdout
+
   def xdotool(self, *args):
     """Run an xdotool command against the cabana display."""
     env = self._xdotool_env()
@@ -517,6 +553,42 @@ def open_dbc_path(cabana, path):
   time.sleep(1.2)
 
 
+def new_dbc_via_shortcut(cabana):
+  """Use the real Ctrl+N flow to create a new in-memory DBC."""
+  cabana.focus()
+  cabana.click(400, 400)
+  time.sleep(0.2)
+  cabana.send_key("ctrl+n")
+  time.sleep(1.0)
+
+
+def new_dbc_via_menu(cabana):
+  """Use File -> New DBC File."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_NEW_DBC)
+  time.sleep(1.0)
+
+
+def load_dbc_from_clipboard(cabana):
+  """Use File -> Load DBC From Clipboard."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_LOAD_CLIPBOARD)
+  time.sleep(1.0)
+
+
+def copy_dbc_to_clipboard(cabana):
+  """Use File -> Copy DBC To Clipboard."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_COPY_DBC)
+  time.sleep(0.8)
+
+
 def save_dbc_as_path(cabana, path):
   """Use the real File -> Save DBC As flow to save the current DBC."""
   cabana.focus()
@@ -541,6 +613,17 @@ def save_current_dbc(cabana):
   time.sleep(1.2)
 
 
+def new_manage_dbc_for_bus(cabana, bus_index=0):
+  """Use File -> Manage DBC Files -> Bus N -> New DBC."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_MANAGE_DBCS)
+  time.sleep(0.8)
+  cabana.click(MANAGE_DBC_MODAL_NEW_X, MANAGE_DBC_MODAL_ROW_Y0 + bus_index * MANAGE_DBC_MODAL_ROW_STEP)
+  time.sleep(0.8)
+
+
 def open_manage_dbc_for_bus_path(cabana, path, bus_index=0):
   """Use File -> Manage DBC Files -> Bus N -> Open DBC."""
   cabana.focus()
@@ -556,6 +639,34 @@ def open_manage_dbc_for_bus_path(cabana, path, bus_index=0):
   time.sleep(0.3)
   cabana.send_key("Return")
   time.sleep(1.2)
+
+
+def load_manage_dbc_from_clipboard(cabana, bus_index=0):
+  """Use File -> Manage DBC Files -> Bus N -> Load Clipboard."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_MANAGE_DBCS)
+  time.sleep(0.8)
+  cabana.click(MANAGE_DBC_MODAL_LOAD_CLIPBOARD_X, MANAGE_DBC_MODAL_ROW_Y0 + bus_index * MANAGE_DBC_MODAL_ROW_STEP)
+  time.sleep(1.0)
+
+
+def save_manage_dbc_as_path(cabana, path, bus_index=0):
+  """Use File -> Manage DBC Files -> Bus N -> Save As."""
+  cabana.focus()
+  cabana.click(*FILE_MENU)
+  time.sleep(0.4)
+  cabana.click(*FILE_MENU_MANAGE_DBCS)
+  time.sleep(0.8)
+  cabana.click(MANAGE_DBC_MODAL_SAVE_AS_X, MANAGE_DBC_MODAL_ROW_Y0 + bus_index * MANAGE_DBC_MODAL_ROW_STEP)
+  time.sleep(1.0)
+  cabana.send_key("ctrl+a")
+  time.sleep(0.2)
+  cabana.type_text(path)
+  time.sleep(0.4)
+  cabana.send_key("Return")
+  time.sleep(1.5)
 
 
 def remove_manage_dbc_from_bus(cabana, bus_index=0):

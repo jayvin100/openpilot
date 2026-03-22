@@ -34,6 +34,8 @@ public:
 
   // Load DBC from a file path
   bool loadFromFile(const SourceSet &sources, const std::string &path);
+  bool loadFromString(const SourceSet &sources, const std::string &content,
+                      const std::string &filename = {});
 
   // Load DBC by name from opendbc (e.g. "ford_lincoln_base_pt")
   bool loadFromOpendbc(const SourceSet &sources, const std::string &name);

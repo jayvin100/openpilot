@@ -51,6 +51,17 @@ std::string dbc_menu_label(const cabana::dbc::DbcFile *dbc_file) {
   return std::filesystem::path(dbc_file->filename()).filename().string();
 }
 
+int primary_source_for_file(const cabana::dbc::DbcFile *dbc_file) {
+  if (!dbc_file) return cabana::dbc::kDbcSourceAll;
+  const auto sources = cabana::dbc::dbc_manager().sources(dbc_file);
+  return sources.empty() ? cabana::dbc::kDbcSourceAll : *sources.begin();
+}
+
+const cabana::dbc::DbcFile *single_dbc_file() {
+  const auto files = cabana::dbc::dbc_manager().allDbcFiles();
+  return files.size() == 1 ? *files.begin() : nullptr;
+}
+
 void render_manage_dbcs_modal(Application *application) {
   auto &dbc = cabana::dbc::dbc_manager();
   const auto buses = available_buses();
@@ -84,19 +95,38 @@ void render_manage_dbcs_modal(Application *application) {
         ImGui::TextDisabled("(%s)", source_label.c_str());
       }
 
-      if (ImGui::Button("Open DBC...", ImVec2(110, 0))) {
+      if (ImGui::Button("New DBC", ImVec2(88, 0)) && application) {
+        application->newDbcFile(sources);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Open DBC...", ImVec2(96, 0))) {
         cabana::file_dialogs::requestOpenDbc(sources);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Load Clipboard", ImVec2(116, 0)) && application) {
+        application->loadDbcFromClipboard(sources);
         ImGui::CloseCurrentPopup();
       }
       ImGui::SameLine();
       ImGui::BeginDisabled(!dbc_file);
       if (ImGui::Button("Save", ImVec2(72, 0)) && application) {
-        application->saveDbc(bus);
+        if (!dbc_file->filename().empty()) {
+          application->saveDbc(bus);
+        } else if (!dbc_file->messages().empty()) {
+          cabana::file_dialogs::requestSaveDbcAs(bus);
+        }
         ImGui::CloseCurrentPopup();
       }
       ImGui::SameLine();
       if (ImGui::Button("Save As", ImVec2(88, 0))) {
         cabana::file_dialogs::requestSaveDbcAs(bus);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Copy", ImVec2(88, 0)) && application) {
+        application->copyDbcToClipboard(bus);
         ImGui::CloseCurrentPopup();
       }
       ImGui::SameLine();
@@ -129,6 +159,9 @@ void render() {
   auto &dbc = cabana::dbc::dbc_manager();
   auto &commands = cabana::command_stack();
   const bool has_dbc = dbc.hasAnyDbc();
+  const auto *single_file = single_dbc_file();
+  const bool has_single_dbc = single_file != nullptr;
+  const int single_source = primary_source_for_file(single_file);
 
   if (ImGui::BeginMenuBar()) {
     if (ImGui::BeginMenu("File")) {
@@ -139,7 +172,9 @@ void render() {
       ImGui::Separator();
       if (ImGui::MenuItem("Export to CSV...")) {}
       ImGui::Separator();
-      if (ImGui::MenuItem("New DBC File", "Ctrl+N")) {}
+      if (ImGui::MenuItem("New DBC File", "Ctrl+N") && application) {
+        application->newDbcFile(cabana::dbc::sourceAll());
+      }
       if (ImGui::MenuItem("Open DBC File...", "Ctrl+O")) {
         cabana::file_dialogs::requestOpenDbc();
       }
@@ -176,19 +211,27 @@ void render() {
       if (ImGui::BeginMenu("Load DBC from comma/opendbc")) {
         ImGui::EndMenu();
       }
-      if (ImGui::MenuItem("Load DBC From Clipboard")) {}
+      if (ImGui::MenuItem("Load DBC From Clipboard") && application) {
+        application->loadDbcFromClipboard(cabana::dbc::sourceAll());
+      }
       ImGui::Separator();
       if (ImGui::MenuItem("Save DBC...", "Ctrl+S", false, has_dbc)) {
-        if (!dbc.loadedName().empty()) {
-          application->saveDbc();
+        if (has_single_dbc) {
+          if (!single_file->filename().empty()) {
+            application->saveDbc(single_source);
+          } else {
+            cabana::file_dialogs::requestSaveDbcAs(single_source);
+          }
         } else {
-          cabana::file_dialogs::requestSaveDbcAs();
+          application->saveDbc();
         }
       }
-      if (ImGui::MenuItem("Save DBC As...", "Ctrl+Shift+S", false, has_dbc)) {
-        cabana::file_dialogs::requestSaveDbcAs();
+      if (ImGui::MenuItem("Save DBC As...", "Ctrl+Shift+S", false, has_single_dbc)) {
+        cabana::file_dialogs::requestSaveDbcAs(single_source);
       }
-      if (ImGui::MenuItem("Copy DBC To Clipboard")) {}
+      if (ImGui::MenuItem("Copy DBC To Clipboard", nullptr, false, has_single_dbc) && application) {
+        application->copyDbcToClipboard(single_source);
+      }
       ImGui::Separator();
       if (ImGui::MenuItem("Settings...")) {}
       if (ImGui::MenuItem("Exit", "Ctrl+Q")) { st.quit_requested = true; }
@@ -205,7 +248,7 @@ void render() {
       if (ImGui::MenuItem("Edit Message...", "Ctrl+E", false, cabana::panes::canEditSelectedMessage())) {
         cabana::panes::requestEditSelectedMessage();
       }
-      if (ImGui::MenuItem("Add Signal...", "Ctrl+N", false, cabana::panes::canAddSignalToSelectedMessage())) {
+      if (ImGui::MenuItem("Add Signal...", nullptr, false, cabana::panes::canAddSignalToSelectedMessage())) {
         cabana::panes::requestAddSignalForSelectedMessage();
       }
       ImGui::EndMenu();

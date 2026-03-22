@@ -32,12 +32,6 @@ int primary_source(const SourceSet &sources) {
   return *sources.begin();
 }
 
-std::string file_label(const DbcFile *dbc_file) {
-  if (!dbc_file) return {};
-  if (!dbc_file->filename().empty()) return dbc_file->filename();
-  return "untitled.dbc";
-}
-
 }  // namespace
 
 SourceSet sourceAll() {
@@ -161,6 +155,24 @@ bool DbcManager::loadFromFile(const SourceSet &sources, const std::string &path)
   return true;
 }
 
+bool DbcManager::loadFromString(const SourceSet &sources, const std::string &content, const std::string &filename) {
+  auto file = std::make_shared<DbcFile>();
+  if (!file->loadFromString(content, filename)) {
+    fprintf(stderr, "Failed to load DBC contents for %s\n", sourceSetLabel(sources).c_str());
+    return false;
+  }
+
+  for (int source : sources) {
+    dbc_files_[source] = file;
+  }
+  active_source_ = primary_source(sources);
+  bumpRevision();
+  fprintf(stderr, "Loaded in-memory DBC (%d messages, %d signals) for %s\n",
+          (int)file->messages().size(), file->signalCount(),
+          sourceSetLabel(sources).c_str());
+  return true;
+}
+
 bool DbcManager::loadFromOpendbc(const SourceSet &sources, const std::string &name) {
   fs::path root = repo_root();
   fs::path dbc_path = root / "opendbc" / "dbc" / (name + ".dbc");
@@ -248,7 +260,8 @@ const DbcFile *DbcManager::dbc(int source) const {
 }
 
 std::string DbcManager::loadedName(int source) const {
-  return file_label(findDbcFileForSource(source));
+  const auto *file = findDbcFileForSource(source);
+  return file ? file->filename() : std::string();
 }
 
 bool DbcManager::hasAnyDbc() const {

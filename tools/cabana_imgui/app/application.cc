@@ -45,6 +45,10 @@ static std::string window_title(const std::string &route) {
   return route.empty() ? "Cabana" : ("Cabana - " + route);
 }
 
+static bool is_global_source_set(const SourceSet &sources) {
+  return sources.size() == 1 && sources.count(cabana::dbc::kDbcSourceAll);
+}
+
 static int primary_dbc_source(const SourceSet &sources) {
   if (sources.empty() || sources.count(cabana::dbc::kDbcSourceAll)) {
     return cabana::dbc::kDbcSourceAll;
@@ -62,6 +66,14 @@ static void sync_state_for_dbc_file(const cabana::dbc::DbcFile *dbc_file) {
   if (!path.empty()) {
     st.setDbcAssignments(sources, path);
     st.rememberRecentDbc(path);
+  }
+}
+
+static void clear_state_for_dbc_sources(const SourceSet &sources) {
+  if (is_global_source_set(sources)) {
+    cabana::app_state().clearAllDbcAssignments();
+  } else {
+    cabana::app_state().clearDbcAssignments(sources);
   }
 }
 
@@ -386,6 +398,24 @@ void Application::closeRoute() {
   glfwSetWindowTitle(window, window_title(std::string()).c_str());
 }
 
+bool Application::newDbcFile(const SourceSet &sources) {
+  auto &dbc_mgr = cabana::dbc::dbc_manager();
+  if (is_global_source_set(sources)) {
+    dbc_mgr.closeAll();
+  } else {
+    dbc_mgr.close(sources);
+  }
+  clear_state_for_dbc_sources(sources);
+
+  if (!dbc_mgr.loadFromString(sources, "")) {
+    return false;
+  }
+
+  cabana::command_stack().clear();
+  dbc_file_.clear();
+  return true;
+}
+
 bool Application::openDbcFile(const std::string &path) {
   return openDbcFile(path, cabana::dbc::sourceAll());
 }
@@ -393,6 +423,12 @@ bool Application::openDbcFile(const std::string &path) {
 bool Application::openDbcFile(const std::string &path, const SourceSet &sources) {
   if (path.empty()) return false;
   auto &dbc_mgr = cabana::dbc::dbc_manager();
+  if (is_global_source_set(sources)) {
+    dbc_mgr.closeAll();
+  } else {
+    dbc_mgr.close(sources);
+  }
+  clear_state_for_dbc_sources(sources);
   if (!dbc_mgr.loadFromFile(sources, path)) {
     return false;
   }
@@ -403,9 +439,43 @@ bool Application::openDbcFile(const std::string &path, const SourceSet &sources)
   return true;
 }
 
+bool Application::loadDbcFromClipboard(const SourceSet &sources) {
+  if (!window) return false;
+  const char *clipboard = glfwGetClipboardString(window);
+
+  auto &dbc_mgr = cabana::dbc::dbc_manager();
+  if (is_global_source_set(sources)) {
+    dbc_mgr.closeAll();
+  } else {
+    dbc_mgr.close(sources);
+  }
+  clear_state_for_dbc_sources(sources);
+
+  if (!dbc_mgr.loadFromString(sources, clipboard ? clipboard : "")) {
+    return false;
+  }
+
+  cabana::command_stack().clear();
+  dbc_file_.clear();
+  return dbc_mgr.dbc(primary_dbc_source(sources)) != nullptr &&
+         !dbc_mgr.dbc(primary_dbc_source(sources))->messages().empty();
+}
+
+bool Application::copyDbcToClipboard(int source) {
+  if (!window) return false;
+  const auto *dbc_file = cabana::dbc::dbc_manager().dbc(source);
+  if (!dbc_file) return false;
+  glfwSetClipboardString(window, dbc_file->contents().c_str());
+  return true;
+}
+
 void Application::closeDbcs(const SourceSet &sources) {
-  cabana::dbc::dbc_manager().close(sources);
-  cabana::app_state().clearDbcAssignments(sources);
+  if (is_global_source_set(sources)) {
+    cabana::dbc::dbc_manager().closeAll();
+  } else {
+    cabana::dbc::dbc_manager().close(sources);
+  }
+  clear_state_for_dbc_sources(sources);
   cabana::command_stack().clear();
 }
 

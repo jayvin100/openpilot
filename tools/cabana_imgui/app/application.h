@@ -18,8 +18,11 @@ public:
   void shutdown();
   void openRoute(const std::string &route);
   void closeRoute();
+  bool newDbcFile(const SourceSet &sources);
   bool openDbcFile(const std::string &path);
   bool openDbcFile(const std::string &path, const SourceSet &sources);
+  bool loadDbcFromClipboard(const SourceSet &sources);
+  bool copyDbcToClipboard(int source = -1);
   void closeDbcs(const SourceSet &sources);
   void closeDbcEverywhere(int source);
   bool saveDbc(int source = -1);

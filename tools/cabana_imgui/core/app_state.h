@@ -97,6 +97,7 @@ struct AppState {
   void rememberRecentDbc(const std::string &path);
   void setDbcAssignments(const SourceSet &sources, const std::string &path);
   void clearDbcAssignments(const SourceSet &sources);
+  void clearAllDbcAssignments();
   void clearDbcFileAssignments(const std::string &path);
   std::string dbcPathForSource(int source) const;
   void rememberRecentRoute(const std::string &route);

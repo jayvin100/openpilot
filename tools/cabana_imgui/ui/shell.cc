@@ -132,11 +132,11 @@ void render() {
       commands.canRedo()) {
     commands.redo();
   }
+  if (!io.WantTextInput && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N) && app()) {
+    app()->newDbcFile(cabana::dbc::sourceAll());
+  }
   if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_E) && cabana::panes::canEditSelectedMessage()) {
     cabana::panes::requestEditSelectedMessage();
-  }
-  if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N) && cabana::panes::canAddSignalToSelectedMessage()) {
-    cabana::panes::requestAddSignalForSelectedMessage();
   }
   if (!io.WantTextInput && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) {
     cabana::file_dialogs::requestOpenDbc();
