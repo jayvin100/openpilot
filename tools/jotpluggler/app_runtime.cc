@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -27,6 +28,38 @@
 #include "system/camerad/cameras/nv12_info.h"
 
 namespace {
+
+std::atomic<bool> g_glfw_alive{false};
+
+bool camera_timing_logging_enabled() {
+  static const bool enabled = []() {
+    const char *raw = std::getenv("JOTP_CAMERA_TIMINGS");
+    if (raw == nullptr || raw[0] == '\0') return false;
+    const std::string value = lowercase(trim_copy(raw));
+    return !(value == "0" || value == "false" || value == "no" || value == "off");
+  }();
+  return enabled;
+}
+
+const char *camera_view_name(CameraViewKind view) {
+  switch (view) {
+    case CameraViewKind::Driver: return "driver";
+    case CameraViewKind::WideRoad: return "wide";
+    case CameraViewKind::QRoad: return "qroad";
+    case CameraViewKind::Road:
+    default: return "road";
+  }
+}
+
+CameraType decoder_camera_type(CameraViewKind view) {
+  switch (view) {
+    case CameraViewKind::Driver: return DriverCam;
+    case CameraViewKind::WideRoad: return WideRoadCam;
+    case CameraViewKind::QRoad: return RoadCam;
+    case CameraViewKind::Road:
+    default: return RoadCam;
+  }
+}
 
 std::string normalize_stream_address(std::string address) {
   return is_local_stream_address(address) ? "127.0.0.1" : address;
@@ -68,6 +101,7 @@ void glfw_error_callback(int error, const char *description) {
 GlfwRuntime::GlfwRuntime(const Options &options) {
   glfwSetErrorCallback(glfw_error_callback);
   if (!glfwInit()) throw std::runtime_error("glfwInit failed");
+  g_glfw_alive.store(true);
 
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -96,6 +130,7 @@ GlfwRuntime::~GlfwRuntime() {
   if (window_ != nullptr) {
     glfwDestroyWindow(window_);
   }
+  g_glfw_alive.store(false);
   glfwTerminate();
 }
 
@@ -587,10 +622,14 @@ struct SidebarCameraFeed::Impl {
     bool success = false;
     int width = 0;
     int height = 0;
+    double decode_ms = 0.0;
     std::vector<uint8_t> rgba;
   };
 
   static constexpr float kDefaultAspect = 1208.0f / 1928.0f;
+  static constexpr size_t kCachedFrames = 8;
+  static constexpr int kPrefetchAhead = 2;
+  static constexpr int kImmediateNearbyFrameDistance = 8;
 
   Impl() {
     worker = std::thread([this]() { worker_loop(); });
@@ -606,12 +645,18 @@ struct SidebarCameraFeed::Impl {
   }
 
   void setRouteData(const RouteData &route_data) {
+    setCameraIndex(route_data.road_camera, CameraViewKind::Road);
+  }
+
+  void setCameraIndex(const CameraFeedIndex &camera_index, CameraViewKind view) {
     destroy_texture();
     {
       std::lock_guard<std::mutex> lock(mutex);
-      route_index = route_data.road_camera;
+      route_index = camera_index;
+      camera_view = view;
       pending_request.reset();
       pending_result.reset();
+      cached_results.clear();
       ++route_generation;
       latest_request_serial = 0;
     }
@@ -633,6 +678,10 @@ struct SidebarCameraFeed::Impl {
         same_request(failed_request, request->key)) {
       return;
     }
+    if (try_upload_cached_result(request->key)) {
+      return;
+    }
+    try_upload_nearby_cached_result(request->key);
 
     {
       std::lock_guard<std::mutex> lock(mutex);
@@ -648,24 +697,37 @@ struct SidebarCameraFeed::Impl {
   void draw(float width, bool loading) {
     const float preview_width = std::max(1.0f, width);
     const float preview_height = preview_width * preview_aspect();
-    if (texture != 0) {
-      ImGui::Image(static_cast<ImTextureID>(texture), ImVec2(preview_width, preview_height));
-    } else {
-      const ImVec2 top_left = ImGui::GetCursorScreenPos();
-      const ImVec2 size(preview_width, preview_height);
-      ImGui::InvisibleButton("##camera_feed_placeholder", size);
+    drawSized(ImVec2(preview_width, preview_height), loading);
+    ImGui::Spacing();
+  }
 
+  void drawSized(ImVec2 size, bool loading) {
+    size.x = std::max(1.0f, size.x);
+    size.y = std::max(1.0f, size.y);
+    const float aspect = preview_aspect();
+    ImVec2 frame_size = size;
+    if (aspect > 0.0f) {
+      frame_size.y = std::min(size.y, size.x * aspect);
+      frame_size.x = std::min(size.x, frame_size.y / aspect);
+    }
+    const ImVec2 top_left(ImGui::GetCursorScreenPos().x + (size.x - frame_size.x) * 0.5f,
+                          ImGui::GetCursorScreenPos().y + (size.y - frame_size.y) * 0.5f);
+    ImGui::InvisibleButton("##camera_feed_sized", size);
+    if (texture != 0) {
+      ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(texture),
+                                           top_left,
+                                           ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y));
+    } else {
       ImDrawList *draw_list = ImGui::GetWindowDrawList();
-      draw_list->AddRectFilled(top_left, ImVec2(top_left.x + size.x, top_left.y + size.y), IM_COL32(213, 217, 223, 255));
-      draw_list->AddRect(top_left, ImVec2(top_left.x + size.x, top_left.y + size.y), IM_COL32(172, 178, 186, 255));
+      draw_list->AddRectFilled(top_left, ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y), IM_COL32(213, 217, 223, 255));
+      draw_list->AddRect(top_left, ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y), IM_COL32(172, 178, 186, 255));
 
       const char *label = (loading || has_video_source()) ? "loading" : "no video";
       const ImVec2 text_size = ImGui::CalcTextSize(label);
-      const ImVec2 text_pos(top_left.x + (size.x - text_size.x) * 0.5f,
-                            top_left.y + (size.y - text_size.y) * 0.5f);
+      const ImVec2 text_pos(top_left.x + (frame_size.x - text_size.x) * 0.5f,
+                            top_left.y + (frame_size.y - text_size.y) * 0.5f);
       draw_list->AddText(text_pos, IM_COL32(90, 96, 104, 255), label);
     }
-    ImGui::Spacing();
   }
 
   static bool same_request(const std::optional<RequestKey> &lhs, const RequestKey &rhs) {
@@ -728,7 +790,13 @@ struct SidebarCameraFeed::Impl {
       return;
     }
 
-    const bool new_size = texture_width != result->width || texture_height != result->height;
+    upload_result(*result);
+  }
+
+  void upload_result(const DecodeResult &result) {
+    remember_cached_result(result);
+
+    const bool new_size = texture_width != result.width || texture_height != result.height;
     if (texture == 0) {
       glGenTextures(1, &texture);
     }
@@ -739,22 +807,80 @@ struct SidebarCameraFeed::Impl {
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
       glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, result->width, result->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, result->rgba.data());
-      texture_width = result->width;
-      texture_height = result->height;
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, result.width, result.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, result.rgba.data());
+      texture_width = result.width;
+      texture_height = result.height;
     } else {
-      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, result->width, result->height, GL_RGBA, GL_UNSIGNED_BYTE, result->rgba.data());
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, result.width, result.height, GL_RGBA, GL_UNSIGNED_BYTE, result.rgba.data());
     }
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    frame_width = result->width;
-    frame_height = result->height;
-    displayed_request = result->key;
+    frame_width = result.width;
+    frame_height = result.height;
+    displayed_request = result.key;
     failed_request.reset();
   }
 
+  bool try_upload_cached_result(const RequestKey &key) {
+    std::optional<DecodeResult> result;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      auto it = std::find_if(cached_results.begin(), cached_results.end(), [&](const DecodeResult &cached) {
+        return cached.key.segment == key.segment && cached.key.decode_index == key.decode_index;
+      });
+      if (it == cached_results.end()) {
+        return false;
+      }
+      result = *it;
+    }
+    active_request.reset();
+    upload_result(*result);
+    return true;
+  }
+
+  bool try_upload_nearby_cached_result(const RequestKey &key) {
+    std::optional<DecodeResult> result;
+    int best_distance = std::numeric_limits<int>::max();
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      for (const DecodeResult &cached : cached_results) {
+        if (cached.key.segment != key.segment) continue;
+        const int distance = std::abs(cached.key.decode_index - key.decode_index);
+        if (distance == 0 || distance > kImmediateNearbyFrameDistance || distance >= best_distance) continue;
+        best_distance = distance;
+        result = cached;
+      }
+    }
+    if (!result.has_value()) {
+      return false;
+    }
+    upload_result(*result);
+    return true;
+  }
+
+  void remember_cached_result(const DecodeResult &result) {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = std::find_if(cached_results.begin(), cached_results.end(), [&](const DecodeResult &cached) {
+      return cached.key.segment == result.key.segment && cached.key.decode_index == result.key.decode_index;
+    });
+    if (it != cached_results.end()) {
+      cached_results.erase(it);
+    }
+    cached_results.push_front(result);
+    while (cached_results.size() > kCachedFrames) {
+      cached_results.pop_back();
+    }
+    if (result.success && result.decode_ms > 0.0 && camera_timing_logging_enabled()) {
+      std::fprintf(stderr, "camera[%s] seg=%d idx=%d %.1fms\n",
+                   camera_view_name(camera_view),
+                   result.key.segment,
+                   result.key.decode_index,
+                   result.decode_ms);
+    }
+  }
+
   void destroy_texture() {
-    if (texture != 0 && glfwGetCurrentContext() != nullptr) {
+    if (texture != 0 && g_glfw_alive.load() && glfwGetCurrentContext() != nullptr) {
       glDeleteTextures(1, &texture);
     }
     texture = 0;
@@ -784,6 +910,11 @@ struct SidebarCameraFeed::Impl {
       return;
     }
     pending_result = std::move(result);
+  }
+
+  bool has_newer_pending_request(uint64_t serial) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return pending_request.has_value() && pending_request->serial != serial;
   }
 
   void worker_loop() {
@@ -819,7 +950,7 @@ struct SidebarCameraFeed::Impl {
           buffer_width = 0;
           buffer_height = 0;
         }
-        if (!reader->load(RoadCam, request.path, true, &stop, true)) {
+        if (!reader->load(decoder_camera_type(camera_view), request.path, false, &stop, true)) {
           publish_result(request, std::move(result));
           continue;
         }
@@ -827,6 +958,7 @@ struct SidebarCameraFeed::Impl {
         loaded_generation = request.generation;
       }
 
+      const auto decode_begin = std::chrono::steady_clock::now();
       if (!ensure_decode_buffer(reader.get(), &buffer, buffer_allocated, buffer_width, buffer_height) ||
           !reader->get(request.key.decode_index, &buffer)) {
         publish_result(request, std::move(result));
@@ -845,7 +977,37 @@ struct SidebarCameraFeed::Impl {
                          result.width,
                          result.height);
       result.success = true;
+      result.decode_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - decode_begin).count();
       publish_result(request, std::move(result));
+
+      for (int offset = 1; offset <= kPrefetchAhead; ++offset) {
+        if (stop.load() || has_newer_pending_request(request.serial)) {
+          break;
+        }
+        const int next_index = request.key.decode_index + offset;
+        if (next_index < 0 || next_index >= static_cast<int>(reader->getFrameCount())) {
+          break;
+        }
+        if (!reader->get(next_index, &buffer)) {
+          break;
+        }
+        DecodeResult prefetched{
+          .key = RequestKey{.segment = request.key.segment, .decode_index = next_index},
+          .success = true,
+          .width = reader->width,
+          .height = reader->height,
+        };
+        prefetched.rgba.resize(static_cast<size_t>(prefetched.width) * static_cast<size_t>(prefetched.height) * 4U, 0);
+        libyuv::NV12ToABGR(buffer.y,
+                           static_cast<int>(buffer.stride),
+                           buffer.uv,
+                           static_cast<int>(buffer.stride),
+                           prefetched.rgba.data(),
+                           prefetched.width * 4,
+                           prefetched.width,
+                           prefetched.height);
+        remember_cached_result(prefetched);
+      }
     }
 
     if (buffer_allocated) {
@@ -858,8 +1020,10 @@ struct SidebarCameraFeed::Impl {
   std::thread worker;
   std::atomic<bool> stop{false};
   CameraFeedIndex route_index;
+  CameraViewKind camera_view = CameraViewKind::Road;
   std::optional<DecodeRequest> pending_request;
   std::optional<DecodeResult> pending_result;
+  std::deque<DecodeResult> cached_results;
   uint64_t latest_request_serial = 0;
   uint64_t route_generation = 1;
   std::optional<RequestKey> active_request;
@@ -881,10 +1045,18 @@ void SidebarCameraFeed::setRouteData(const RouteData &route_data) {
   impl_->setRouteData(route_data);
 }
 
+void SidebarCameraFeed::setCameraIndex(const CameraFeedIndex &camera_index, CameraViewKind view) {
+  impl_->setCameraIndex(camera_index, view);
+}
+
 void SidebarCameraFeed::update(double tracker_time) {
   impl_->update(tracker_time);
 }
 
 void SidebarCameraFeed::draw(float width, bool loading) {
   impl_->draw(width, loading);
+}
+
+void SidebarCameraFeed::drawSized(ImVec2 size, bool loading) {
+  impl_->drawSized(size, loading);
 }

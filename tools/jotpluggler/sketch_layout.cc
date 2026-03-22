@@ -42,6 +42,9 @@ struct SegmentLogs {
   std::string rlog;
   std::string qlog;
   std::string fcamera;
+  std::string dcamera;
+  std::string ecamera;
+  std::string qcamera;
 };
 
 enum class ScalarKind {
@@ -291,6 +294,12 @@ void add_log_file_to_segments(std::map<int, SegmentLogs> *segments, int segment_
     segment.qlog = file;
   } else if (name == "fcamera.hevc") {
     segment.fcamera = file;
+  } else if (name == "dcamera.hevc") {
+    segment.dcamera = file;
+  } else if (name == "ecamera.hevc") {
+    segment.ecamera = file;
+  } else if (name == "qcamera.ts") {
+    segment.qcamera = file;
   }
 }
 
@@ -819,8 +828,21 @@ std::string pane_title(const json11::Json &dock_area_node) {
 
 Pane parse_dock_area(const json11::Json &dock_area_node) {
   Pane pane;
-  if (dock_area_node["kind"].string_value() == "map") {
+  const std::string kind = dock_area_node["kind"].string_value();
+  if (kind == "map") {
     pane.kind = PaneKind::Map;
+  } else if (kind == "camera") {
+    pane.kind = PaneKind::Camera;
+    const std::string camera_view = dock_area_node["camera_view"].string_value();
+    if (camera_view == "driver") {
+      pane.camera_view = CameraViewKind::Driver;
+    } else if (camera_view == "wide_road") {
+      pane.camera_view = CameraViewKind::WideRoad;
+    } else if (camera_view == "qroad") {
+      pane.camera_view = CameraViewKind::QRoad;
+    } else {
+      pane.camera_view = CameraViewKind::Road;
+    }
   }
   pane.range = parse_range(dock_area_node);
   const json11::Json &curves_node = dock_area_node["curves"];
@@ -1578,27 +1600,36 @@ void rebuild_gps_trace(RouteData *route_data) {
 
 namespace {
 
-void build_road_camera_index(const std::map<int, SegmentLogs> &segments, RouteData *route_data) {
-  route_data->road_camera = {};
-  route_data->road_camera.segment_files.reserve(segments.size());
+void build_camera_index(const std::map<int, SegmentLogs> &segments,
+                        const RouteData &route_data,
+                        std::string SegmentLogs::*file_member,
+                        std::string_view index_name,
+                        CameraFeedIndex *out) {
+  *out = {};
+  out->segment_files.reserve(segments.size());
 
   std::unordered_set<int> available_segments;
   available_segments.reserve(segments.size());
   for (const auto &[segment_number, segment] : segments) {
-    if (segment.fcamera.empty()) continue;
-    route_data->road_camera.segment_files.push_back(CameraSegmentFile{
+    const std::string &path = segment.*file_member;
+    if (path.empty()) continue;
+    out->segment_files.push_back(CameraSegmentFile{
       .segment = segment_number,
-      .path = segment.fcamera,
+      .path = path,
     });
     available_segments.insert(segment_number);
   }
-  if (route_data->road_camera.segment_files.empty()) {
+  if (out->segment_files.empty()) {
     return;
   }
 
-  const RouteSeries *segment_numbers = find_route_series(*route_data, "/roadEncodeIdx/segmentNum");
-  const RouteSeries *decode_indices = find_route_series(*route_data, "/roadEncodeIdx/segmentId");
-  const RouteSeries *frame_ids = find_route_series(*route_data, "/roadEncodeIdx/frameId");
+  const std::string prefix = "/" + std::string(index_name);
+  const RouteSeries *segment_numbers = find_route_series(route_data, prefix + "/segmentNum");
+  const RouteSeries *decode_indices = find_route_series(route_data, prefix + "/segmentIdEncode");
+  if (decode_indices == nullptr) {
+    decode_indices = find_route_series(route_data, prefix + "/segmentId");
+  }
+  const RouteSeries *frame_ids = find_route_series(route_data, prefix + "/frameId");
   if (segment_numbers == nullptr || decode_indices == nullptr) {
     return;
   }
@@ -1608,7 +1639,7 @@ void build_road_camera_index(const std::map<int, SegmentLogs> &segments, RouteDa
   if (frame_ids != nullptr) {
     count = std::min(count, frame_ids->values.size());
   }
-  route_data->road_camera.entries.reserve(count);
+  out->entries.reserve(count);
   for (size_t i = 0; i < count; ++i) {
     const int segment_number = static_cast<int>(std::llround(segment_numbers->values[i]));
     if (available_segments.find(segment_number) == available_segments.end()) {
@@ -1618,7 +1649,7 @@ void build_road_camera_index(const std::map<int, SegmentLogs> &segments, RouteDa
     const uint32_t frame_id = frame_ids != nullptr
       ? static_cast<uint32_t>(std::llround(frame_ids->values[i]))
       : static_cast<uint32_t>(std::max(0, decode_index));
-    route_data->road_camera.entries.push_back(CameraFrameIndexEntry{
+    out->entries.push_back(CameraFrameIndexEntry{
       .timestamp = segment_numbers->times[i],
       .segment = segment_number,
       .decode_index = decode_index,
@@ -1626,7 +1657,7 @@ void build_road_camera_index(const std::map<int, SegmentLogs> &segments, RouteDa
     });
   }
 
-  std::sort(route_data->road_camera.entries.begin(), route_data->road_camera.entries.end(),
+  std::sort(out->entries.begin(), out->entries.end(),
             [](const CameraFrameIndexEntry &a, const CameraFrameIndexEntry &b) {
               return a.timestamp < b.timestamp;
             });
@@ -2009,7 +2040,10 @@ RouteData load_route_data(const std::string &route_name,
                                           metadata.car_fingerprint,
                                           resolved_dbc);
   route_data.route_id = make_route_identifier(route, segments);
-  build_road_camera_index(segments, &route_data);
+  build_camera_index(segments, route_data, &SegmentLogs::fcamera, "roadEncodeIdx", &route_data.road_camera);
+  build_camera_index(segments, route_data, &SegmentLogs::dcamera, "driverEncodeIdx", &route_data.driver_camera);
+  build_camera_index(segments, route_data, &SegmentLogs::ecamera, "wideRoadEncodeIdx", &route_data.wide_road_camera);
+  build_camera_index(segments, route_data, &SegmentLogs::qcamera, "qRoadEncodeIdx", &route_data.qroad_camera);
   stats.load_end = LoadStats::Clock::now();
   stats.publish(RouteLoadStage::Finished, segments.size(), {});
   stats.print_summary(route_data.series.size());

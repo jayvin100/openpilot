@@ -195,9 +195,6 @@ bool reload_session(AppSession *session, UiState *state, const std::string &rout
     session->route_name = route_name;
     session->route_id = parse_route_identifier(route_name);
     session->data_dir = data_dir;
-    if (!session->camera_feed) {
-      session->camera_feed = std::make_unique<SidebarCameraFeed>();
-    }
     if (session->async_route_loading) {
       if (!session->route_loader) {
         session->route_loader = std::make_unique<AsyncRouteLoader>(::isatty(STDERR_FILENO) != 0);

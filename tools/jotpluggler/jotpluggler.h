@@ -79,10 +79,19 @@ struct Curve {
 enum class PaneKind : uint8_t {
   Plot,
   Map,
+  Camera,
+};
+
+enum class CameraViewKind : uint8_t {
+  Road,
+  Driver,
+  WideRoad,
+  QRoad,
 };
 
 struct Pane {
   PaneKind kind = PaneKind::Plot;
+  CameraViewKind camera_view = CameraViewKind::Road;
   std::string title;
   PlotRange range;
   std::vector<Curve> curves;
@@ -258,6 +267,9 @@ struct RouteData {
   std::vector<std::string> paths;
   std::vector<std::string> roots;
   CameraFeedIndex road_camera;
+  CameraFeedIndex driver_camera;
+  CameraFeedIndex wide_road_camera;
+  CameraFeedIndex qroad_camera;
   GpsTrace gps_trace;
   std::vector<LogEntry> logs;
   std::vector<TimelineEntry> timeline;
@@ -458,7 +470,7 @@ struct AppSession {
   std::vector<BrowserNode> browser_nodes;
   std::unique_ptr<AsyncRouteLoader> route_loader;
   std::unique_ptr<StreamPoller> stream_poller;
-  std::unique_ptr<SidebarCameraFeed> camera_feed;
+  std::array<std::unique_ptr<SidebarCameraFeed>, 4> pane_camera_feeds;
   std::unique_ptr<MapDataManager> map_data;
   bool async_route_loading = false;
   double next_stream_custom_refresh_time = 0.0;
@@ -918,8 +930,10 @@ public:
   SidebarCameraFeed &operator=(const SidebarCameraFeed &) = delete;
 
   void setRouteData(const RouteData &route_data);
+  void setCameraIndex(const CameraFeedIndex &camera_index, CameraViewKind view);
   void update(double tracker_time);
   void draw(float width, bool loading);
+  void drawSized(ImVec2 size, bool loading);
 
 private:
   struct Impl;

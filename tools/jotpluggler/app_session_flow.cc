@@ -7,6 +7,20 @@ const RouteSeries *app_find_route_series(const AppSession &session, const std::s
   return it == session.series_by_path.end() ? nullptr : it->second;
 }
 
+void sync_camera_feeds(AppSession *session) {
+  const std::array<std::pair<CameraViewKind, CameraFeedIndex RouteData::*>, 4> views = {{
+    {CameraViewKind::Road, &RouteData::road_camera},
+    {CameraViewKind::Driver, &RouteData::driver_camera},
+    {CameraViewKind::WideRoad, &RouteData::wide_road_camera},
+    {CameraViewKind::QRoad, &RouteData::qroad_camera},
+  }};
+  for (size_t i = 0; i < views.size(); ++i) {
+    if (session->pane_camera_feeds[i]) {
+      session->pane_camera_feeds[i]->setCameraIndex(session->route_data.*(views[i].second), views[i].first);
+    }
+  }
+}
+
 void apply_route_data(AppSession *session, UiState *state, RouteData route_data) {
   if (!route_data.route_id.empty()) {
     session->route_id = route_data.route_id;
@@ -17,9 +31,7 @@ void apply_route_data(AppSession *session, UiState *state, RouteData route_data)
   rebuild_route_index(session);
   rebuild_browser_nodes(session, state);
   refresh_all_custom_curves(session, state);
-  if (session->camera_feed) {
-    session->camera_feed->setRouteData(session->route_data);
-  }
+  sync_camera_feeds(session);
   state->has_shared_range = false;
   state->has_tracker_time = false;
   reset_shared_range(state, *session);

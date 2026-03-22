@@ -62,6 +62,23 @@ json11::Json workspace_node_to_json(const WorkspaceNode &node, const WorkspaceTa
     };
     if (pane.kind == PaneKind::Map) {
       obj["kind"] = "map";
+    } else if (pane.kind == PaneKind::Camera) {
+      obj["kind"] = "camera";
+      switch (pane.camera_view) {
+        case CameraViewKind::Driver:
+          obj["camera_view"] = "driver";
+          break;
+        case CameraViewKind::WideRoad:
+          obj["camera_view"] = "wide_road";
+          break;
+        case CameraViewKind::QRoad:
+          obj["camera_view"] = "qroad";
+          break;
+        case CameraViewKind::Road:
+        default:
+          obj["camera_view"] = "road";
+          break;
+      }
     }
     if (pane.range.valid) {
       obj["range"] = json11::Json::object{

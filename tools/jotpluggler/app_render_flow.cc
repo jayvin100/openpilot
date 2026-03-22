@@ -69,8 +69,9 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
     state->playback_playing = !state->playback_playing;
   }
   advance_playback(state, *session);
-  if (show_camera_feed && session->camera_feed && state->has_tracker_time) {
-    session->camera_feed->update(state->tracker_time);
+  SidebarCameraFeed *sidebar_camera = session->pane_camera_feeds[static_cast<size_t>(CameraViewKind::Road)].get();
+  if (show_camera_feed && sidebar_camera != nullptr && state->has_tracker_time) {
+    sidebar_camera->update(state->tracker_time);
   }
   const float menu_height = draw_main_menu_bar(session, state);
   const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height, state->sidebar_width);
