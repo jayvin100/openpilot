@@ -23,9 +23,7 @@ std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab 
   double min_value = 0.0;
   double max_value = 1.0;
   for (const Pane &pane : tab.panes) {
-    if (!pane.range.valid || pane.range.right <= pane.range.left) {
-      continue;
-    }
+    if (!pane.range.valid || pane.range.right <= pane.range.left) continue;
     if (!found) {
       min_value = pane.range.left;
       max_value = pane.range.right;
@@ -35,9 +33,7 @@ std::optional<std::pair<double, double>> tab_default_x_range(const WorkspaceTab 
       max_value = std::max(max_value, pane.range.right);
     }
   }
-  if (!found) {
-    return std::nullopt;
-  }
+  if (!found) return std::nullopt;
   return std::make_pair(min_value, max_value);
 }
 

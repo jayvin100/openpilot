@@ -21,9 +21,7 @@ constexpr std::array<LevelOption, 5> LEVEL_OPTIONS = {{
 constexpr uint32_t ALL_LEVEL_MASK = (1u << LEVEL_OPTIONS.size()) - 1u;
 
 bool log_matches_search(const LogEntry &entry, std::string_view query) {
-  if (query.empty()) {
-    return true;
-  }
+  if (query.empty()) return true;
   const std::string needle = lowercase(query);
   const auto contains = [&](std::string_view haystack) {
     return lowercase(haystack).find(needle) != std::string::npos;
@@ -34,9 +32,7 @@ bool log_matches_search(const LogEntry &entry, std::string_view query) {
 std::vector<std::string> collect_log_sources(const std::vector<LogEntry> &logs) {
   std::vector<std::string> sources;
   for (const LogEntry &entry : logs) {
-    if (entry.source.empty()) {
-      continue;
-    }
+    if (entry.source.empty()) continue;
     if (std::find(sources.begin(), sources.end(), entry.source) == sources.end()) {
       sources.push_back(entry.source);
     }
@@ -67,13 +63,9 @@ std::vector<int> filter_log_indices(const RouteData &route_data, const LogsUiSta
       const auto it = std::find(logs_state.selected_sources.begin(),
                                 logs_state.selected_sources.end(),
                                 entry.source);
-      if (it == logs_state.selected_sources.end()) {
-        continue;
-      }
+      if (it == logs_state.selected_sources.end()) continue;
     }
-    if (!log_matches_search(entry, logs_state.search)) {
-      continue;
-    }
+    if (!log_matches_search(entry, logs_state.search)) continue;
     indices.push_back(static_cast<int>(i));
   }
   return indices;
@@ -82,19 +74,13 @@ std::vector<int> filter_log_indices(const RouteData &route_data, const LogsUiSta
 int find_active_log_position(const RouteData &route_data,
                              const std::vector<int> &filtered_indices,
                              double tracker_time) {
-  if (filtered_indices.empty()) {
-    return -1;
-  }
+  if (filtered_indices.empty()) return -1;
   auto it = std::lower_bound(filtered_indices.begin(), filtered_indices.end(), tracker_time,
                              [&](int log_index, double tm) {
                                return route_data.logs[static_cast<size_t>(log_index)].mono_time < tm;
                              });
-  if (it == filtered_indices.begin()) {
-    return static_cast<int>(std::distance(filtered_indices.begin(), it));
-  }
-  if (it == filtered_indices.end()) {
-    return static_cast<int>(filtered_indices.size()) - 1;
-  }
+  if (it == filtered_indices.begin()) return static_cast<int>(std::distance(filtered_indices.begin(), it));
+  if (it == filtered_indices.end()) return static_cast<int>(filtered_indices.size()) - 1;
   if (route_data.logs[static_cast<size_t>(*it)].mono_time > tracker_time) {
     --it;
   }
@@ -119,9 +105,7 @@ std::string format_boot_time(double seconds) {
 }
 
 std::string format_wall_time(double seconds) {
-  if (seconds <= 0.0) {
-    return "--";
-  }
+  if (seconds <= 0.0) return "--";
   const time_t wall_seconds = static_cast<time_t>(seconds);
   std::tm wall_tm = {};
   localtime_r(&wall_seconds, &wall_tm);
@@ -154,21 +138,11 @@ const char *time_mode_label(LogTimeMode mode) {
 }
 
 std::string level_filter_label(uint32_t mask) {
-  if (mask == ALL_LEVEL_MASK) {
-    return "All levels";
-  }
-  if (mask == 0b11110) {
-    return "INFO+";
-  }
-  if (mask == 0b11100) {
-    return "WARNING+";
-  }
-  if (mask == 0b11000) {
-    return "ERROR+";
-  }
-  if (mask == 0b10000) {
-    return "CRITICAL";
-  }
+  if (mask == ALL_LEVEL_MASK) return "All levels";
+  if (mask == 0b11110) return "INFO+";
+  if (mask == 0b11100) return "WARNING+";
+  if (mask == 0b11000) return "ERROR+";
+  if (mask == 0b10000) return "CRITICAL";
 
   int enabled_count = 0;
   const char *last_label = "None";
@@ -179,12 +153,8 @@ std::string level_filter_label(uint32_t mask) {
     ++enabled_count;
     last_label = LEVEL_OPTIONS[i].label;
   }
-  if (enabled_count == 0) {
-    return "None";
-  }
-  if (enabled_count == 1) {
-    return last_label;
-  }
+  if (enabled_count == 0) return "None";
+  if (enabled_count == 1) return last_label;
   return "Custom";
 }
 
@@ -192,19 +162,13 @@ std::string source_filter_label(const LogsUiState &logs_state, const std::vector
   if (logs_state.all_sources || logs_state.selected_sources.size() == sources.size()) {
     return "All sources";
   }
-  if (logs_state.selected_sources.empty()) {
-    return "No sources";
-  }
-  if (logs_state.selected_sources.size() == 1) {
-    return logs_state.selected_sources.front();
-  }
+  if (logs_state.selected_sources.empty()) return "No sources";
+  if (logs_state.selected_sources.size() == 1) return logs_state.selected_sources.front();
   return std::to_string(logs_state.selected_sources.size()) + " sources";
 }
 
 const char *level_label(const LogEntry &entry) {
-  if (entry.origin == LogOrigin::Alert) {
-    return "ALRT";
-  }
+  if (entry.origin == LogOrigin::Alert) return "ALRT";
   if (entry.level >= 50) return "CRIT";
   if (entry.level >= 40) return "ERR";
   if (entry.level >= 30) return "WARN";
@@ -213,12 +177,8 @@ const char *level_label(const LogEntry &entry) {
 }
 
 ImVec4 level_text_color(const LogEntry &entry, bool active) {
-  if (active) {
-    return color_rgb(46, 54, 63);
-  }
-  if (entry.origin == LogOrigin::Alert) {
-    return color_rgb(50, 100, 200);
-  }
+  if (active) return color_rgb(46, 54, 63);
+  if (entry.origin == LogOrigin::Alert) return color_rgb(50, 100, 200);
   if (entry.level >= 50) return color_rgb(176, 26, 18);
   if (entry.level >= 40) return color_rgb(200, 50, 40);
   if (entry.level >= 30) return color_rgb(200, 130, 0);
@@ -227,9 +187,7 @@ ImVec4 level_text_color(const LogEntry &entry, bool active) {
 }
 
 ImU32 row_bg_color(const LogEntry &entry, bool active) {
-  if (active) {
-    return IM_COL32(80, 140, 210, 38);
-  }
+  if (active) return IM_COL32(80, 140, 210, 38);
   return 0;
 }
 

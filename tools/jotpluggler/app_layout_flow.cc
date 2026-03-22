@@ -50,9 +50,7 @@ bool reload_layout(AppSession *session, UiState *state, const std::string &layou
 
 bool save_layout(AppSession *session, UiState *state, const std::string &layout_path) {
   try {
-    if (layout_path.empty()) {
-      throw std::runtime_error("Layout path is empty");
-    }
+    if (layout_path.empty()) throw std::runtime_error("Layout path is empty");
     session->layout.current_tab_index = state->active_tab_index;
     const fs::path previous_autosave = session->autosave_path;
     const fs::path output = fs::absolute(fs::path(layout_path));

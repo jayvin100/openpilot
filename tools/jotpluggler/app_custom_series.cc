@@ -47,9 +47,7 @@ ProcessResult run_process(const std::vector<std::string> &args) {
   command += " 2>&1";
   ProcessResult result;
   FILE *pipe = popen(command.c_str(), "r");
-  if (pipe == nullptr) {
-    throw std::runtime_error("popen() failed");
-  }
+  if (pipe == nullptr) throw std::runtime_error("popen() failed");
   std::array<char, 4096> buf = {};
   while (fgets(buf.data(), static_cast<int>(buf.size()), pipe) != nullptr) {
     result.stderr_text += buf.data();
@@ -65,9 +63,7 @@ fs::path math_eval_script_path() {
 #else
   std::array<char, 4096> buf = {};
   const ssize_t length = ::readlink("/proc/self/exe", buf.data(), buf.size() - 1);
-  if (length <= 0) {
-    throw std::runtime_error("Failed to resolve executable path");
-  }
+  if (length <= 0) throw std::runtime_error("Failed to resolve executable path");
   buf[static_cast<size_t>(length)] = '\0';
   return fs::path(buf.data()).parent_path() / "math_eval.py";
 #endif
@@ -75,23 +71,17 @@ fs::path math_eval_script_path() {
 
 void write_binary_vector(const fs::path &path, const std::vector<double> &values) {
   std::ofstream out(path, std::ios::binary);
-  if (!out) {
-    throw std::runtime_error("Failed to open " + path.string() + " for writing");
-  }
+  if (!out) throw std::runtime_error("Failed to open " + path.string() + " for writing");
   if (!values.empty()) {
     out.write(reinterpret_cast<const char *>(values.data()),
               static_cast<std::streamsize>(values.size() * sizeof(double)));
   }
-  if (!out) {
-    throw std::runtime_error("Failed to write " + path.string());
-  }
+  if (!out) throw std::runtime_error("Failed to write " + path.string());
 }
 
 std::vector<double> read_binary_vector(const fs::path &path) {
   std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    throw std::runtime_error("Failed to open " + path.string());
-  }
+  if (!in) throw std::runtime_error("Failed to open " + path.string());
   in.seekg(0, std::ios::end);
   const std::streamoff size = in.tellg();
   in.seekg(0, std::ios::beg);
@@ -102,17 +92,13 @@ std::vector<double> read_binary_vector(const fs::path &path) {
   if (!values.empty()) {
     in.read(reinterpret_cast<char *>(values.data()), size);
   }
-  if (!in) {
-    throw std::runtime_error("Failed to read " + path.string());
-  }
+  if (!in) throw std::runtime_error("Failed to read " + path.string());
   return values;
 }
 
 void write_text_file(const fs::path &path, std::string_view text) {
   std::ofstream out(path);
-  if (!out) {
-    throw std::runtime_error("Failed to open " + path.string() + " for writing");
-  }
+  if (!out) throw std::runtime_error("Failed to open " + path.string() + " for writing");
   out << text;
 }
 
@@ -128,9 +114,7 @@ void reset_custom_series_editor(CustomSeriesEditorState *editor) {
 }
 
 bool add_additional_source(CustomSeriesEditorState *editor, const std::string &path) {
-  if (path.empty() || path == editor->linked_source) {
-    return false;
-  }
+  if (path.empty() || path == editor->linked_source) return false;
   if (std::find(editor->additional_sources.begin(), editor->additional_sources.end(), path) != editor->additional_sources.end()) {
     return false;
   }
@@ -216,9 +200,7 @@ PythonEvalResult evaluate_custom_python_series(const AppSession &session,
                                                const CustomPythonSeries &spec) {
   const std::set<std::string> referenced_paths =
     collect_custom_series_paths(spec, spec.globals_code, spec.function_code);
-  if (referenced_paths.empty()) {
-    throw std::runtime_error("No input series referenced. Set an input timeseries or reference route paths in code.");
-  }
+  if (referenced_paths.empty()) throw std::runtime_error("No input series referenced. Set an input timeseries or reference route paths in code.");
 
   const fs::path temp_dir = create_custom_series_temp_dir();
   try {
@@ -432,16 +414,12 @@ void draw_custom_series_preview(const AppSession &session, CustomSeriesEditorSta
 
 std::string custom_series_name_status(const Pane &pane, std::string_view name) {
   const std::string trimmed = trim_copy(name);
-  if (trimmed.empty()) {
-    return "name required";
-  }
+  if (trimmed.empty()) return "name required";
   if (!trimmed.empty() && trimmed.front() == '/') {
     return "cannot start with /";
   }
   for (const Curve &curve : pane.curves) {
-    if (curve.runtime_only && curve.name == trimmed) {
-      return "updates existing curve";
-    }
+    if (curve.runtime_only && curve.name == trimmed) return "updates existing curve";
   }
   return "new curve";
 }
@@ -507,9 +485,7 @@ bool preview_custom_series_editor(AppSession *session, UiState *state) {
     return false;
   }
   CustomPythonSeries spec;
-  if (!prepare_custom_series_spec(&editor, state, false, &spec)) {
-    return false;
-  }
+  if (!prepare_custom_series_spec(&editor, state, false, &spec)) return false;
 
   try {
     PythonEvalResult result = evaluate_custom_python_series(*session, spec);
@@ -541,9 +517,7 @@ bool apply_custom_series_editor(AppSession *session, UiState *state) {
 
   CustomSeriesEditorState &editor = state->custom_series;
   CustomPythonSeries spec;
-  if (!prepare_custom_series_spec(&editor, state, true, &spec)) {
-    return false;
-  }
+  if (!prepare_custom_series_spec(&editor, state, true, &spec)) return false;
 
   try {
     PythonEvalResult result = evaluate_custom_python_series(*session, spec);

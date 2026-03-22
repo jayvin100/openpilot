@@ -57,9 +57,7 @@ const char *glyph(std::string_view icon_id) {
                              [](const IconEntry &e, std::string_view id) {
                                return std::string_view(e.id) < id;
                              });
-  if (it != ICONS.end() && icon_id == it->id) {
-    return it->utf8;
-  }
+  if (it != ICONS.end() && icon_id == it->id) return it->utf8;
   return "";
 }
 

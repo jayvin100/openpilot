@@ -48,13 +48,9 @@ bool should_subscribe_stream_service(const std::string &name) {
     "thumbnail",
     "navThumbnail",
   }};
-  if (name == "rawAudioData") {
-    return false;
-  }
+  if (name == "rawAudioData") return false;
   for (std::string_view skipped : kSkippedServices) {
-    if (name == skipped) {
-      return false;
-    }
+    if (name == skipped) return false;
   }
   return true;
 }
@@ -71,9 +67,7 @@ void glfw_error_callback(int error, const char *description) {
 
 GlfwRuntime::GlfwRuntime(const Options &options) {
   glfwSetErrorCallback(glfw_error_callback);
-  if (!glfwInit()) {
-    throw std::runtime_error("glfwInit failed");
-  }
+  if (!glfwInit()) throw std::runtime_error("glfwInit failed");
 
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -289,9 +283,7 @@ struct AsyncRouteLoader::Impl {
   }
 
   bool consume(RouteData *route_data, std::string *error_text_out) {
-    if (!completed.load()) {
-      return false;
-    }
+    if (!completed.load()) return false;
     join();
     std::lock_guard<std::mutex> lock(mutex);
     completed.store(false);
@@ -386,21 +378,15 @@ struct StreamPoller::Impl {
         std::vector<std::unique_ptr<SubSocket>> sockets;
         sockets.reserve(services.size());
         for (const auto &[name, info] : services) {
-          if (!should_subscribe_stream_service(name)) {
-            continue;
-          }
+          if (!should_subscribe_stream_service(name)) continue;
           std::unique_ptr<SubSocket> socket(
             SubSocket::create(context.get(), name.c_str(), address.c_str(), false, true, info.queue_size));
-          if (socket == nullptr) {
-            continue;
-          }
+          if (socket == nullptr) continue;
           socket->setTimeout(0);
           poller->registerSocket(socket.get());
           sockets.push_back(std::move(socket));
         }
-        if (sockets.empty()) {
-          throw std::runtime_error("Failed to connect to any cereal service");
-        }
+        if (sockets.empty()) throw std::runtime_error("Failed to connect to any cereal service");
         connected.store(true);
 
         StreamAccumulator accumulator(dbc_name, time_offset);
@@ -409,9 +395,7 @@ struct StreamPoller::Impl {
           for (SubSocket *socket : ready) {
             while (running.load()) {
               std::unique_ptr<Message> msg(socket->receive(true));
-              if (!msg) {
-                break;
-              }
+              if (!msg) break;
               const size_t size = msg->getSize();
               if (size < sizeof(capnp::word) || (size % sizeof(capnp::word)) != 0) {
                 continue;
@@ -486,9 +470,7 @@ struct StreamPoller::Impl {
     const bool has_error = !error_text.empty();
     const bool has_batch = !pending.series.empty() || !pending.logs.empty() || !pending.enum_info.empty()
       || !pending.car_fingerprint.empty() || !pending.dbc_name.empty();
-    if (!has_error && !has_batch) {
-      return false;
-    }
+    if (!has_error && !has_batch) return false;
     if (batch != nullptr) {
       *batch = std::move(pending);
       pending = {};
@@ -691,17 +673,13 @@ struct SidebarCameraFeed::Impl {
   }
 
   float preview_aspect() const {
-    if (frame_width > 0 && frame_height > 0) {
-      return static_cast<float>(frame_height) / static_cast<float>(frame_width);
-    }
+    if (frame_width > 0 && frame_height > 0) return static_cast<float>(frame_height) / static_cast<float>(frame_width);
     return kDefaultAspect;
   }
 
   std::optional<DecodeRequest> request_for_time(double tracker_time) const {
     std::lock_guard<std::mutex> lock(mutex);
-    if (route_index.entries.empty()) {
-      return std::nullopt;
-    }
+    if (route_index.entries.empty()) return std::nullopt;
 
     auto it = std::lower_bound(route_index.entries.begin(), route_index.entries.end(), tracker_time,
                                [](const CameraFrameIndexEntry &entry, double tm) {
@@ -720,9 +698,7 @@ struct SidebarCameraFeed::Impl {
                                 [&](const CameraSegmentFile &segment) {
                                   return segment.segment == it->segment && !segment.path.empty();
                                 });
-    if (path_it == route_index.segment_files.end()) {
-      return std::nullopt;
-    }
+    if (path_it == route_index.segment_files.end()) return std::nullopt;
 
     return DecodeRequest{
       .key = RequestKey{.segment = it->segment, .decode_index = it->decode_index},
@@ -822,9 +798,7 @@ struct SidebarCameraFeed::Impl {
         cv.wait(lock, [&]() {
           return stop.load() || (pending_request.has_value() && pending_request->serial != handled_serial);
         });
-        if (stop.load()) {
-          break;
-        }
+        if (stop.load()) break;
         request = *pending_request;
         handled_serial = request.serial;
       }

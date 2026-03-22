@@ -35,9 +35,7 @@ bool layout_has_custom_curves(const SketchLayout &layout) {
   for (const WorkspaceTab &tab : layout.tabs) {
     for (const Pane &pane : tab.panes) {
       for (const Curve &curve : pane.curves) {
-        if (curve.custom_python.has_value()) {
-          return true;
-        }
+        if (curve.custom_python.has_value()) return true;
       }
     }
   }

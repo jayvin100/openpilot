@@ -494,9 +494,7 @@ inline std::string lowercase(std::string_view value) {
 }
 
 inline int imgui_resize_callback(ImGuiInputTextCallbackData *data) {
-  if (data->EventFlag != ImGuiInputTextFlags_CallbackResize || data->UserData == nullptr) {
-    return 0;
-  }
+  if (data->EventFlag != ImGuiInputTextFlags_CallbackResize || data->UserData == nullptr) return 0;
   auto *text = static_cast<std::string *>(data->UserData);
   text->resize(static_cast<size_t>(data->BufTextLen));
   data->Buf = text->data();

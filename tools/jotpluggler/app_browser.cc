@@ -11,9 +11,7 @@ namespace {
 constexpr float BROWSER_VALUE_WIDTH = 88.0f;
 
 bool path_matches_filter(const std::string &path, const std::string &lower_filter) {
-  if (lower_filter.empty()) {
-    return true;
-  }
+  if (lower_filter.empty()) return true;
   return lowercase(path).find(lower_filter) != std::string::npos;
 }
 
@@ -26,9 +24,7 @@ void insert_browser_path(std::vector<BrowserNode> *nodes, const std::string &pat
   while (start < path.size()) {
     const size_t end = path.find('/', start);
     parts.push_back(path.substr(start, end == std::string::npos ? std::string::npos : end - start));
-    if (end == std::string::npos) {
-      break;
-    }
+    if (end == std::string::npos) break;
     start = end + 1;
   }
   if (parts.empty()) {
@@ -81,9 +77,7 @@ bool is_deprecated_browser_path(const std::string &path) {
 }
 
 std::vector<std::string> visible_browser_paths(const RouteData &route_data, bool show_deprecated_fields) {
-  if (show_deprecated_fields) {
-    return route_data.paths;
-  }
+  if (show_deprecated_fields) return route_data.paths;
   std::vector<std::string> filtered;
   filtered.reserve(route_data.paths.size());
   for (const std::string &path : route_data.paths) {
@@ -194,14 +188,10 @@ std::optional<double> sample_route_series_value(const RouteSeries &series, doubl
 
 std::string browser_series_value_text(const AppSession &session, const UiState &state, std::string_view path) {
   auto it = session.series_by_path.find(std::string(path));
-  if (it == session.series_by_path.end() || it->second == nullptr) {
-    return {};
-  }
+  if (it == session.series_by_path.end() || it->second == nullptr) return {};
 
   const RouteSeries &series = *it->second;
-  if (series.values.empty()) {
-    return {};
-  }
+  if (series.values.empty()) return {};
 
   const auto enum_it = session.route_data.enum_info.find(series.path);
   const EnumInfo *enum_info = enum_it == session.route_data.enum_info.end() ? nullptr : &enum_it->second;
@@ -213,9 +203,7 @@ std::string browser_series_value_text(const AppSession &session, const UiState &
   } else {
     value = series.values.back();
   }
-  if (!value.has_value()) {
-    return {};
-  }
+  if (!value.has_value()) return {};
 
   const auto display_it = session.browser_display_by_path.find(series.path);
   const BrowserSeriesDisplayInfo display_info = display_it == session.browser_display_by_path.end()
@@ -226,16 +214,12 @@ std::string browser_series_value_text(const AppSession &session, const UiState &
 }
 
 bool browser_node_matches(const BrowserNode &node, const std::string &filter) {
-  if (filter.empty()) {
-    return true;
-  }
+  if (filter.empty()) return true;
   if (!node.full_path.empty() && path_matches_filter(node.full_path, filter)) {
     return true;
   }
   for (const BrowserNode &child : node.children) {
-    if (browser_node_matches(child, filter)) {
-      return true;
-    }
+    if (browser_node_matches(child, filter)) return true;
   }
   return false;
 }
@@ -244,9 +228,7 @@ bool browser_node_matches(const BrowserNode &node, const std::string &filter) {
 
 BrowserSeriesDisplayInfo classify_values(const std::vector<double> &values, bool enum_like) {
   BrowserSeriesDisplayInfo info;
-  if (values.empty()) {
-    return info;
-  }
+  if (values.empty()) return info;
   const size_t step = std::max<size_t>(1, values.size() / 128);
   double peak_abs = 0.0;
   bool integer_like = enum_like;
@@ -254,9 +236,7 @@ BrowserSeriesDisplayInfo classify_values(const std::vector<double> &values, bool
   unique_levels.reserve(8);
   for (size_t i = 0; i < values.size(); i += step) {
     const double value = values[i];
-    if (!std::isfinite(value)) {
-      continue;
-    }
+    if (!std::isfinite(value)) continue;
     peak_abs = std::max(peak_abs, std::abs(value));
     const double rounded = std::round(value);
     if (std::abs(value - rounded) > 1.0e-6) {
@@ -298,9 +278,7 @@ BrowserSeriesDisplayInfo compute_browser_display_info(const AppSession &session,
 std::string format_display_value(double display_value,
                                  const BrowserSeriesDisplayInfo &display_info,
                                  const EnumInfo *enum_info) {
-  if (!std::isfinite(display_value)) {
-    return {};
-  }
+  if (!std::isfinite(display_value)) return {};
   if (enum_info != nullptr) {
     const int idx = static_cast<int>(std::llround(display_value));
     if (idx >= 0 && std::abs(display_value - static_cast<double>(idx)) < 0.01
@@ -329,9 +307,7 @@ std::vector<std::string> decode_browser_drag_payload(std::string_view payload) {
     if (length > 0) {
       out.emplace_back(payload.substr(begin, length));
     }
-    if (end == std::string_view::npos) {
-      break;
-    }
+    if (end == std::string_view::npos) break;
     begin = end + 1;
   }
   return out;

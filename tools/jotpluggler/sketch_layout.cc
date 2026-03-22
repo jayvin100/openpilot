@@ -197,14 +197,10 @@ std::string curve_label(std::string_view series_name) {
 }
 
 bool parse_segment_number(std::string_view value, int *out) {
-  if (value.empty()) {
-    return false;
-  }
+  if (value.empty()) return false;
   char *end = nullptr;
   const long parsed = std::strtol(std::string(value).c_str(), &end, 10);
-  if (end == nullptr || *end != '\0') {
-    return false;
-  }
+  if (end == nullptr || *end != '\0') return false;
   *out = static_cast<int>(parsed);
   return true;
 }
@@ -213,9 +209,7 @@ RouteSelection parse_route_selection(const std::string &route_name) {
   RouteSelection route = {};
   static const std::regex pattern(R"(^(([a-z0-9]{16})[|_/])?(.{20})((--|/)((-?\d+(:(-?\d+)?)?)|(:-?\d+)))?$)");
   std::smatch match;
-  if (!std::regex_match(route_name, match, pattern)) {
-    return route;
-  }
+  if (!std::regex_match(route_name, match, pattern)) return route;
 
   route.dongle_id = match[2].str();
   route.timestamp = match[3].str();
@@ -242,9 +236,7 @@ RouteSelection parse_route_selection(const std::string &route_name) {
       }
     } else if (separator == "--") {
       int begin_segment = 0;
-      if (!parse_segment_number(range_str, &begin_segment)) {
-        return {};
-      }
+      if (!parse_segment_number(range_str, &begin_segment)) return {};
       route.begin_segment = begin_segment;
     }
   }
@@ -282,9 +274,7 @@ std::map<int, SegmentLogs> load_segments_from_json(const json11::Json &json) {
     for (const auto &url : value.second.array_items()) {
       const std::string url_str = url.string_value();
       std::smatch match;
-      if (!std::regex_search(url_str, match, rx)) {
-        continue;
-      }
+      if (!std::regex_search(url_str, match, rx)) continue;
       add_log_file_to_segments(&segments, std::stoi(match[1].str()), url_str);
     }
   }
@@ -293,15 +283,11 @@ std::map<int, SegmentLogs> load_segments_from_json(const json11::Json &json) {
 
 std::map<int, SegmentLogs> load_segments_from_server(const RouteSelection &route) {
   const std::string result = PyDownloader::getRouteFiles(route.canonical_name);
-  if (result.empty()) {
-    throw std::runtime_error("Failed to fetch route files for " + route.canonical_name);
-  }
+  if (result.empty()) throw std::runtime_error("Failed to fetch route files for " + route.canonical_name);
 
   std::string parse_error;
   const auto json = json11::Json::parse(result, parse_error);
-  if (!parse_error.empty()) {
-    throw std::runtime_error("Failed to parse route file list for " + route.canonical_name);
-  }
+  if (!parse_error.empty()) throw std::runtime_error("Failed to parse route file list for " + route.canonical_name);
   if (json.is_object() && json["error"].is_string()) {
     throw std::runtime_error("Route API error for " + route.canonical_name + ": " + json["error"].string_value());
   }
@@ -312,17 +298,11 @@ std::map<int, SegmentLogs> load_segments_from_local(const RouteSelection &route,
   std::map<int, SegmentLogs> segments;
   const std::string pattern = route.timestamp + "--";
   for (const auto &entry : fs::directory_iterator(data_dir)) {
-    if (!entry.is_directory()) {
-      continue;
-    }
+    if (!entry.is_directory()) continue;
     const std::string dirname = entry.path().filename().string();
-    if (dirname.find(pattern) == std::string::npos) {
-      continue;
-    }
+    if (dirname.find(pattern) == std::string::npos) continue;
     const size_t marker = dirname.rfind("--");
-    if (marker == std::string::npos) {
-      continue;
-    }
+    if (marker == std::string::npos) continue;
     int segment_number = 0;
     if (!parse_segment_number(dirname.substr(marker + 2), &segment_number)) {
       continue;
@@ -346,9 +326,7 @@ std::map<int, SegmentLogs> resolve_route_segments(const std::string &route_name,
     ? load_segments_from_server(route)
     : load_segments_from_local(route, data_dir);
   segments = trim_segments(std::move(segments), route);
-  if (segments.empty()) {
-    throw std::runtime_error("No log segments found for " + route_name);
-  }
+  if (segments.empty()) throw std::runtime_error("No log segments found for " + route_name);
   return segments;
 }
 
@@ -368,9 +346,7 @@ const std::unordered_map<std::string, std::string> &car_fingerprint_to_dbc_map()
     std::unordered_map<std::string, std::string> out;
     const fs::path json_path = fs::path(basedir()) / "tools" / "cabana" / "dbc" / "car_fingerprint_to_dbc.json";
     const std::string raw = util::read_file(json_path.string());
-    if (raw.empty()) {
-      return out;
-    }
+    if (raw.empty()) return out;
     std::string parse_error;
     const json11::Json parsed = json11::Json::parse(raw, parse_error);
     if (!parse_error.empty() || !parsed.is_object()) {
@@ -387,9 +363,7 @@ const std::unordered_map<std::string, std::string> &car_fingerprint_to_dbc_map()
 }
 
 std::string detect_dbc_for_fingerprint(std::string_view car_fingerprint) {
-  if (car_fingerprint.empty()) {
-    return {};
-  }
+  if (car_fingerprint.empty()) return {};
   const auto &map = car_fingerprint_to_dbc_map();
   auto it = map.find(std::string(car_fingerprint));
   return it == map.end() ? std::string() : it->second;
@@ -423,9 +397,7 @@ fs::path resolve_dbc_path(const std::string &dbc_name) {
          fs::path(basedir()) / "opendbc" / "dbc" / (dbc_name + ".dbc"),
          fs::path(basedir()) / "tools" / "jotpluggler" / "generated_dbcs" / (dbc_name + ".dbc"),
        }) {
-    if (fs::exists(candidate)) {
-      return candidate;
-    }
+    if (fs::exists(candidate)) return candidate;
   }
   throw std::runtime_error("DBC not found: " + dbc_name);
 }
@@ -434,18 +406,14 @@ std::array<uint8_t, 3> parse_color(std::string_view color) {
   if (!color.empty() && color.front() == '#') {
     color.remove_prefix(1);
   }
-  if (color.size() != 6) {
-    return {160, 170, 180};
-  }
+  if (color.size() != 6) return {160, 170, 180};
 
   std::array<uint8_t, 3> out = {};
   for (size_t i = 0; i < 3; ++i) {
     const std::string byte(color.substr(i * 2, 2));
     char *end = nullptr;
     const long parsed = std::strtol(byte.c_str(), &end, 16);
-    if (end == nullptr || *end != '\0' || parsed < 0 || parsed > 255) {
-      return {160, 170, 180};
-    }
+    if (end == nullptr || *end != '\0' || parsed < 0 || parsed > 255) return {160, 170, 180};
     out[i] = static_cast<uint8_t>(parsed);
   }
   return out;
@@ -481,24 +449,16 @@ uint8_t alert_status_to_level(cereal::SelfdriveState::AlertStatus status) {
 }
 
 double android_wall_time_seconds(uint64_t timestamp) {
-  if (timestamp == 0) {
-    return 0.0;
-  }
-  if (timestamp > 1000000000000ULL) {
-    return static_cast<double>(timestamp) / 1.0e9;
-  }
-  if (timestamp > 1000000000ULL) {
-    return static_cast<double>(timestamp) / 1.0e6;
-  }
+  if (timestamp == 0) return 0.0;
+  if (timestamp > 1000000000000ULL) return static_cast<double>(timestamp) / 1.0e9;
+  if (timestamp > 1000000000ULL) return static_cast<double>(timestamp) / 1.0e6;
   return static_cast<double>(timestamp);
 }
 
 std::optional<uint64_t> json_u64_value(const json11::Json &value) {
   if (value.is_number()) {
     const double number = value.number_value();
-    if (number >= 0.0) {
-      return static_cast<uint64_t>(number);
-    }
+    if (number >= 0.0) return static_cast<uint64_t>(number);
   }
   if (value.is_string()) {
     try {
@@ -510,9 +470,7 @@ std::optional<uint64_t> json_u64_value(const json11::Json &value) {
 }
 
 std::optional<int> json_int_value(const json11::Json &value) {
-  if (value.is_number()) {
-    return value.int_value();
-  }
+  if (value.is_number()) return value.int_value();
   if (value.is_string()) {
     try {
       return std::stoi(value.string_value());
@@ -523,12 +481,8 @@ std::optional<int> json_int_value(const json11::Json &value) {
 }
 
 std::string json_value_for_log(const json11::Json &value) {
-  if (value.is_string()) {
-    return value.string_value();
-  }
-  if (value.is_bool()) {
-    return value.bool_value() ? "true" : "false";
-  }
+  if (value.is_string()) return value.string_value();
+  if (value.is_bool()) return value.bool_value() ? "true" : "false";
   return value.dump();
 }
 
@@ -672,15 +626,11 @@ std::vector<LogEntry> extract_segment_logs(const std::vector<Event> &events) {
 RouteMetadata extract_segment_metadata(const std::vector<Event> &events) {
   RouteMetadata metadata;
   for (const Event &event_record : events) {
-    if (event_record.which != cereal::Event::Which::CAR_PARAMS) {
-      continue;
-    }
+    if (event_record.which != cereal::Event::Which::CAR_PARAMS) continue;
     capnp::FlatArrayMessageReader event_reader(event_record.data);
     const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
     metadata.car_fingerprint = event.getCarParams().getCarFingerprint().cStr();
-    if (!metadata.car_fingerprint.empty()) {
-      break;
-    }
+    if (!metadata.car_fingerprint.empty()) break;
   }
   return metadata;
 }
@@ -688,17 +638,11 @@ RouteMetadata extract_segment_metadata(const std::vector<Event> &events) {
 RouteMetadata detect_route_metadata(const std::map<int, SegmentLogs> &segments) {
   for (const auto &[_, segment] : segments) {
     const std::string &log_path = !segment.qlog.empty() ? segment.qlog : segment.rlog;
-    if (log_path.empty()) {
-      continue;
-    }
+    if (log_path.empty()) continue;
     LogReader reader;
-    if (!reader.load(log_path, nullptr, true)) {
-      continue;
-    }
+    if (!reader.load(log_path, nullptr, true)) continue;
     RouteMetadata metadata = extract_segment_metadata(reader.events);
-    if (!metadata.car_fingerprint.empty()) {
-      return metadata;
-    }
+    if (!metadata.car_fingerprint.empty()) return metadata;
   }
   return {};
 }
@@ -713,14 +657,10 @@ std::vector<double> normalize_sizes(const json11::Json &sizes_json, size_t child
     }
   }
 
-  if (parsed.size() != child_count || child_count == 0) {
-    return std::vector<double>(child_count, child_count == 0 ? 0.0 : 1.0 / static_cast<double>(child_count));
-  }
+  if (parsed.size() != child_count || child_count == 0) return std::vector<double>(child_count, child_count == 0 ? 0.0 : 1.0 / static_cast<double>(child_count));
 
   const double total = std::accumulate(parsed.begin(), parsed.end(), 0.0);
-  if (total <= 0.0) {
-    return std::vector<double>(child_count, 1.0 / static_cast<double>(child_count));
-  }
+  if (total <= 0.0) return std::vector<double>(child_count, 1.0 / static_cast<double>(child_count));
   for (double &value : parsed) {
     value /= total;
   }
@@ -803,9 +743,7 @@ Pane parse_dock_area(const json11::Json &dock_area_node) {
 
 WorkspaceNode parse_workspace_node(const json11::Json &node, WorkspaceTab *tab) {
   WorkspaceNode workspace_node;
-  if (!node.is_object()) {
-    return workspace_node;
-  }
+  if (!node.is_object()) return workspace_node;
 
   if (node["curves"].is_array()) {
     workspace_node.is_pane = true;
@@ -815,14 +753,10 @@ WorkspaceNode parse_workspace_node(const json11::Json &node, WorkspaceTab *tab) 
   }
 
   const json11::Json &children_node = node["children"];
-  if (!children_node.is_array()) {
-    return workspace_node;
-  }
+  if (!children_node.is_array()) return workspace_node;
 
   const std::vector<json11::Json> children = children_node.array_items();
-  if (children.empty()) {
-    return workspace_node;
-  }
+  if (children.empty()) return workspace_node;
 
   const std::string split = node["split"].string_value();
   workspace_node.orientation = split == "vertical" ? SplitOrientation::Vertical : SplitOrientation::Horizontal;
@@ -840,18 +774,14 @@ WorkspaceTab parse_tab(const json11::Json &tab, const fs::path &layout_path) {
   WorkspaceTab workspace_tab;
   workspace_tab.tab_name = tab["name"].string_value().empty() ? "tab1" : tab["name"].string_value();
   const json11::Json &dock_root = tab["root"];
-  if (!dock_root.is_object()) {
-    throw std::runtime_error("Layout tab has no dock content: " + layout_path.string());
-  }
+  if (!dock_root.is_object()) throw std::runtime_error("Layout tab has no dock content: " + layout_path.string());
   workspace_tab.root = parse_workspace_node(dock_root, &workspace_tab);
   return workspace_tab;
 }
 
 SketchLayout parse_layout(const fs::path &layout_path) {
   const std::string text = util::read_file(layout_path.string());
-  if (text.empty()) {
-    throw std::runtime_error("Failed to read layout JSON: " + layout_path.string());
-  }
+  if (text.empty()) throw std::runtime_error("Failed to read layout JSON: " + layout_path.string());
 
   std::string parse_error;
   const json11::Json root = json11::Json::parse(text, parse_error);
@@ -864,9 +794,7 @@ SketchLayout parse_layout(const fs::path &layout_path) {
       layout.tabs.push_back(parse_tab(tab, layout_path));
     }
   }
-  if (layout.tabs.empty()) {
-    throw std::runtime_error("Layout has no tabs: " + layout_path.string());
-  }
+  if (layout.tabs.empty()) throw std::runtime_error("Layout has no tabs: " + layout_path.string());
   const json11::Json &tab_index = root["current_tab_index"].is_number() ? root["current_tab_index"] : root["currentTabIndex"];
   layout.current_tab_index = std::clamp(tab_index.is_number() ? tab_index.int_value() : 0,
                                         0,
@@ -875,9 +803,7 @@ SketchLayout parse_layout(const fs::path &layout_path) {
 }
 
 ScalarKind scalar_kind_for_type(const capnp::Type &type) {
-  if (type.isBool()) {
-    return ScalarKind::Bool;
-  }
+  if (type.isBool()) return ScalarKind::Bool;
   if (type.isInt8() || type.isInt16() || type.isInt32() || type.isInt64()) {
     return ScalarKind::Int;
   }
@@ -887,9 +813,7 @@ ScalarKind scalar_kind_for_type(const capnp::Type &type) {
   if (type.isFloat32() || type.isFloat64()) {
     return ScalarKind::Float;
   }
-  if (type.isEnum()) {
-    return ScalarKind::Enum;
-  }
+  if (type.isEnum()) return ScalarKind::Enum;
   return ScalarKind::None;
 }
 
@@ -1133,9 +1057,7 @@ void append_fast_node(const ResolvedNode &node,
     case ResolvedNodeKind::Struct: {
       const capnp::DynamicStruct::Reader reader = value.as<capnp::DynamicStruct>();
       for (const ResolvedNode &child : node.children) {
-        if (!child.has_field || !reader.has(child.field)) {
-          continue;
-        }
+        if (!child.has_field || !reader.has(child.field)) continue;
         if (path_override == nullptr) {
           append_fast_node(child, reader.get(child.field), tm, series, nullptr);
         } else {
@@ -1223,9 +1145,7 @@ void append_event_fast(cereal::Event::Which which,
       const std::string base_path = "/" + service.service_name + "/" + std::to_string(bus) + "/" + message->name;
       for (const dbc_core::Signal &signal : message->signals) {
         std::optional<double> value = dbc_core::signalValue(signal, *message, raw, data_size);
-        if (!value.has_value()) {
-          continue;
-        }
+        if (!value.has_value()) continue;
         const std::string path = base_path + "/" + signal.name;
         append_dynamic_scalar_point(path, tm, *value, series);
         if (series->enum_info.find(path) == series->enum_info.end()) {
@@ -1296,9 +1216,7 @@ void merge_series_accumulator(SeriesAccumulator *dst, SeriesAccumulator *src) {
     merge_route_series(&dst->fixed_series[i], &src->fixed_series[i]);
   }
   for (auto &series : src->dynamic_series) {
-    if (series.path.empty()) {
-      continue;
-    }
+    if (series.path.empty()) continue;
     RouteSeries &dst_series = dst->dynamic_series[ensure_dynamic_slot(series.path, dst)];
     merge_route_series(&dst_series, &series);
   }
@@ -1320,9 +1238,7 @@ size_t populated_series_count(const SeriesAccumulator &series) {
 
 bool series_is_sorted(const RouteSeries &series) {
   for (size_t i = 1; i < series.times.size(); ++i) {
-    if (series.times[i] < series.times[i - 1]) {
-      return false;
-    }
+    if (series.times[i] < series.times[i - 1]) return false;
   }
   return true;
 }
@@ -1374,9 +1290,7 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list,
   route_data.series.reserve(series_list.size());
   route_data.paths.reserve(series_list.size());
   for (RouteSeries &series : series_list) {
-    if (series.times.empty()) {
-      continue;
-    }
+    if (series.times.empty()) continue;
     route_data.has_time_range = true;
     route_data.x_min = route_data.series.empty() ? series.times.front() : std::min(route_data.x_min, series.times.front());
     route_data.x_max = route_data.series.empty() ? series.times.back() : std::max(route_data.x_max, series.times.back());
@@ -1443,9 +1357,7 @@ const RouteSeries *find_route_series(const RouteData &route_data, std::string_vi
                              [](const RouteSeries &series, std::string_view target) {
                                return series.path < target;
                              });
-  if (it == route_data.series.end() || it->path != path) {
-    return nullptr;
-  }
+  if (it == route_data.series.end() || it->path != path) return nullptr;
   return &(*it);
 }
 
@@ -1456,9 +1368,7 @@ void build_road_camera_index(const std::map<int, SegmentLogs> &segments, RouteDa
   std::unordered_set<int> available_segments;
   available_segments.reserve(segments.size());
   for (const auto &[segment_number, segment] : segments) {
-    if (segment.fcamera.empty()) {
-      continue;
-    }
+    if (segment.fcamera.empty()) continue;
     route_data->road_camera.segment_files.push_back(CameraSegmentFile{
       .segment = segment_number,
       .path = segment.fcamera,
@@ -1525,9 +1435,7 @@ size_t segment_worker_count(size_t segment_count, size_t worker_budget) {
 }
 
 size_t extract_chunk_count(size_t event_count, size_t worker_budget, size_t segment_workers) {
-  if (event_count < 4096) {
-    return 1;
-  }
+  if (event_count < 4096) return 1;
   const size_t per_segment_budget = std::max<size_t>(1, worker_budget / std::max<size_t>(1, segment_workers));
   const size_t chunk_target = std::max<size_t>(1, (event_count + 14999) / 15000);
   return std::max<size_t>(1, std::min({per_segment_budget, chunk_target, static_cast<size_t>(8)}));
@@ -1661,9 +1569,7 @@ LoadedRouteArtifacts load_route_series_parallel(
     thread.join();
   }
 
-  if (!first_error.empty()) {
-    throw std::runtime_error(first_error);
-  }
+  if (!first_error.empty()) throw std::runtime_error(first_error);
 
   stats->merge_start = LoadStats::Clock::now();
   SeriesAccumulator merged = make_series_accumulator(schema);
@@ -1713,9 +1619,7 @@ std::vector<std::string> collect_layout_roots(const SketchLayout &layout) {
 std::vector<std::string> collect_route_roots_for_paths(const std::vector<std::string> &paths) {
   std::vector<std::string> roots;
   for (const std::string &path : paths) {
-    if (!is_absolute_curve(path)) {
-      continue;
-    }
+    if (!is_absolute_curve(path)) continue;
     const size_t slash = path.find('/', 1);
     const std::string root = path.substr(1, slash == std::string::npos ? std::string::npos : slash - 1);
     if (!root.empty() && std::find(roots.begin(), roots.end(), root) == roots.end()) {
@@ -1833,9 +1737,7 @@ RouteData load_route_data(const std::string &route_name,
                           const std::string &data_dir,
                           const std::string &dbc_name,
                           const RouteLoadProgressCallback &progress) {
-  if (route_name.empty()) {
-    return RouteData{};
-  }
+  if (route_name.empty()) return RouteData{};
 
   LoadStats stats(progress);
   stats.load_start = LoadStats::Clock::now();

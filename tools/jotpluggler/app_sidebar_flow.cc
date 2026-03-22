@@ -1,10 +1,6 @@
 std::string dbc_combo_label(const AppSession &session) {
-  if (!session.dbc_override.empty()) {
-    return session.dbc_override;
-  }
-  if (!session.route_data.dbc_name.empty()) {
-    return "Auto: " + session.route_data.dbc_name;
-  }
+  if (!session.dbc_override.empty()) return session.dbc_override;
+  if (!session.route_data.dbc_name.empty()) return "Auto: " + session.route_data.dbc_name;
   return "Auto";
 }
 

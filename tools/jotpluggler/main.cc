@@ -35,9 +35,7 @@ void print_usage(const char *argv0) {
 bool parse_int(const char *value, int *out) {
   char *end = nullptr;
   const long parsed = std::strtol(value, &end, 10);
-  if (end == nullptr || *end != '\0') {
-    return false;
-  }
+  if (end == nullptr || *end != '\0') return false;
   *out = static_cast<int>(parsed);
   return true;
 }
@@ -45,9 +43,7 @@ bool parse_int(const char *value, int *out) {
 bool parse_double(const char *value, double *out) {
   char *end = nullptr;
   const double parsed = std::strtod(value, &end);
-  if (end == nullptr || *end != '\0') {
-    return false;
-  }
+  if (end == nullptr || *end != '\0') return false;
   *out = parsed;
   return true;
 }

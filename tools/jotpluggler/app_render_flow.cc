@@ -34,9 +34,7 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
 
 void save_framebuffer_png(const fs::path &output_path, int width, int height) {
   ensure_parent_dir(output_path);
-  if (width <= 0 || height <= 0) {
-    throw std::runtime_error("Invalid framebuffer size");
-  }
+  if (width <= 0 || height <= 0) throw std::runtime_error("Invalid framebuffer size");
 
   std::vector<uint8_t> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 4U, 0);
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -45,9 +43,7 @@ void save_framebuffer_png(const fs::path &output_path, int width, int height) {
   const fs::path ppm_path = output_path.parent_path() / (output_path.stem().string() + ".ppm");
   {
     std::ofstream out(ppm_path, std::ios::binary);
-    if (!out) {
-      throw std::runtime_error("Failed to open " + ppm_path.string());
-    }
+    if (!out) throw std::runtime_error("Failed to open " + ppm_path.string());
     out << "P6\n" << width << " " << height << "\n255\n";
     for (int y = height - 1; y >= 0; --y) {
       for (int x = 0; x < width; ++x) {

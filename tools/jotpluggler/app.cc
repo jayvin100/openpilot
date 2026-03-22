@@ -65,9 +65,7 @@ const fs::path &repo_root() {
 #else
     std::array<char, 4096> buf = {};
     const ssize_t count = readlink("/proc/self/exe", buf.data(), buf.size() - 1);
-    if (count <= 0) {
-      throw std::runtime_error("Unable to resolve executable path");
-    }
+    if (count <= 0) throw std::runtime_error("Unable to resolve executable path");
     return fs::path(std::string(buf.data(), static_cast<size_t>(count))).parent_path().parent_path().parent_path();
 #endif
   }();
@@ -83,9 +81,7 @@ std::optional<fs::path> jetbrains_mono_font_path() {
   }
   candidates.push_back(fs::path("/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf"));
   for (const fs::path &candidate : candidates) {
-    if (fs::exists(candidate)) {
-      return candidate;
-    }
+    if (fs::exists(candidate)) return candidate;
   }
   return std::nullopt;
 }
@@ -96,9 +92,7 @@ std::optional<fs::path> inter_font_path() {
     repo_root() / "selfdrive" / "ui" / "installer" / "inter-ascii.ttf",
   };
   for (const fs::path &candidate : candidates) {
-    if (fs::exists(candidate)) {
-      return candidate;
-    }
+    if (fs::exists(candidate)) return candidate;
   }
   return std::nullopt;
 }
@@ -108,9 +102,7 @@ std::string layout_name_from_arg(const std::string &layout_arg) {
   if (raw.extension() == ".xml" || raw.extension() == ".json") {
     return raw.stem().string();
   }
-  if (raw.filename() != raw) {
-    return raw.filename().replace_extension("").string();
-  }
+  if (raw.filename() != raw) return raw.filename().replace_extension("").string();
   fs::path stem_path = raw;
   return stem_path.replace_extension("").string();
 }
@@ -118,18 +110,14 @@ std::string layout_name_from_arg(const std::string &layout_arg) {
 fs::path resolve_layout_path(const std::string &layout_arg) {
   const fs::path direct(layout_arg);
   if (fs::exists(direct)) {
-    if (direct.extension() == ".json") {
-      return fs::absolute(direct);
-    }
+    if (direct.extension() == ".json") return fs::absolute(direct);
     const fs::path sibling_json = direct.parent_path() / (direct.stem().string() + ".json");
     if (direct.extension() == ".xml" && fs::exists(sibling_json)) {
       return fs::absolute(sibling_json);
     }
   }
   const fs::path candidate = repo_root() / "tools" / "jotpluggler" / "layouts" / (layout_name_from_arg(layout_arg) + ".json");
-  if (!fs::exists(candidate)) {
-    throw std::runtime_error("Unknown layout: " + layout_arg);
-  }
+  if (!fs::exists(candidate)) throw std::runtime_error("Unknown layout: " + layout_arg);
   return candidate;
 }
 
@@ -198,15 +186,12 @@ const std::vector<std::string> &available_layout_names() {
 
 void run_or_throw(const std::string &command, const std::string &action) {
   const int ret = std::system(command.c_str());
-  if (ret != 0) {
-    throw std::runtime_error(action + " failed with exit code " + std::to_string(ret));
-  }
+  if (ret != 0) throw std::runtime_error(action + " failed with exit code " + std::to_string(ret));
 }
 
 bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg);
 bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir);
 void reset_shared_range(UiState *state, const AppSession &session);
-std::string app_curve_display_name(const Curve &curve);
 SketchLayout make_empty_layout();
 void cancel_rename_tab(UiState *state);
 void sync_ui_state(UiState *state, const SketchLayout &layout);
@@ -417,25 +402,19 @@ void sync_layout_buffers(UiState *state, const AppSession &session) {
 }
 
 const WorkspaceTab *app_active_tab(const SketchLayout &layout, const UiState &state) {
-  if (layout.tabs.empty()) {
-    return nullptr;
-  }
+  if (layout.tabs.empty()) return nullptr;
   const int index = std::clamp(state.active_tab_index, 0, static_cast<int>(layout.tabs.size()) - 1);
   return &layout.tabs[static_cast<size_t>(index)];
 }
 
 WorkspaceTab *app_active_tab(SketchLayout *layout, const UiState &state) {
-  if (layout->tabs.empty()) {
-    return nullptr;
-  }
+  if (layout->tabs.empty()) return nullptr;
   const int index = std::clamp(state.active_tab_index, 0, static_cast<int>(layout->tabs.size()) - 1);
   return &layout->tabs[static_cast<size_t>(index)];
 }
 
 TabUiState *app_active_tab_state(UiState *state) {
-  if (state->tabs.empty()) {
-    return nullptr;
-  }
+  if (state->tabs.empty()) return nullptr;
   const int index = std::clamp(state->active_tab_index, 0, static_cast<int>(state->tabs.size()) - 1);
   return &state->tabs[static_cast<size_t>(index)];
 }
@@ -521,8 +500,6 @@ struct PaneDropAction {
   PaneCurveDragPayload curve_ref;
 };
 
-bool app_add_curve_to_active_pane(AppSession *session, UiState *state, const std::string &path);
-bool curve_has_samples(const AppSession &session, const Curve &curve);
 
 bool curve_has_local_samples(const Curve &curve) {
   return curve.xs.size() > 1 && curve.xs.size() == curve.ys.size();
@@ -585,9 +562,7 @@ void decrement_pane_indices(WorkspaceNode *node, int removed_index) {
 }
 
 bool remove_pane_node(WorkspaceNode *node, int pane_index) {
-  if (node->is_pane) {
-    return node->pane_index == pane_index;
-  }
+  if (node->is_pane) return node->pane_index == pane_index;
 
   for (size_t i = 0; i < node->children.size();) {
     if (remove_pane_node(&node->children[i], pane_index)) {
@@ -607,9 +582,7 @@ bool remove_pane_node(WorkspaceNode *node, int pane_index) {
 bool split_pane_node(WorkspaceNode *node, int target_pane_index, SplitOrientation orientation,
                      bool new_before, int new_pane_index) {
   if (node->is_pane) {
-    if (node->pane_index != target_pane_index) {
-      return false;
-    }
+    if (node->pane_index != target_pane_index) return false;
     WorkspaceNode existing_pane;
     existing_pane.is_pane = true;
     existing_pane.pane_index = target_pane_index;
@@ -634,9 +607,7 @@ bool split_pane_node(WorkspaceNode *node, int target_pane_index, SplitOrientatio
   }
 
   for (WorkspaceNode &child : node->children) {
-    if (split_pane_node(&child, target_pane_index, orientation, new_before, new_pane_index)) {
-      return true;
-    }
+    if (split_pane_node(&child, target_pane_index, orientation, new_before, new_pane_index)) return true;
   }
   return false;
 }
@@ -684,14 +655,10 @@ std::string next_tab_name(const SketchLayout &layout, const std::string &base_na
     return "tab" + std::to_string(std::max(1, max_suffix + 1));
   }
   std::string base = base_name.empty() ? "tab" : base_name;
-  if (!tab_name_exists(layout, base)) {
-    return base;
-  }
+  if (!tab_name_exists(layout, base)) return base;
   for (int i = 2; i < 1000; ++i) {
     const std::string candidate = base + " " + std::to_string(i);
-    if (!tab_name_exists(layout, candidate)) {
-      return candidate;
-    }
+    if (!tab_name_exists(layout, candidate)) return candidate;
   }
   return base + " copy";
 }
@@ -739,7 +706,6 @@ std::array<uint8_t, 3> app_next_curve_color(const Pane &pane) {
   return PALETTE[pane.curves.size() % PALETTE.size()];
 }
 
-const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path);
 #include "tools/jotpluggler/app_session_flow.cc"
 
 #include "tools/jotpluggler/app_sidebar_flow.cc"
@@ -896,12 +862,8 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
 }
 
 std::string app_curve_display_name(const Curve &curve) {
-  if (!curve.label.empty()) {
-    return curve.label;
-  }
-  if (!curve.name.empty()) {
-    return curve.name;
-  }
+  if (!curve.label.empty()) return curve.label;
+  if (!curve.name.empty()) return curve.name;
   return "curve";
 }
 
@@ -961,9 +923,7 @@ int add_path_curves_to_pane(AppSession *session, UiState *state, int pane_index,
   int inserted_count = 0;
   int duplicate_count = 0;
   for (const std::string &path : paths) {
-    if (app_find_route_series(*session, path) == nullptr) {
-      continue;
-    }
+    if (app_find_route_series(*session, path) == nullptr) continue;
     if (add_curve_to_pane(tab, pane_index, make_curve_for_path(tab->panes[static_cast<size_t>(pane_index)], path))) {
       ++inserted_count;
     } else {
@@ -1001,9 +961,7 @@ bool split_pane(WorkspaceTab *tab, int pane_index, PaneDropZone zone, std::optio
   if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) {
     return false;
   }
-  if (zone == PaneDropZone::Center) {
-    return false;
-  }
+  if (zone == PaneDropZone::Center) return false;
 
   const int new_pane_index = static_cast<int>(tab->panes.size());
   Pane new_pane = make_empty_pane();
@@ -1012,29 +970,11 @@ bool split_pane(WorkspaceTab *tab, int pane_index, PaneDropZone zone, std::optio
   }
   tab->panes.push_back(std::move(new_pane));
 
-  SplitOrientation orientation = SplitOrientation::Horizontal;
-  bool new_before = false;
-  switch (zone) {
-    case PaneDropZone::Left:
-      orientation = SplitOrientation::Horizontal;
-      new_before = true;
-      break;
-    case PaneDropZone::Right:
-      orientation = SplitOrientation::Horizontal;
-      new_before = false;
-      break;
-    case PaneDropZone::Top:
-      orientation = SplitOrientation::Vertical;
-      new_before = true;
-      break;
-    case PaneDropZone::Bottom:
-      orientation = SplitOrientation::Vertical;
-      new_before = false;
-      break;
-    case PaneDropZone::Center:
-      break;
-  }
-  return split_pane_node(&tab->root, pane_index, orientation, new_before, new_pane_index);
+  const bool vertical = zone == PaneDropZone::Top || zone == PaneDropZone::Bottom;
+  const bool new_before = zone == PaneDropZone::Left || zone == PaneDropZone::Top;
+  return split_pane_node(&tab->root, pane_index,
+    vertical ? SplitOrientation::Vertical : SplitOrientation::Horizontal,
+    new_before, new_pane_index);
 }
 
 bool close_pane(WorkspaceTab *tab, int pane_index) {
@@ -1047,9 +987,7 @@ bool close_pane(WorkspaceTab *tab, int pane_index) {
     pane.title = UNTITLED_PANE_TITLE;
     return true;
   }
-  if (remove_pane_node(&tab->root, pane_index)) {
-    return false;
-  }
+  if (remove_pane_node(&tab->root, pane_index)) return false;
   tab->panes.erase(tab->panes.begin() + static_cast<std::ptrdiff_t>(pane_index));
   decrement_pane_indices(&tab->root, pane_index);
   normalize_split_node(&tab->root);
@@ -1167,9 +1105,7 @@ void draw_inline_tab_editor(AppSession *session, UiState *state, const ImRect &t
 }
 
 bool curve_has_samples(const AppSession &session, const Curve &curve) {
-  if (curve_has_local_samples(curve)) {
-    return true;
-  }
+  if (curve_has_local_samples(curve)) return true;
   if (curve.name.empty() || curve.name.front() != '/') {
     return false;
   }
@@ -1309,20 +1245,12 @@ std::optional<double> app_sample_xy_value_at_time(const std::vector<double> &xs,
   if (xs.size() < 2 || xs.size() != ys.size()) {
     return std::nullopt;
   }
-  if (tm <= xs.front()) {
-    return ys.front();
-  }
-  if (tm >= xs.back()) {
-    return ys.back();
-  }
+  if (tm <= xs.front()) return ys.front();
+  if (tm >= xs.back()) return ys.back();
 
   const auto upper = std::lower_bound(xs.begin(), xs.end(), tm);
-  if (upper == xs.begin()) {
-    return ys.front();
-  }
-  if (upper == xs.end()) {
-    return ys.back();
-  }
+  if (upper == xs.begin()) return ys.front();
+  if (upper == xs.end()) return ys.back();
 
   const size_t upper_index = static_cast<size_t>(std::distance(xs.begin(), upper));
   const size_t lower_index = upper_index - 1;
@@ -1330,12 +1258,8 @@ std::optional<double> app_sample_xy_value_at_time(const std::vector<double> &xs,
   const double x1 = xs[upper_index];
   const double y0 = ys[lower_index];
   const double y1 = ys[upper_index];
-  if (std::abs(tm - x1) < 1.0e-9) {
-    return y1;
-  }
-  if (stairs || x1 <= x0) {
-    return y0;
-  }
+  if (std::abs(tm - x1) < 1.0e-9) return y1;
+  if (stairs || x1 <= x0) return y0;
   const double alpha = (tm - x0) / (x1 - x0);
   return y0 + (y1 - y0) * alpha;
 }
@@ -1351,9 +1275,7 @@ int format_enum_axis_tick(double value, char *buf, int size, void *user_data) {
         continue;
       }
       const std::string &name = info->names[static_cast<size_t>(idx)];
-      if (name.empty()) {
-        continue;
-      }
+      if (name.empty()) continue;
       if (std::find(names.begin(), names.end(), std::string_view(name)) == names.end()) {
         names.emplace_back(name);
       }
@@ -1373,16 +1295,10 @@ int format_enum_axis_tick(double value, char *buf, int size, void *user_data) {
 }
 
 std::string curve_legend_label(const PreparedCurve &curve, bool has_cursor_time) {
-  if (!has_cursor_time) {
-    return curve.label;
-  }
-  if (!curve.legend_value.has_value()) {
-    return curve.label;
-  }
+  if (!has_cursor_time) return curve.label;
+  if (!curve.legend_value.has_value()) return curve.label;
   const std::string value_text = format_display_value(*curve.legend_value, curve.display_info, curve.enum_info);
-  if (value_text.empty()) {
-    return curve.label;
-  }
+  if (value_text.empty()) return curve.label;
   return curve.label + "  " + value_text;
 }
 
@@ -1411,9 +1327,7 @@ bool build_curve_series(const AppSession &session,
       end_index = end_it == series->times.end() ? series->times.size() : static_cast<size_t>(std::distance(series->times.begin(), end_it + 1));
       end_index = std::min(end_index, series->times.size());
     }
-    if (end_index <= begin_index + 1) {
-      return false;
-    }
+    if (end_index <= begin_index + 1) return false;
     xs.assign(series->times.begin() + begin_index, series->times.begin() + end_index);
     ys.assign(series->values.begin() + begin_index, series->values.begin() + end_index);
   }
@@ -1421,16 +1335,12 @@ bool build_curve_series(const AppSession &session,
   std::vector<double> transformed_xs;
   std::vector<double> transformed_ys;
   if (curve.derivative) {
-    if (xs.size() < 2) {
-      return false;
-    }
+    if (xs.size() < 2) return false;
     transformed_xs.reserve(xs.size() - 1);
     transformed_ys.reserve(ys.size() - 1);
     for (size_t i = 1; i < xs.size(); ++i) {
       const double dt = curve.derivative_dt > 0.0 ? curve.derivative_dt : (xs[i] - xs[i - 1]);
-      if (dt <= 0.0) {
-        continue;
-      }
+      if (dt <= 0.0) continue;
       transformed_xs.push_back(xs[i]);
       transformed_ys.push_back((ys[i] - ys[i - 1]) / dt);
     }
@@ -1580,9 +1490,7 @@ PlotBounds current_plot_bounds_for_pane(const AppSession &session, const Pane &p
   constexpr int kAxisEditorMaxPoints = 2048;
   for (size_t curve_index = 0; curve_index < pane.curves.size(); ++curve_index) {
     const Curve &curve = pane.curves[curve_index];
-    if (!curve.visible || !curve_has_samples(session, curve)) {
-      continue;
-    }
+    if (!curve.visible || !curve_has_samples(session, curve)) continue;
     PreparedCurve prepared;
     if (build_curve_series(session, curve, state, kAxisEditorMaxPoints, &prepared)) {
       prepared.pane_curve_index = static_cast<int>(curve_index);
@@ -1615,9 +1523,7 @@ void open_axis_limits_editor(const AppSession &session, UiState *state, int pane
 
 bool apply_axis_limits_editor(AppSession *session, UiState *state) {
   WorkspaceTab *tab = app_active_tab(&session->layout, *state);
-  if (tab == nullptr) {
-    return false;
-  }
+  if (tab == nullptr) return false;
 
   AxisLimitsEditorState &editor = state->axis_limits;
   if (editor.pane_index < 0 || editor.pane_index >= static_cast<int>(tab->panes.size())) {
@@ -1689,9 +1595,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   const int max_points = std::max(256, static_cast<int>(ImGui::GetContentRegionAvail().x) * 2);
   for (size_t curve_index = 0; curve_index < pane->curves.size(); ++curve_index) {
     const Curve &curve = pane->curves[curve_index];
-    if (!curve.visible || !curve_has_samples(session, curve)) {
-      continue;
-    }
+    if (!curve.visible || !curve_has_samples(session, curve)) continue;
     PreparedCurve prepared;
     if (build_curve_series(session, curve, *state, max_points, &prepared)) {
       prepared.pane_curve_index = static_cast<int>(curve_index);
@@ -1798,9 +1702,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
 }
 
 std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, int pane_index) {
-  if (!ImGui::BeginPopupContextWindow("##pane_context")) {
-    return std::nullopt;
-  }
+  if (!ImGui::BeginPopupContextWindow("##pane_context")) return std::nullopt;
 
   PaneMenuAction action;
   action.pane_index = pane_index;
@@ -1848,16 +1750,12 @@ std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, in
     action.kind = PaneMenuActionKind::Close;
   }
   ImGui::EndPopup();
-  if (action.kind == PaneMenuActionKind::None) {
-    return std::nullopt;
-  }
+  if (action.kind == PaneMenuActionKind::None) return std::nullopt;
   return action;
 }
 
 std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_index) {
-  if (ImGui::GetDragDropPayload() == nullptr) {
-    return std::nullopt;
-  }
+  if (ImGui::GetDragDropPayload() == nullptr) return std::nullopt;
 
   const ImVec2 window_pos = ImGui::GetWindowPos();
   const ImVec2 content_min = ImGui::GetWindowContentRegionMin();
@@ -1931,9 +1829,7 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
                             const PaneMenuAction &action) {
   WorkspaceTab *tab = app_active_tab(&session->layout, *state);
   TabUiState *tab_state = app_active_tab_state(state);
-  if (tab == nullptr || tab_state == nullptr) {
-    return false;
-  }
+  if (tab == nullptr || tab_state == nullptr) return false;
 
   const int original_pane_count = static_cast<int>(tab->panes.size());
   bool dock_changed = false;
@@ -2016,14 +1912,10 @@ bool apply_pane_menu_action(AppSession *session, UiState *state, int pane_index,
 bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropAction &action) {
   WorkspaceTab *tab = app_active_tab(&session->layout, *state);
   TabUiState *tab_state = app_active_tab_state(state);
-  if (tab == nullptr || tab_state == nullptr) {
-    return false;
-  }
+  if (tab == nullptr || tab_state == nullptr) return false;
 
   if (action.from_browser) {
-    if (action.browser_paths.empty()) {
-      return false;
-    }
+    if (action.browser_paths.empty()) return false;
     if (action.zone == PaneDropZone::Center) {
       const int inserted_count = add_path_curves_to_pane(session, state, action.target_pane_index, action.browser_paths);
       if (inserted_count > 0) {

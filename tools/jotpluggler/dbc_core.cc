@@ -27,9 +27,7 @@ void update_msb_lsb(Signal *signal) {
 
 double raw_signalValue(const Signal &signal, const uint8_t *data, size_t data_size) {
   const int msb_byte = signal.msb / 8;
-  if (msb_byte >= static_cast<int>(data_size)) {
-    return 0.0;
-  }
+  if (msb_byte >= static_cast<int>(data_size)) return 0.0;
 
   const int lsb_byte = signal.lsb / 8;
   uint64_t val = 0;
@@ -66,9 +64,7 @@ double raw_signalValue(const Signal &signal, const uint8_t *data, size_t data_si
 
 Database::Database(const std::filesystem::path &path) {
   std::ifstream in(path);
-  if (!in) {
-    throw std::runtime_error("Failed to open DBC " + path.string());
-  }
+  if (!in) throw std::runtime_error("Failed to open DBC " + path.string());
   std::ostringstream buffer;
   buffer << in.rdbuf();
   parse(buffer.str(), path.filename().string());
@@ -80,20 +76,14 @@ const Message *Database::message(uint32_t address) const {
 }
 
 std::vector<std::string> Database::enumNames(const Signal &signal) const {
-  if (signal.value_descriptions.empty()) {
-    return {};
-  }
+  if (signal.value_descriptions.empty()) return {};
   int max_index = -1;
   for (const auto &entry : signal.value_descriptions) {
     const double rounded = std::round(entry.value);
-    if (std::abs(entry.value - rounded) > 1e-6 || rounded < 0.0 || rounded > 512.0) {
-      return {};
-    }
+    if (std::abs(entry.value - rounded) > 1e-6 || rounded < 0.0 || rounded > 512.0) return {};
     max_index = std::max(max_index, static_cast<int>(rounded));
   }
-  if (max_index < 0) {
-    return {};
-  }
+  if (max_index < 0) return {};
   std::vector<std::string> names(static_cast<size_t>(max_index + 1));
   for (const auto &entry : signal.value_descriptions) {
     names[static_cast<size_t>(std::llround(entry.value))] = entry.text;
@@ -109,9 +99,7 @@ void Database::parse(const std::string &content, const std::string &filename) {
   while (std::getline(stream, raw_line)) {
     ++line_number;
     const std::string line = trim_copy(raw_line);
-    if (line.empty()) {
-      continue;
-    }
+    if (line.empty()) continue;
     if (line.rfind("BO_ ", 0) == 0) {
       parseBo(line, line_number, &current_message);
     } else if (line.rfind("SG_ ", 0) == 0) {
@@ -233,9 +221,7 @@ std::optional<double> signalValue(const Signal &signal, const Message &message, 
   if (signal.multiplexor_index >= 0) {
     const Signal &multiplexor = message.signals[static_cast<size_t>(signal.multiplexor_index)];
     const double mux_value = raw_signalValue(multiplexor, data, data_size);
-    if (std::llround(mux_value) != signal.multiplex_value) {
-      return std::nullopt;
-    }
+    if (std::llround(mux_value) != signal.multiplex_value) return std::nullopt;
   }
   return raw_signalValue(signal, data, data_size);
 }

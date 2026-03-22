@@ -86,9 +86,7 @@ json11::Json workspace_node_to_json(const WorkspaceNode &node, const WorkspaceTa
     return obj;
   }
 
-  if (node.children.empty()) {
-    return nullptr;
-  }
+  if (node.children.empty()) return nullptr;
   json11::Json::array sizes;
   for (size_t i = 0; i < node.children.size(); ++i) {
     sizes.push_back(i < node.sizes.size() ? static_cast<double>(node.sizes[i])
@@ -121,9 +119,7 @@ void save_layout_json(const SketchLayout &layout, const fs::path &path) {
     {"tabs", tabs},
   };
   std::ofstream out(path);
-  if (!out) {
-    throw std::runtime_error("Failed to open layout for writing: " + path.string());
-  }
+  if (!out) throw std::runtime_error("Failed to open layout for writing: " + path.string());
   out << root.dump() << "\n";
 }
 
