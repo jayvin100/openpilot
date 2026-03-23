@@ -24,6 +24,9 @@ XL2515_MISO_PIN = 12
 XL2515_CS_PIN = 9
 XL2515_INT_PIN = 8
 LED_PIN = 25
+SOLENOID_L_PIN = 2
+SOLENOID_R_PIN = 3
+SOLENOID_START_PIN = 4
 
 # -- CAN protocol --
 SOLENOID_CMD_ID = 0x100
@@ -173,6 +176,9 @@ class XL2515:
 
 def main():
     led = Pin(LED_PIN, Pin.OUT, value=0)
+    sol_l = Pin(SOLENOID_L_PIN, Pin.OUT, value=0)
+    sol_r = Pin(SOLENOID_R_PIN, Pin.OUT, value=0)
+    sol_start = Pin(SOLENOID_START_PIN, Pin.OUT, value=0)
     can = XL2515(CAN_RATE)
     print(f"Listening for CAN ID 0x{SOLENOID_CMD_ID:03X} at {CAN_RATE}...")
 
@@ -191,8 +197,12 @@ def main():
         can_id, data = can.recv()
         if can_id is not None and data is not None:
             if can_id == SOLENOID_CMD_ID and len(data) >= 1:
-                led.value(data[0] & 0x01)
-                print(f"ID=0x{can_id:03X} data={[hex(b) for b in data]} -> LED={'ON' if data[0] & 1 else 'OFF'}")
+                sol_l.value(data[0] & 0x01)
+                sol_r.value((data[0] >> 1) & 0x01)
+                sol_start.value((data[0] >> 2) & 0x01)
+                active = data[0] & 0x07
+                led.value(1 if active else 0)
+                print(f"ID=0x{can_id:03X} L={data[0]&1} R={(data[0]>>1)&1} S={(data[0]>>2)&1}")
             else:
                 print(f"ID=0x{can_id:03X} data={[hex(b) for b in data]} (ignored)")
         time.sleep_ms(1)
