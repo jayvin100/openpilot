@@ -1711,8 +1711,8 @@ void draw_detail_toolbar(AppSession *session,
                                                                     : "DBC: " + session->route_data.dbc_name;
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(245, 247, 250));
-  ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(209, 214, 220));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_panel_alt_bg());
+  ImGui::PushStyleColor(ImGuiCol_Border, cabana_border_color());
   const bool compact = ImGui::GetContentRegionAvail().x < 760.0f;
   ImGui::BeginChild("##cabana_detail_toolbar", ImVec2(0.0f, compact ? 68.0f : 40.0f), true);
   app_push_bold_font();
@@ -2474,9 +2474,11 @@ void draw_chart_panel(AppSession *session, UiState *state, const CabanaMessageSu
   ImGui::PopStyleColor();
 
   if (message == nullptr || state->cabana.chart_signal_paths.empty()) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_window_bg());
     ImGui::BeginChild("##cabana_chart_empty", ImVec2(0.0f, 0.0f), false);
     ImGui::TextDisabled("Select one or more signals to chart.");
     ImGui::EndChild();
+    ImGui::PopStyleColor();
     return;
   }
 
@@ -2489,6 +2491,7 @@ void draw_chart_panel(AppSession *session, UiState *state, const CabanaMessageSu
     curve.color = app_next_curve_color(pane);
     pane.curves.push_back(std::move(curve));
   }
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_window_bg());
   ImGui::BeginChild("##cabana_chart_plot", ImVec2(0.0f, 0.0f), false);
   ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(6.0f, 4.0f));
   ImPlot::PushStyleVar(ImPlotStyleVar_LabelPadding, ImVec2(4.0f, 2.0f));
@@ -2498,6 +2501,7 @@ void draw_chart_panel(AppSession *session, UiState *state, const CabanaMessageSu
   draw_plot(*session, &pane, state);
   ImPlot::PopStyleVar(5);
   ImGui::EndChild();
+  ImGui::PopStyleColor();
 }
 
 }  // namespace

@@ -959,14 +959,14 @@ struct CameraFeedView::Impl {
                                            uv1);
     } else {
       ImDrawList *draw_list = ImGui::GetWindowDrawList();
-      draw_list->AddRectFilled(top_left, ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y), IM_COL32(213, 217, 223, 255));
-      draw_list->AddRect(top_left, ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y), IM_COL32(172, 178, 186, 255));
+      draw_list->AddRectFilled(top_left, ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y), IM_COL32(45, 47, 50, 255));
+      draw_list->AddRect(top_left, ImVec2(top_left.x + frame_size.x, top_left.y + frame_size.y), IM_COL32(95, 100, 106, 255));
 
       const char *label = (loading || has_video_source()) ? "loading" : "no video";
       const ImVec2 text_size = ImGui::CalcTextSize(label);
       const ImVec2 text_pos(top_left.x + (frame_size.x - text_size.x) * 0.5f,
                             top_left.y + (frame_size.y - text_size.y) * 0.5f);
-      draw_list->AddText(text_pos, IM_COL32(90, 96, 104, 255), label);
+      draw_list->AddText(text_pos, IM_COL32(187, 187, 187, 255), label);
     }
   }
 

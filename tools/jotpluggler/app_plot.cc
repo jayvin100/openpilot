@@ -965,7 +965,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
       }
     }
   }
-  ImPlot::PopStyleColor(6);
+  ImPlot::PopStyleColor(12);
 }
 
 std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, int pane_index) {
