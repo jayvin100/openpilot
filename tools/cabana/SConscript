@@ -66,7 +66,7 @@ base_frameworks = qt_env['FRAMEWORKS']
 base_libs = [common, messaging, cereal, visionipc, 'm', 'pthread'] + qt_env["LIBS"]
 
 if arch == "Darwin":
-  base_frameworks += ['QtCharts', 'CoreFoundation', 'CoreVideo', 'CoreMedia', 'IOKit', 'Security', 'VideoToolbox']
+  base_frameworks.append('QtCharts')
 else:
   base_libs.append('Qt5Charts')
 
@@ -75,8 +75,6 @@ cabana_env['CPPPATH'] += [libusb.INCLUDE_DIR]
 cabana_env['LIBPATH'] += [libusb.LIB_DIR]
 
 cabana_libs = [cereal, messaging, visionipc, replay_lib, 'avformat', 'avcodec', 'swresample', 'avutil', 'x264', 'z', 'bz2', 'zstd', 'yuv', 'usb-1.0'] + base_libs
-if arch != "Darwin":
-  cabana_libs += ['va', 'va-drm', 'drm']
 opendbc_path = '-DOPENDBC_FILE_PATH=\'"%s"\'' % (cabana_env.Dir("../../opendbc/dbc").abspath)
 cabana_env['CXXFLAGS'] += [opendbc_path]
 
@@ -87,7 +85,7 @@ cabana_env.Command(assets, assets_src, f"rcc $SOURCES -o $TARGET")
 cabana_env.Depends(assets, Glob('/assets/*', exclude=[assets, assets_src, "assets/assets.o"]))
 
 cabana_srcs = ['mainwin.cc', 'streams/pandastream.cc', 'streams/devicestream.cc', 'streams/livestream.cc', 'streams/abstractstream.cc', 'streams/replaystream.cc', 'binaryview.cc', 'historylog.cc', 'videowidget.cc', 'signalview.cc',
-               'streams/routes.cc', 'dbc/dbc.cc', 'dbc/dbc_core.cc', 'dbc/dbcfile.cc', 'dbc/dbcmanager.cc',
+               'streams/routes.cc', 'dbc/dbc.cc', 'dbc/dbcfile.cc', 'dbc/dbcmanager.cc',
                'utils/export.cc', 'utils/util.cc', 'utils/elidedlabel.cc',
                'chart/chartswidget.cc', 'chart/chart.cc', 'chart/signalselector.cc', 'chart/tiplabel.cc', 'chart/sparkline.cc',
                'commands.cc', 'messageswidget.cc', 'streamselector.cc', 'settings.cc', 'panda.cc',

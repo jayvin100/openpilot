@@ -2,16 +2,6 @@
 
 #include <algorithm>
 
-#ifdef signals
-#pragma push_macro("signals")
-#undef signals
-#define CABANA_RESTORE_SIGNALS_MACRO
-#endif
-#include "tools/cabana/dbc/dbc_core.h"
-#ifdef CABANA_RESTORE_SIGNALS_MACRO
-#pragma pop_macro("signals")
-#undef CABANA_RESTORE_SIGNALS_MACRO
-#endif
 #include "tools/cabana/utils/util.h"
 
 // cabana::Msg
@@ -187,38 +177,45 @@ bool cabana::Signal::operator==(const cabana::Signal &other) const {
 
 // helper functions
 
-namespace {
-
-dbc::Signal to_core_signal(const cabana::Signal &sig) {
-  dbc::Signal core;
-  core.type = static_cast<dbc::Signal::Type>(sig.type);
-  core.name = sig.name;
-  core.start_bit = sig.start_bit;
-  core.msb = sig.msb;
-  core.lsb = sig.lsb;
-  core.size = sig.size;
-  core.factor = sig.factor;
-  core.offset = sig.offset;
-  core.min = sig.min;
-  core.max = sig.max;
-  core.is_signed = sig.is_signed;
-  core.is_little_endian = sig.is_little_endian;
-  core.unit = sig.unit;
-  core.comment = sig.comment;
-  core.receiver_name = sig.receiver_name;
-  core.multiplex_value = sig.multiplex_value;
-  return core;
-}
-
-}  // namespace
-
 double get_raw_value(const uint8_t *data, size_t data_size, const cabana::Signal &sig) {
-  return dbc::rawSignalValue(to_core_signal(sig), data, data_size);
+  const int msb_byte = sig.msb / 8;
+  if (msb_byte >= (int)data_size) return 0;
+
+  const int lsb_byte = sig.lsb / 8;
+  uint64_t val = 0;
+
+  // Fast path: signal fits in a single byte
+  if (msb_byte == lsb_byte) {
+    val = (data[msb_byte] >> (sig.lsb & 7)) & ((1ULL << sig.size) - 1);
+  } else {
+    // Multi-byte case: signal spans across multiple bytes
+    int bits = sig.size;
+    int i = msb_byte;
+    const int step = sig.is_little_endian ? -1 : 1;
+    while (i >= 0 && i < (int)data_size && bits > 0) {
+      const int msb = (i == msb_byte) ? sig.msb & 7 : 7;
+      const int lsb = (i == lsb_byte) ? sig.lsb & 7 : 0;
+      const int nbits = msb - lsb + 1;
+      val = (val << nbits) | ((data[i] >> lsb) & ((1ULL << nbits) - 1));
+      bits -= nbits;
+      i += step;
+    }
+  }
+
+  // Sign extension (if needed)
+  if (sig.is_signed && (val & (1ULL << (sig.size - 1)))) {
+    val |= ~((1ULL << sig.size) - 1);
+  }
+
+  return static_cast<int64_t>(val) * sig.factor + sig.offset;
 }
 
 void updateMsbLsb(cabana::Signal &s) {
-  dbc::Signal core = to_core_signal(s);
-  dbc::updateMsbLsb(&core);
-  s.lsb = core.lsb;
-  s.msb = core.msb;
+  if (s.is_little_endian) {
+    s.lsb = s.start_bit;
+    s.msb = s.start_bit + s.size - 1;
+  } else {
+    s.lsb = flipBitPos(flipBitPos(s.start_bit) + s.size - 1);
+    s.msb = s.start_bit;
+  }
 }

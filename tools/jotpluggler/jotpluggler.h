@@ -2,7 +2,7 @@
 
 #include "cereal/gen/cpp/log.capnp.h"
 #include "imgui.h"
-#include "tools/cabana/dbc/dbc_core.h"
+#include "tools/jotpluggler/dbc_core.h"
 
 #include <algorithm>
 #include <array>
