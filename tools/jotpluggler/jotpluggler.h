@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -620,7 +621,9 @@ struct CabanaUiState {
   std::string similar_bits_source_root;
   int similar_bits_source_byte = -1;
   int similar_bits_source_bit = -1;
+  bool similar_bits_loading = false;
   std::vector<CabanaSimilarBitMatch> similar_bit_matches;
+  std::future<std::vector<CabanaSimilarBitMatch>> similar_bit_future;
 };
 
 struct AxisLimitsEditorState {

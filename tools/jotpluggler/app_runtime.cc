@@ -465,6 +465,16 @@ struct StreamPoller::Impl {
     }
   }
 
+  void set_error_text(std::string text) {
+    std::lock_guard<std::mutex> lock(mutex);
+    error_text = std::move(text);
+  }
+
+  void clear_error_text() {
+    std::lock_guard<std::mutex> lock(mutex);
+    error_text.clear();
+  }
+
   void stop() {
     running.store(false);
     paused.store(false);
@@ -649,14 +659,22 @@ struct StreamPoller::Impl {
     while (running.load()) {
       if (!panda || !panda->connected()) {
         connected.store(false);
-        panda = std::make_unique<Panda>(source.panda.serial);
-        configure_panda(panda.get());
-        connected.store(true);
+        try {
+          panda = std::make_unique<Panda>(source.panda.serial);
+          configure_panda(panda.get());
+          clear_error_text();
+          connected.store(true);
+        } catch (const std::exception &err) {
+          set_error_text(err.what());
+          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+          continue;
+        }
       }
 
       raw_can_data.clear();
       if (!panda->can_receive(raw_can_data)) {
         connected.store(false);
+        panda.reset();
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         continue;
       }
@@ -690,22 +708,30 @@ struct StreamPoller::Impl {
 
   void run_socketcan_source(StreamAccumulator *accumulator) {
 #ifdef __linux__
-    SocketCanReader reader(source.socketcan.device.empty() ? "can0" : source.socketcan.device);
-    connected.store(true);
-
     while (running.load()) {
-      LiveCanFrame frame;
-      if (!reader.readFrame(&frame)) {
-        publish_batch(accumulator);
-        continue;
+      connected.store(false);
+      try {
+        SocketCanReader reader(source.socketcan.device.empty() ? "can0" : source.socketcan.device);
+        clear_error_text();
+        connected.store(true);
+        while (running.load()) {
+          LiveCanFrame frame;
+          if (!reader.readFrame(&frame)) {
+            publish_batch(accumulator);
+            continue;
+          }
+          received_messages.fetch_add(1);
+          if (!paused.load()) {
+            std::vector<LiveCanFrame> frames;
+            frames.push_back(std::move(frame));
+            accumulator->appendCanFrames(CanServiceKind::Can, frames);
+          }
+          publish_batch(accumulator);
+        }
+      } catch (const std::exception &err) {
+        set_error_text(err.what());
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
-      received_messages.fetch_add(1);
-      if (!paused.load()) {
-        std::vector<LiveCanFrame> frames;
-        frames.push_back(std::move(frame));
-        accumulator->appendCanFrames(CanServiceKind::Can, frames);
-      }
-      publish_batch(accumulator);
     }
 #else
     (void)accumulator;

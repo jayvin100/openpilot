@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <future>
 #include <optional>
 #include <string_view>
 #include <tuple>
@@ -139,8 +141,9 @@ fs::path cabana_export_path(const AppSession &session,
                             std::string_view kind) {
   const std::string route_part = sanitize_filename_component(session.route_name.empty() ? "stream" : session.route_name);
   char filename[256];
-  std::snprintf(filename, sizeof(filename), "%s_bus%d_0x%X_%.*s.csv",
+  std::snprintf(filename, sizeof(filename), "%s_%s_bus%d_0x%X_%.*s.csv",
                 sanitize_filename_component(message.name).c_str(),
+                sanitize_filename_component(message.service).c_str(),
                 message.bus,
                 message.address,
                 static_cast<int>(kind.size()),
@@ -340,7 +343,32 @@ bool similar_bit_results_match_selection(const UiState &state) {
       && state.cabana.similar_bits_source_bit == state.cabana.selected_bit_index;
 }
 
+void clear_similar_bit_results(UiState *state) {
+  state->cabana.similar_bits_source_root.clear();
+  state->cabana.similar_bits_source_byte = -1;
+  state->cabana.similar_bits_source_bit = -1;
+  state->cabana.similar_bit_matches.clear();
+}
+
+void poll_similar_bit_search(UiState *state) {
+  if (!state->cabana.similar_bits_loading || !state->cabana.similar_bit_future.valid()) {
+    return;
+  }
+  using namespace std::chrono_literals;
+  if (state->cabana.similar_bit_future.wait_for(0ms) != std::future_status::ready) {
+    return;
+  }
+  std::vector<CabanaSimilarBitMatch> matches = state->cabana.similar_bit_future.get();
+  state->cabana.similar_bits_loading = false;
+  if (similar_bit_results_match_selection(*state)) {
+    state->cabana.similar_bit_matches = std::move(matches);
+  } else {
+    clear_similar_bit_results(state);
+  }
+}
+
 void sync_cabana_selection(AppSession *session, UiState *state) {
+  poll_similar_bit_search(state);
   if (!state->cabana_mode_initialized) {
     state->cabana.camera_view = sidebar_preview_camera_view(*session);
     state->cabana_mode_initialized = true;
@@ -349,14 +377,14 @@ void sync_cabana_selection(AppSession *session, UiState *state) {
     state->cabana.selected_message_root.clear();
     state->cabana.chart_signal_paths.clear();
     state->cabana.has_bit_selection = false;
-    state->cabana.similar_bit_matches.clear();
+    clear_similar_bit_results(state);
     return;
   }
   const CabanaMessageSummary *selected = find_selected_message(*session, *state);
   if (selected == nullptr) {
     state->cabana.selected_message_root = session->cabana_messages.front().root_path;
     state->cabana.has_bit_selection = false;
-    state->cabana.similar_bit_matches.clear();
+    clear_similar_bit_results(state);
     selected = &session->cabana_messages.front();
   }
 
@@ -672,6 +700,15 @@ bool signal_contains_bit(const CabanaSignalSummary &signal, size_t byte_index, i
   }
 }
 
+bool byte_overlaps_signal(const CabanaSignalSummary &signal, size_t byte_index) {
+  for (int bit = 0; bit < 8; ++bit) {
+    if (signal_contains_bit(signal, byte_index, bit)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::vector<std::pair<const CabanaSignalSummary *, ImU32>> highlighted_signals(const CabanaMessageSummary &message, const UiState &state) {
   std::vector<std::pair<const CabanaSignalSummary *, ImU32>> out;
   for (const std::string &path : state.cabana.chart_signal_paths) {
@@ -727,32 +764,40 @@ std::vector<const CabanaSignalSummary *> selected_bit_signals(const CabanaMessag
   return out;
 }
 
-std::vector<CabanaSimilarBitMatch> find_similar_bits(const AppSession &session,
-                                                     const CabanaMessageSummary &source_message,
-                                                     const CanMessageData &source_data,
-                                                     size_t source_byte,
-                                                     int source_bit) {
+std::vector<CabanaSimilarBitMatch> find_similar_bits_from_snapshot(const std::vector<CabanaMessageSummary> &messages,
+                                                                   const std::vector<CanMessageData> &can_messages,
+                                                                   const CabanaMessageSummary &source_message,
+                                                                   const CanMessageData &source_data,
+                                                                   size_t source_byte,
+                                                                   int source_bit) {
   const BitBehaviorStats target = bit_behavior_stats(source_data, source_byte, source_bit);
   std::vector<CabanaSimilarBitMatch> matches;
-  for (const CabanaMessageSummary &message : session.cabana_messages) {
-    const CanMessageData *message_data = find_message_data(session, message);
-    if (message_data == nullptr || message_data->samples.size() < 2) {
+  for (const CabanaMessageSummary &message : messages) {
+    const std::optional<CanServiceKind> service = parse_can_service_kind(message.service);
+    if (!service.has_value()) continue;
+    const CanMessageData key{.id = CanMessageId{*service, static_cast<uint8_t>(message.bus), message.address}};
+    auto it = std::lower_bound(can_messages.begin(), can_messages.end(), key, [](const CanMessageData &a, const CanMessageData &b) {
+      return std::make_tuple(a.id.service, a.id.bus, a.id.address)
+           < std::make_tuple(b.id.service, b.id.bus, b.id.address);
+    });
+    if (it == can_messages.end()
+        || it->id.service != key.id.service
+        || it->id.bus != key.id.bus
+        || it->id.address != key.id.address
+        || it->samples.size() < 2) {
       continue;
     }
-    for (size_t byte = 0; byte < can_message_payload_width(*message_data); ++byte) {
+    for (size_t byte = 0; byte < can_message_payload_width(*it); ++byte) {
       for (int bit = 0; bit < 8; ++bit) {
         if (message.root_path == source_message.root_path
             && static_cast<int>(byte) == static_cast<int>(source_byte)
             && bit == source_bit) {
           continue;
         }
-        const BitBehaviorStats stats = bit_behavior_stats(*message_data, byte, bit);
-        if (stats.samples < 2) {
-          continue;
-        }
+        const BitBehaviorStats stats = bit_behavior_stats(*it, byte, bit);
+        if (stats.samples < 2) continue;
         const double ones_diff = std::abs(stats.ones_ratio - target.ones_ratio);
         const double flip_diff = std::abs(stats.flip_ratio - target.flip_ratio);
-        const double score = ones_diff * 0.65 + flip_diff * 0.35;
         matches.push_back({
           .message_root = message.root_path,
           .label = message.name,
@@ -760,7 +805,7 @@ std::vector<CabanaSimilarBitMatch> find_similar_bits(const AppSession &session,
           .address = message.address,
           .byte_index = static_cast<int>(byte),
           .bit_index = bit,
-          .score = score,
+          .score = ones_diff * 0.65 + flip_diff * 0.35,
           .ones_ratio = stats.ones_ratio,
           .flip_ratio = stats.flip_ratio,
         });
@@ -778,6 +823,7 @@ std::vector<CabanaSimilarBitMatch> find_similar_bits(const AppSession &session,
 }
 
 void draw_bit_selection_panel(AppSession *session, const CabanaMessageSummary &message, UiState *state) {
+  poll_similar_bit_search(state);
   if (!state->cabana.has_bit_selection) {
     return;
   }
@@ -787,23 +833,30 @@ void draw_bit_selection_panel(AppSession *session, const CabanaMessageSummary &m
   ImGui::SameLine();
   if (ImGui::SmallButton("Clear")) {
     state->cabana.has_bit_selection = false;
-    state->cabana.similar_bit_matches.clear();
+    clear_similar_bit_results(state);
     return;
   }
   ImGui::SameLine();
+  ImGui::BeginDisabled(state->cabana.similar_bits_loading);
   if (ImGui::SmallButton("Find Similar Bits")) {
     const CanMessageData *message_data = find_message_data(*session, message);
     if (message_data != nullptr) {
-      state->cabana.similar_bit_matches = find_similar_bits(*session,
-                                                            message,
-                                                            *message_data,
-                                                            static_cast<size_t>(state->cabana.selected_bit_byte),
-                                                            state->cabana.selected_bit_index);
+      state->cabana.similar_bit_matches.clear();
       state->cabana.similar_bits_source_root = message.root_path;
       state->cabana.similar_bits_source_byte = state->cabana.selected_bit_byte;
       state->cabana.similar_bits_source_bit = state->cabana.selected_bit_index;
+      state->cabana.similar_bits_loading = true;
+      const std::vector<CabanaMessageSummary> messages = session->cabana_messages;
+      const std::vector<CanMessageData> can_messages = session->route_data.can_messages;
+      const CanMessageData source_data = *message_data;
+      const size_t source_byte = static_cast<size_t>(state->cabana.selected_bit_byte);
+      const int source_bit = state->cabana.selected_bit_index;
+      state->cabana.similar_bit_future = std::async(std::launch::async, [messages, can_messages, message, source_data, source_byte, source_bit]() {
+        return find_similar_bits_from_snapshot(messages, can_messages, message, source_data, source_byte, source_bit);
+      });
     }
   }
+  ImGui::EndDisabled();
   ImGui::SameLine();
   if (ImGui::SmallButton("Create Signal...")) {
     open_cabana_new_signal_editor(*session,
@@ -825,7 +878,10 @@ void draw_bit_selection_panel(AppSession *session, const CabanaMessageSummary &m
     }
   }
 
-  if (similar_bit_results_match_selection(*state) && !state->cabana.similar_bit_matches.empty()) {
+  if (state->cabana.similar_bits_loading && similar_bit_results_match_selection(*state)) {
+    ImGui::Spacing();
+    ImGui::TextDisabled("Searching similar bits...");
+  } else if (similar_bit_results_match_selection(*state) && !state->cabana.similar_bit_matches.empty()) {
     ImGui::Spacing();
     ImGui::TextDisabled("Similar bits:");
     if (ImGui::BeginTable("##cabana_similar_bits", 5,
@@ -996,7 +1052,8 @@ ImU32 mix_color(ImU32 a, ImU32 b, float t) {
 void draw_can_heatmap(const CanMessageData &message,
                       const std::vector<std::pair<const CabanaSignalSummary *, ImU32>> &highlighted,
                       double tracker_time) {
-  if (message.samples.empty() || message.samples.front().data.empty()) {
+  const size_t byte_count = can_message_payload_width(message);
+  if (message.samples.empty() || byte_count == 0) {
     return;
   }
 
@@ -1006,7 +1063,6 @@ void draw_can_heatmap(const CanMessageData &message,
   ImGui::TextDisabled("aggregated over all frames");
   ImGui::Spacing();
 
-  const size_t byte_count = message.samples.front().data.size();
   const size_t row_count = byte_count * 8;
   const float avail_w = ImGui::GetContentRegionAvail().x;
   const float label_w = 42.0f;
@@ -1096,7 +1152,11 @@ void draw_can_frame_view(const CanMessageData &message,
   ImGui::SameLine();
   ImGui::TextDisabled("len %zu", sample.data.size());
   ImGui::SameLine();
-  ImGui::TextDisabled("bus %u", sample.bus_time);
+  ImGui::TextDisabled("bus %d", summary.bus);
+  if (sample.bus_time != 0) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("bus_time %u", sample.bus_time);
+  }
   if (prev != nullptr) {
     ImGui::SameLine();
     ImGui::TextDisabled("dt %.1f ms", 1000.0 * (sample.mono_time - prev->mono_time));
@@ -1127,7 +1187,7 @@ void draw_can_frame_view(const CanMessageData &message,
       ImGui::TableNextColumn();
       app_push_mono_font();
       for (const auto &[signal, color] : highlighted) {
-        if (signal_contains_bit(*signal, i, 0) || signal_contains_bit(*signal, i, 7)) {
+        if (byte_overlaps_signal(*signal, i)) {
           const ImVec2 min = ImGui::GetCursorScreenPos();
           const ImVec2 max = ImVec2(min.x + ImGui::GetColumnWidth(), min.y + ImGui::GetTextLineHeightWithSpacing());
           ImGui::GetWindowDrawList()->AddRectFilled(min, max, color, 3.0f);
