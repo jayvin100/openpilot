@@ -7,7 +7,6 @@ import time
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
-import shutil
 from collections.abc import Callable
 
 import pyray as rl
@@ -29,26 +28,15 @@ from openpilot.system.ui.widgets.slider import LargerSlider
 from openpilot.selfdrive.ui.mici.layouts.settings.network import WifiNetworkButton
 from openpilot.selfdrive.ui.mici.layouts.settings.network.wifi_ui import WifiUIMici
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigInputDialog, BigConfirmationCircleButton
-from openpilot.selfdrive.ui.mici.widgets.button import BigButton
+from openpilot.selfdrive.ui.mici.widgets.button import BigButton, GreyBigButton
 
 NetworkType = log.DeviceState.NetworkType
 
 OPENPILOT_URL = "https://openpilot.comma.ai"
 USER_AGENT = f"AGNOSSetup-{HARDWARE.get_os_version()}"
 
-CONTINUE_PATH = "/data/continue.sh"
-TMP_CONTINUE_PATH = "/data/continue.sh.new"
-INSTALL_PATH = "/data/openpilot"
-VALID_CACHE_PATH = "/data/.openpilot_cache"
-INSTALLER_SOURCE_PATH = "/usr/comma/installer"
 INSTALLER_DESTINATION_PATH = "/tmp/installer"
 INSTALLER_URL_PATH = "/tmp/installer_url"
-
-CONTINUE = """#!/usr/bin/env bash
-
-cd /data/openpilot
-exec ./launch_openpilot.sh
-"""
 
 
 class NetworkConnectivityMonitor:
@@ -142,9 +130,9 @@ class SoftwareSelectionPage(NavWidget):
                use_custom_software_callback: Callable):
     super().__init__()
 
-    self._openpilot_slider = LargerSlider("slide to install\nopenpilot", use_openpilot_callback)
+    self._openpilot_slider = self._child(LargerSlider("slide to install\nopenpilot", use_openpilot_callback))
     self._openpilot_slider.set_enabled(lambda: self.enabled and not self.is_dismissing)
-    self._custom_software_slider = LargerSlider("slide to install\ncustom software", use_custom_software_callback, green=False)
+    self._custom_software_slider = self._child(LargerSlider("slide to install\ncustom software", use_custom_software_callback, green=False, shimmer_offset=0.4))
     self._custom_software_slider.set_enabled(lambda: self.enabled and not self.is_dismissing)
 
   def show_event(self):
@@ -264,43 +252,6 @@ class FailedPage(NavScroller):
       self._reason_card.set_visible(True)
     else:
       self._reason_card.set_visible(False)
-
-
-class GreyBigButton(BigButton):
-  """Users should manage newlines with this class themselves"""
-
-  LABEL_HORIZONTAL_PADDING = 30
-
-  def __init__(self, *args, **kwargs):
-    super().__init__(*args, **kwargs)
-    self.set_touch_valid_callback(lambda: False)
-
-    self._rect.width = 476
-
-    self._label.set_font_size(36)
-    self._label.set_font_weight(FontWeight.BOLD)
-    self._label.set_line_height(1.0)
-
-    self._sub_label.set_font_size(36)
-    self._sub_label.set_text_color(rl.Color(255, 255, 255, int(255 * 0.9)))
-    self._sub_label.set_font_weight(FontWeight.DISPLAY_REGULAR)
-    self._sub_label.set_alignment_vertical(rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE if not self._label.text else
-                                           rl.GuiTextAlignmentVertical.TEXT_ALIGN_BOTTOM)
-    self._sub_label.set_line_height(0.95)
-
-  @property
-  def LABEL_VERTICAL_PADDING(self):
-    return BigButton.LABEL_VERTICAL_PADDING if self._label.text else 18
-
-  def _width_hint(self) -> int:
-    return int(self._rect.width - self.LABEL_HORIZONTAL_PADDING * 2)
-
-  def _get_label_font_size(self):
-    return 36
-
-  def _render(self, _):
-    rl.draw_rectangle_rounded(self._rect, 0.4, 10, rl.Color(255, 255, 255, int(255 * 0.15)))
-    self._draw_content(self._rect.y)
 
 
 class BigPillButton(BigButton):
@@ -490,7 +441,6 @@ class Setup(Widget):
     self._network_monitor.start()
 
     def getting_started_button_callback():
-      self._software_selection_page.reset()
       gui_app.push_widget(self._software_selection_page)
 
     self._start_page = StartPage()
@@ -499,7 +449,7 @@ class Setup(Widget):
 
     self._network_setup_page = NetworkSetupPage(self._network_monitor, self._network_setup_continue_callback, self._pop_to_software_selection)
 
-    self._software_selection_page = SoftwareSelectionPage(self._use_openpilot, lambda: gui_app.push_widget(self._custom_software_warning_page))
+    self._software_selection_page = SoftwareSelectionPage(self._push_network_setup, lambda: gui_app.push_widget(self._custom_software_warning_page))
 
     self._download_failed_page = FailedPage(self._pop_to_software_selection, icon="icons_mici/setup/red_warning.png")
 
@@ -527,21 +477,6 @@ class Setup(Widget):
   def _pop_to_software_selection(self):
     # reset sliders after dismiss completes
     gui_app.pop_widgets_to(self._software_selection_page, self._software_selection_page.reset)
-
-  def _use_openpilot(self):
-    if os.path.isdir(INSTALL_PATH) and os.path.isfile(VALID_CACHE_PATH):
-      os.remove(VALID_CACHE_PATH)
-      with open(TMP_CONTINUE_PATH, "w") as f:
-        f.write(CONTINUE)
-      run_cmd(["chmod", "+x", TMP_CONTINUE_PATH])
-      shutil.move(TMP_CONTINUE_PATH, CONTINUE_PATH)
-      shutil.copyfile(INSTALLER_SOURCE_PATH, INSTALLER_DESTINATION_PATH)
-
-      # give time for installer UI to take over
-      time.sleep(0.1)
-      gui_app.request_close()
-    else:
-      self._push_network_setup()
 
   def _push_network_setup(self, custom_software: bool = False):
     # to fire the correct continue callback later
@@ -612,13 +547,14 @@ class Setup(Widget):
         self._download_failed_reason = "No custom software found at this URL: " + self.download_url.replace("https://", "", 1)
         return
 
+      # NOTE: currently unused, for future logging
+      with open(INSTALLER_URL_PATH, "w") as f:
+        f.write(self.download_url)
+
       # AGNOS might try to execute the installer before this process exits.
       # Therefore, important to close the fd before renaming the installer.
       os.close(fd)
       os.rename(tmpfile, INSTALLER_DESTINATION_PATH)
-
-      with open(INSTALLER_URL_PATH, "w") as f:
-        f.write(self.download_url)
 
       # give time for installer UI to take over
       time.sleep(0.1)
