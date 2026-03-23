@@ -25,6 +25,7 @@ jot_sources = [
   "app.cc",
   "app_browser.cc",
   "app_cabana.cc",
+  "app_cabana_widgets.cc",
   "app_camera.cc",
   "app_common.cc",
   "app_custom_series.cc",

@@ -214,12 +214,191 @@ void start_new_layout(AppSession *session, UiState *state, const std::string &st
   reset_shared_range(state, *session);
 }
 
+bool is_decoded_can_series_path(std::string_view path) {
+  return path.rfind("/can/", 0) == 0 || path.rfind("/sendcan/", 0) == 0;
+}
+
+std::optional<CanServiceKind> parse_can_service_kind(std::string_view service) {
+  if (service == "can") return CanServiceKind::Can;
+  if (service == "sendcan") return CanServiceKind::Sendcan;
+  return std::nullopt;
+}
+
+bool apply_route_can_decode_update(AppSession *session, UiState *state);
+
+void rebuild_series_lookup_preserving_formats(AppSession *session,
+                                              std::string_view updated_prefix,
+                                              bool refresh_updated_formats_only) {
+  if (!updated_prefix.empty()) {
+    for (auto it = session->route_data.series_formats.begin(); it != session->route_data.series_formats.end();) {
+      if (it->first.rfind(updated_prefix, 0) == 0) {
+        it = session->route_data.series_formats.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  session->series_by_path.clear();
+  session->series_by_path.reserve(session->route_data.series.size());
+  for (RouteSeries &series : session->route_data.series) {
+    session->series_by_path.emplace(series.path, &series);
+    if (refresh_updated_formats_only) {
+      if (!updated_prefix.empty() && series.path.rfind(updated_prefix, 0) == 0) {
+        const bool enum_like = session->route_data.enum_info.find(series.path) != session->route_data.enum_info.end();
+        session->route_data.series_formats[series.path] = compute_series_format(series.values, enum_like);
+      }
+    } else {
+      const bool enum_like = session->route_data.enum_info.find(series.path) != session->route_data.enum_info.end();
+      session->route_data.series_formats[series.path] = compute_series_format(series.values, enum_like);
+    }
+  }
+}
+
+bool apply_route_can_message_decode_update(AppSession *session, UiState *state, const CabanaSignalEditorState &signal) {
+  const std::string active_dbc_name = !session->dbc_override.empty() ? session->dbc_override : session->route_data.dbc_name;
+  if (!active_dbc_name.empty() && !load_dbc_by_name(active_dbc_name).has_value()) {
+    state->error_text = "DBC not found: " + active_dbc_name;
+    state->open_error_popup = true;
+    return false;
+  }
+  const std::optional<CanServiceKind> service = parse_can_service_kind(signal.service);
+  if (!service.has_value()) {
+    return apply_route_can_decode_update(session, state);
+  }
+  const auto message_it = std::find_if(session->route_data.can_messages.begin(), session->route_data.can_messages.end(),
+                                       [&](const CanMessageData &message) {
+                                         return message.id.service == *service
+                                             && message.id.bus == static_cast<uint8_t>(signal.bus)
+                                             && message.id.address == signal.message_address;
+                                       });
+  if (message_it == session->route_data.can_messages.end()) {
+    return apply_route_can_decode_update(session, state);
+  }
+
+  std::unordered_map<std::string, EnumInfo> message_enum_info;
+  std::vector<RouteSeries> message_series = decode_can_messages({*message_it}, active_dbc_name, &message_enum_info);
+  const std::string prefix = signal.message_root + "/";
+  const bool paths_changed = signal.creating || signal.original_signal_name != signal.signal_name;
+
+  std::vector<RouteSeries> updated_series;
+  updated_series.reserve(session->route_data.series.size() + message_series.size());
+  for (RouteSeries &series : session->route_data.series) {
+    if (series.path.rfind(prefix, 0) != 0) {
+      updated_series.push_back(std::move(series));
+    }
+  }
+  for (RouteSeries &series : message_series) {
+    updated_series.push_back(std::move(series));
+  }
+  std::sort(updated_series.begin(), updated_series.end(), [](const RouteSeries &a, const RouteSeries &b) {
+    return a.path < b.path;
+  });
+
+  std::unordered_map<std::string, EnumInfo> updated_enum_info;
+  updated_enum_info.reserve(session->route_data.enum_info.size() + message_enum_info.size());
+  for (auto &[path, info] : session->route_data.enum_info) {
+    if (path.rfind(prefix, 0) != 0) {
+      updated_enum_info.emplace(path, std::move(info));
+    }
+  }
+  for (auto &[path, info] : message_enum_info) {
+    updated_enum_info[path] = std::move(info);
+  }
+
+  session->route_data.series = std::move(updated_series);
+  session->route_data.enum_info = std::move(updated_enum_info);
+  if (paths_changed) {
+    session->route_data.paths.clear();
+    session->route_data.paths.reserve(session->route_data.series.size());
+    for (const RouteSeries &series : session->route_data.series) {
+      session->route_data.paths.push_back(series.path);
+    }
+    std::sort(session->route_data.paths.begin(), session->route_data.paths.end());
+    session->route_data.paths.erase(std::unique(session->route_data.paths.begin(), session->route_data.paths.end()),
+                                    session->route_data.paths.end());
+    session->route_data.roots = collect_route_roots_for_paths(session->route_data.paths);
+  }
+  rebuild_series_lookup_preserving_formats(session, prefix, true);
+  if (paths_changed) {
+    if (state->view_mode == AppViewMode::Plot) {
+      rebuild_browser_nodes(session, state);
+      state->browser_nodes_dirty = false;
+    } else {
+      state->browser_nodes_dirty = true;
+    }
+  }
+  rebuild_cabana_messages(session);
+  refresh_all_custom_curves(session, state);
+  return true;
+}
+
+bool apply_route_can_decode_update(AppSession *session, UiState *state) {
+  const std::string active_dbc_name = !session->dbc_override.empty() ? session->dbc_override : session->route_data.dbc_name;
+  if (!active_dbc_name.empty() && !load_dbc_by_name(active_dbc_name).has_value()) {
+    state->error_text = "DBC not found: " + active_dbc_name;
+    state->open_error_popup = true;
+    return false;
+  }
+  std::unordered_map<std::string, EnumInfo> can_enum_info;
+  std::vector<RouteSeries> can_series = decode_can_messages(session->route_data.can_messages, active_dbc_name, &can_enum_info);
+
+  std::vector<RouteSeries> updated_series;
+  updated_series.reserve(session->route_data.series.size() + can_series.size());
+  for (RouteSeries &series : session->route_data.series) {
+    if (!is_decoded_can_series_path(series.path)) {
+      updated_series.push_back(std::move(series));
+    }
+  }
+  for (RouteSeries &series : can_series) {
+    updated_series.push_back(std::move(series));
+  }
+  std::sort(updated_series.begin(), updated_series.end(), [](const RouteSeries &a, const RouteSeries &b) {
+    return a.path < b.path;
+  });
+
+  std::unordered_map<std::string, EnumInfo> updated_enum_info;
+  updated_enum_info.reserve(session->route_data.enum_info.size() + can_enum_info.size());
+  for (auto &[path, info] : session->route_data.enum_info) {
+    if (!is_decoded_can_series_path(path)) {
+      updated_enum_info.emplace(path, std::move(info));
+    }
+  }
+  for (auto &[path, info] : can_enum_info) {
+    updated_enum_info[path] = std::move(info);
+  }
+
+  session->route_data.series = std::move(updated_series);
+  session->route_data.enum_info = std::move(updated_enum_info);
+  session->route_data.paths.clear();
+  session->route_data.paths.reserve(session->route_data.series.size());
+  for (const RouteSeries &series : session->route_data.series) {
+    session->route_data.paths.push_back(series.path);
+  }
+  std::sort(session->route_data.paths.begin(), session->route_data.paths.end());
+  session->route_data.roots = collect_route_roots_for_paths(session->route_data.paths);
+
+  rebuild_route_index(session);
+  rebuild_browser_nodes(session, state);
+  rebuild_cabana_messages(session);
+  refresh_all_custom_curves(session, state);
+  sync_camera_feeds(session);
+  return true;
+}
+
 void apply_dbc_override_change(AppSession *session, UiState *state, const std::string &dbc_override) {
   session->dbc_override = dbc_override;
   if (session->data_mode == SessionDataMode::Stream) {
     start_stream_session(session, state, session->stream_source, session->stream_buffer_seconds, false);
   } else if (!session->route_name.empty()) {
-    reload_session(session, state, session->route_name, session->data_dir);
+    const bool can_patch_single_message = state->cabana_signal_editor.loaded && state->cabana_signal_editor.message_address != 0;
+    const bool ok = can_patch_single_message
+                 ? apply_route_can_message_decode_update(session, state, state->cabana_signal_editor)
+                 : apply_route_can_decode_update(session, state);
+    if (ok) {
+      state->status_text = dbc_override.empty() ? "DBC auto-detect enabled" : "DBC set to " + dbc_override;
+    } else {
+      state->status_text = "Failed to apply DBC";
+    }
   } else if (dbc_override.empty()) {
     state->status_text = "DBC auto-detect enabled";
   } else {

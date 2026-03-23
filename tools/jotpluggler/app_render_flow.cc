@@ -83,9 +83,17 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   }
   const float menu_height = draw_main_menu_bar(session, state);
   const bool cabana_mode = state->view_mode == AppViewMode::Cabana;
-  const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height,
-                                          cabana_mode ? 0.0f : state->sidebar_width);
+  UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height,
+                                    cabana_mode ? 0.0f : state->sidebar_width);
+  if (cabana_mode) {
+    ui.content_h += STATUS_BAR_HEIGHT;
+    ui.status_bar_y += STATUS_BAR_HEIGHT;
+  }
   if (!cabana_mode) {
+    if (state->browser_nodes_dirty) {
+      rebuild_browser_nodes(session, state);
+      state->browser_nodes_dirty = false;
+    }
     state->sidebar_width = ui.sidebar_width;
     draw_sidebar(session, ui, state, show_camera_feed);
     draw_workspace(session, ui, state);
@@ -98,7 +106,9 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
     state->logs.selected = false;
     draw_cabana_mode(session, ui, state);
   }
-  draw_status_bar(*session, ui, state);
+  if (!cabana_mode) {
+    draw_status_bar(*session, ui, state);
+  }
   draw_popups(session, state);
   draw_fps_overlay(*state, menu_height);
 }

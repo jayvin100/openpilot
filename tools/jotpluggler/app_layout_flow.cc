@@ -605,7 +605,7 @@ bool save_dbc_editor_contents(AppSession *session, UiState *state) {
   }
 }
 
-bool apply_cabana_signal_edit(AppSession *session, UiState *state) {
+bool apply_cabana_signal_edit_impl(AppSession *session, UiState *state) {
   if (!ensure_dbc_editor_loaded(*session, state)) {
     return false;
   }
@@ -718,7 +718,7 @@ void draw_cabana_signal_editor_popup(AppSession *session, UiState *state) {
   input_text_string("Receiver", &signal.receiver_name);
   ImGui::Spacing();
   if (ImGui::Button("Apply + Save", ImVec2(140.0f, 0.0f))) {
-    if (apply_cabana_signal_edit(session, state)) {
+    if (apply_cabana_signal_edit_impl(session, state)) {
       ImGui::CloseCurrentPopup();
     }
   }
@@ -807,6 +807,10 @@ void draw_error_popup(UiState *state) {
 }
 
 }  // namespace
+
+bool apply_cabana_signal_edit(AppSession *session, UiState *state) {
+  return apply_cabana_signal_edit_impl(session, state);
+}
 
 bool reset_layout(AppSession *session, UiState *state) {
   try {

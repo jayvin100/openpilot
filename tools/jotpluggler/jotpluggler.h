@@ -394,6 +394,10 @@ private:
 SketchLayout load_sketch_layout(const std::filesystem::path &layout_path);
 std::vector<std::string> available_dbc_names();
 std::vector<std::string> collect_route_roots_for_paths(const std::vector<std::string> &paths);
+std::optional<dbc::Database> load_dbc_by_name(const std::string &dbc_name);
+std::vector<RouteSeries> decode_can_messages(const std::vector<CanMessageData> &can_messages,
+                                             const std::string &dbc_name,
+                                             std::unordered_map<std::string, EnumInfo> *enum_info = nullptr);
 RouteData load_route_data(const std::string &route_name,
                           const std::string &data_dir = {},
                           const std::string &dbc_name = {},
@@ -503,9 +507,11 @@ struct CabanaMessageSummary {
   std::string root_path;
   std::string service;
   std::string name;
+  std::string node;
   std::vector<CabanaSignalSummary> signals;
   int bus = -1;
   uint32_t address = 0;
+  int dbc_size = -1;
   bool has_address = false;
   size_t sample_count = 0;
   double frequency_hz = 0.0;
@@ -607,11 +613,15 @@ struct LogsUiState {
 };
 
 struct CabanaUiState {
-  float messages_width = 300.0f;
-  float right_width = 320.0f;
-  float detail_top_height = 360.0f;
-  float right_top_height = 240.0f;
+  float layout_left_frac = 0.30f;
+  float layout_center_frac = 0.32f;
+  float layout_center_top_frac = 0.58f;
+  float layout_right_top_frac = 0.52f;
+  bool detail_top_auto_fit = true;
   std::array<char, 128> message_filter = {};
+  std::array<char, 32> message_bus_filter = {};
+  std::array<char, 48> message_addr_filter = {};
+  std::array<char, 64> message_node_filter = {};
   std::array<char, 96> signal_filter = {};
   bool suppress_defined_signals = false;
   std::string selected_message_root;
@@ -626,6 +636,18 @@ struct CabanaUiState {
   bool has_bit_selection = false;
   int selected_bit_byte = -1;
   int selected_bit_index = -1;
+  bool binary_drag_active = false;
+  bool binary_drag_resizing = false;
+  bool binary_drag_moved = false;
+  bool binary_drag_signal_is_little_endian = true;
+  bool pending_apply_signal_edit = false;
+  int binary_drag_press_byte = -1;
+  int binary_drag_press_bit = -1;
+  int binary_drag_anchor_byte = -1;
+  int binary_drag_anchor_bit = -1;
+  int binary_drag_current_byte = -1;
+  int binary_drag_current_bit = -1;
+  std::string binary_drag_signal_path;
   std::string similar_bits_source_root;
   int similar_bits_source_byte = -1;
   int similar_bits_source_bit = -1;
@@ -757,6 +779,7 @@ struct UiState {
   bool view_mode_initialized = false;
   bool start_cabana = false;
   bool suppress_range_side_effects = false;
+  bool browser_nodes_dirty = false;
   int active_tab_index = 0;
   int next_tab_runtime_id = 1;
   int requested_tab_index = -1;

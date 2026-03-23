@@ -2192,3 +2192,45 @@ RouteIdentifier parse_route_identifier(std::string_view route_name) {
 std::vector<std::string> available_dbc_names() {
   return available_dbc_names_impl();
 }
+
+std::optional<dbc::Database> load_dbc_by_name(const std::string &dbc_name) {
+  if (dbc_name.empty()) {
+    return std::nullopt;
+  }
+  try {
+    return std::optional<dbc::Database>(std::in_place, resolve_dbc_path(dbc_name));
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::vector<RouteSeries> decode_can_messages(const std::vector<CanMessageData> &can_messages,
+                                             const std::string &dbc_name,
+                                             std::unordered_map<std::string, EnumInfo> *enum_info) {
+  if (enum_info != nullptr) {
+    enum_info->clear();
+  }
+  const std::optional<dbc::Database> can_dbc = load_dbc_by_name(dbc_name);
+  if (!can_dbc.has_value()) {
+    return {};
+  }
+
+  SeriesAccumulator series;
+  for (const CanMessageData &message : can_messages) {
+    const char *service_name = message.id.service == CanServiceKind::Can ? "can" : "sendcan";
+    for (const CanFrameSample &sample : message.samples) {
+      decode_can_frame(&*can_dbc,
+                       service_name,
+                       message.id.bus,
+                       message.id.address,
+                       reinterpret_cast<const uint8_t *>(sample.data.data()),
+                       sample.data.size(),
+                       sample.mono_time,
+                       &series);
+    }
+  }
+  if (enum_info != nullptr) {
+    *enum_info = std::move(series.enum_info);
+  }
+  return collect_series(std::move(series));
+}
