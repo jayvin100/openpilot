@@ -286,6 +286,34 @@ Better model:
 - add a raw-CAN ingestion path that both panda and SocketCAN can feed
 - then derive decoded series and inspector updates from that shared raw path
 
+### Concrete fit in current JotPlugger
+
+JotPlugger now has an app-level `Cabana` mode, not just a pane-level inspector, so Panda belongs as:
+
+- a new option in the existing `Live Stream` popup
+- a new `StreamSourceKind::Panda`
+- a background worker that feeds `StreamExtractBatch::can_messages`
+
+It should **not**:
+
+- pretend to be a remote cereal stream
+- depend on Qt `QObject` / `LiveStream`
+- require route-style segment loading
+
+### Reuse boundary
+
+Reuse:
+
+- [`tools/cabana/panda.h`](../cabana/panda.h)
+- [`tools/cabana/panda.cc`](../cabana/panda.cc)
+
+Do **not** reuse directly:
+
+- [`tools/cabana/streams/pandastream.h`](../cabana/streams/pandastream.h)
+- [`tools/cabana/streams/pandastream.cc`](../cabana/streams/pandastream.cc)
+
+Those stream classes are tied to Cabana's Qt event model and currently wrap raw CAN back into synthetic cereal `Event::Can` messages. JotPlugger should stay native and feed raw frames into its existing raw CAN model directly.
+
 ### 9. SocketCAN Support
 
 ### Best JotPlugger fit
@@ -296,6 +324,115 @@ Better model:
 
 - Depends on the same raw-CAN live ingestion layer
 - Should arrive after the route + stream raw CAN model exists
+- Should use the same `Live Stream` popup as the other stream modes
+
+### Reuse boundary
+
+Reuse the low-level socket setup / read path from:
+
+- [`tools/cabana/streams/socketcanstream.cc`](../cabana/streams/socketcanstream.cc)
+
+Do **not** reuse:
+
+- the Qt widget/open-dialog layer
+- the synthetic cereal event wrapping
+
+SocketCAN should be just another producer of raw `CanFrameSample` batches.
+
+## Live Source Architecture
+
+The clean implementation is:
+
+1. Add a source kind to JotPlugger streaming state
+   - `CerealLocal`
+   - `CerealRemote`
+   - `Panda`
+   - `SocketCAN`
+
+2. Split the current `StreamPoller` into:
+   - source selection / worker lifecycle
+   - source-specific poll loops
+   - one shared batch merge path
+
+3. Add a source-agnostic raw CAN ingest API to `StreamAccumulator`
+   - current path: `appendEvent(cereal::Event::Which, ...)`
+   - new path: `appendCanFrames(CanServiceKind service, std::span<const LiveCanFrame>)`
+
+4. Keep one shared UI/data path after ingestion
+   - `takeBatch()`
+   - `apply_stream_batch(...)`
+   - `rebuild_cabana_messages(...)`
+   - decoded series derivation from active DBC
+
+This keeps all route/stream/Cabana views reading from the same post-ingest model.
+
+### Suggested structs
+
+- `enum class StreamSourceKind`
+- `struct PandaStreamConfig`
+  - serial
+  - per-bus CAN speed
+  - per-bus CAN-FD enable/data speed
+- `struct SocketCanStreamConfig`
+  - device
+- `struct StreamSourceConfig`
+  - kind
+  - cereal address / remote flag
+  - panda config
+  - socketcan config
+
+### Worker model
+
+Keep one worker thread in `StreamPoller`, but branch by source kind:
+
+- cereal source
+  - existing ZMQ/MSGQ subscription path
+- panda source
+  - open panda
+  - receive raw frames
+  - append directly to the accumulator
+  - send heartbeat
+- socketcan source
+  - open CAN socket
+  - read frames
+  - append directly to the accumulator
+
+This is simpler than introducing separate poller classes unless the source count grows further.
+
+### UI / UX shape
+
+Extend the existing `Live Stream` popup to choose among:
+
+- `Local (MSGQ)`
+- `Remote (ZMQ)`
+- `Panda`
+- `SocketCAN`
+
+When `Panda` is selected:
+
+- show serial dropdown + refresh
+- show per-bus speed / CAN-FD settings
+
+When `SocketCAN` is selected:
+
+- show CAN interface dropdown + refresh
+
+When connected:
+
+- status text should say which source is active
+- `Close Stream` should behave the same across all source kinds
+
+### Logging / persistence
+
+Do not block Panda/SocketCAN on a full logging design.
+
+First pass:
+
+- live-only, in-memory streaming into the existing rolling stream buffer
+
+Optional later follow-up:
+
+- capture raw live CAN into a route-like local artifact for later replay
 
 ### 10. CSV Export
 
@@ -369,8 +506,10 @@ This is the large workflow step and should come after the inspector read path is
 ### Phase 5: Extra analysis and live sources
 
 14. Find Signal
-15. Panda live source
-16. SocketCAN source
+15. Add source-agnostic live CAN ingest path
+16. Extend `Live Stream` popup with source selection
+17. Panda live source
+18. SocketCAN source
 
 ## Suggested First Milestone
 

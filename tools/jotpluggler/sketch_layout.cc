@@ -1126,6 +1126,60 @@ void append_can_frame(CanServiceKind service,
   });
 }
 
+void append_dynamic_scalar_point(const std::string &path, double tm, double value, SeriesAccumulator *series);
+
+void decode_can_frame(const dbc::Database *can_dbc,
+                      const std::string &service_name,
+                      uint8_t bus,
+                      uint32_t address,
+                      const uint8_t *raw,
+                      size_t data_size,
+                      double tm,
+                      SeriesAccumulator *series) {
+  if (can_dbc == nullptr) {
+    return;
+  }
+  const dbc::Message *message = can_dbc->message(address);
+  if (message == nullptr) {
+    return;
+  }
+  const std::string base_path = "/" + service_name + "/" + std::to_string(bus) + "/" + message->name;
+  for (const dbc::Signal &signal : message->signals) {
+    std::optional<double> value = dbc::signalValue(signal, *message, raw, data_size);
+    if (!value.has_value()) continue;
+    const std::string path = base_path + "/" + signal.name;
+    append_dynamic_scalar_point(path, tm, *value, series);
+    if (series->enum_info.find(path) == series->enum_info.end()) {
+      std::vector<std::string> enum_names = can_dbc->enumNames(signal);
+      if (!enum_names.empty()) {
+        series->enum_info.emplace(path, EnumInfo{.names = std::move(enum_names)});
+      }
+    }
+  }
+}
+
+void append_live_can_frame(CanServiceKind service,
+                           const LiveCanFrame &frame,
+                           double time_offset,
+                           const dbc::Database *can_dbc,
+                           SeriesAccumulator *series) {
+  const double tm = frame.mono_time - time_offset;
+  CanMessageData *message = ensure_can_message(service, frame.bus, frame.address, series);
+  message->samples.push_back(CanFrameSample{
+    .mono_time = tm,
+    .bus_time = frame.bus_time,
+    .data = frame.data,
+  });
+  decode_can_frame(can_dbc,
+                   service == CanServiceKind::Can ? "can" : "sendcan",
+                   frame.bus,
+                   frame.address,
+                   reinterpret_cast<const uint8_t *>(frame.data.data()),
+                   frame.data.size(),
+                   tm,
+                   series);
+}
+
 SeriesAccumulator make_series_accumulator(const SchemaIndex &schema) {
   SeriesAccumulator out(schema.fixed_series_count);
   for (size_t i = 0; i < schema.fixed_paths.size(); ++i) {
@@ -1276,29 +1330,8 @@ void append_event_fast(cereal::Event::Which which,
       ? CanServiceKind::Can
       : CanServiceKind::Sendcan;
     auto decode_message = [&](uint8_t bus, uint32_t address, const auto &dat_reader) {
-      if (can_dbc == nullptr) {
-        return;
-      }
-      const dbc::Message *message = can_dbc->message(address);
-      if (message == nullptr) {
-        return;
-      }
       const auto bytes = dat_reader.begin();
-      const uint8_t *raw = bytes;
-      const size_t data_size = dat_reader.size();
-      const std::string base_path = "/" + service.service_name + "/" + std::to_string(bus) + "/" + message->name;
-      for (const dbc::Signal &signal : message->signals) {
-        std::optional<double> value = dbc::signalValue(signal, *message, raw, data_size);
-        if (!value.has_value()) continue;
-        const std::string path = base_path + "/" + signal.name;
-        append_dynamic_scalar_point(path, tm, *value, series);
-        if (series->enum_info.find(path) == series->enum_info.end()) {
-          std::vector<std::string> enum_names = can_dbc->enumNames(signal);
-          if (!enum_names.empty()) {
-            series->enum_info.emplace(path, EnumInfo{.names = std::move(enum_names)});
-          }
-        }
-      }
+      decode_can_frame(can_dbc, service.service_name, bus, address, bytes, dat_reader.size(), tm, series);
     };
     if (service.service_name == "can") {
       for (const auto &msg : event.getCan()) {
@@ -2037,6 +2070,22 @@ void StreamAccumulator::appendEvent(cereal::Event::Which which, kj::ArrayPtr<con
     const auto sd = event.getSelfdriveState();
     append_timeline_entry(&impl_->timeline, boot_time - *impl_->time_offset,
                           alert_status_to_timeline_type(sd.getAlertStatus(), sd.getEnabled()));
+  }
+}
+
+void StreamAccumulator::appendCanFrames(CanServiceKind service, const std::vector<LiveCanFrame> &frames) {
+  if (frames.empty()) {
+    return;
+  }
+  if (!impl_->time_offset.has_value()) {
+    impl_->time_offset = frames.front().mono_time;
+  }
+  for (const LiveCanFrame &frame : frames) {
+    append_live_can_frame(service,
+                          frame,
+                          *impl_->time_offset,
+                          impl_->can_dbc ? &*impl_->can_dbc : nullptr,
+                          &impl_->series);
   }
 }
 

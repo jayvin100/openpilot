@@ -169,6 +169,30 @@ void run_or_throw(const std::string &command, const std::string &action) {
   if (ret != 0) throw std::runtime_error(action + " failed with exit code " + std::to_string(ret));
 }
 
+const char *stream_source_kind_label(StreamSourceKind kind) {
+  switch (kind) {
+    case StreamSourceKind::CerealRemote: return "Remote (ZMQ)";
+    case StreamSourceKind::Panda: return "Panda";
+    case StreamSourceKind::SocketCan: return "SocketCAN";
+    case StreamSourceKind::CerealLocal:
+    default: return "Local (MSGQ)";
+  }
+}
+
+std::string stream_source_target_label(const StreamSourceConfig &source) {
+  switch (source.kind) {
+    case StreamSourceKind::CerealRemote:
+      return source.address.empty() ? std::string("127.0.0.1") : source.address;
+    case StreamSourceKind::Panda:
+      return source.panda.serial.empty() ? std::string("auto") : source.panda.serial;
+    case StreamSourceKind::SocketCan:
+      return source.socketcan.device.empty() ? std::string("can0") : source.socketcan.device;
+    case StreamSourceKind::CerealLocal:
+    default:
+      return "127.0.0.1";
+  }
+}
+
 void refresh_replaced_layout_ui(AppSession *session, UiState *state, bool mark_docks) {
   state->tabs.clear();
   cancel_rename_tab(state);
@@ -193,7 +217,7 @@ void start_new_layout(AppSession *session, UiState *state, const std::string &st
 void apply_dbc_override_change(AppSession *session, UiState *state, const std::string &dbc_override) {
   session->dbc_override = dbc_override;
   if (session->data_mode == SessionDataMode::Stream) {
-    start_stream_session(session, state, session->stream_address, session->stream_buffer_seconds, false);
+    start_stream_session(session, state, session->stream_source, session->stream_buffer_seconds, false);
   } else if (!session->route_name.empty()) {
     reload_session(session, state, session->route_name, session->data_dir);
   } else if (dbc_override.empty()) {
@@ -389,8 +413,15 @@ void sync_route_buffers(UiState *state, const AppSession &session) {
 }
 
 void sync_stream_buffers(UiState *state, const AppSession &session) {
-  copy_to_buffer(session.stream_address, &state->stream_address_buffer);
-  state->stream_remote = !is_local_stream_address(session.stream_address);
+  copy_to_buffer(session.stream_source.address, &state->stream_address_buffer);
+  copy_to_buffer(session.stream_source.panda.serial, &state->panda_serial_buffer);
+  copy_to_buffer(session.stream_source.socketcan.device, &state->socketcan_device_buffer);
+  state->stream_source_kind = session.stream_source.kind;
+  for (size_t i = 0; i < session.stream_source.panda.buses.size(); ++i) {
+    state->panda_can_speed_kbps[i] = session.stream_source.panda.buses[i].can_speed_kbps;
+    state->panda_data_speed_kbps[i] = session.stream_source.panda.buses[i].data_speed_kbps;
+    state->panda_can_fd[i] = session.stream_source.panda.buses[i].can_fd;
+  }
   state->stream_buffer_seconds = session.stream_buffer_seconds;
 }
 
@@ -750,8 +781,8 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       const bool paused = stream.paused || session->stream_paused;
       const bool live = stream.connected && !paused;
       const ImVec4 status_color = live ? color_rgb(38, 135, 67) : (paused ? color_rgb(168, 119, 34) : color_rgb(155, 63, 63));
-      ImGui::TextColored(status_color, "%s %s", live ? "●" : "○", stream.address.c_str());
-      ImGui::TextDisabled("%s%s", stream.remote ? "Remote (ZMQ)" : "Local (MSGQ)", paused ? "  paused" : "");
+      ImGui::TextColored(status_color, "%s %s", live ? "●" : "○", stream.source_label.c_str());
+      ImGui::TextDisabled("%s%s", stream_source_kind_label(stream.source_kind), paused ? "  paused" : "");
       const double span = session->route_data.has_time_range ? (session->route_data.x_max - session->route_data.x_min) : 0.0;
       const float fill = stream.buffer_seconds <= 0.0
         ? 0.0f
@@ -761,10 +792,10 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       const char *button_label = paused ? "Resume" : "Pause";
       if (ImGui::Button(button_label, ImVec2(std::max(1.0f, ImGui::GetContentRegionAvail().x), 0.0f))) {
         if (paused) {
-          start_stream_session(session, state, session->stream_address, session->stream_buffer_seconds, true);
+          start_stream_session(session, state, session->stream_source, session->stream_buffer_seconds, true);
         } else {
           stop_stream_session(session, state);
-          state->status_text = "Paused stream " + session->stream_address;
+          state->status_text = "Paused stream " + stream_source_target_label(session->stream_source);
         }
       }
     } else if (session->route_name.empty()) {
@@ -1806,7 +1837,10 @@ int run(const Options &options) {
     .route_name = options.route_name,
     .data_dir = options.data_dir,
     .dbc_override = {},
-    .stream_address = options.stream_address,
+    .stream_source = StreamSourceConfig{.kind = is_local_stream_address(options.stream_address)
+                                                 ? StreamSourceKind::CerealLocal
+                                                 : StreamSourceKind::CerealRemote,
+                                        .address = options.stream_address},
     .stream_buffer_seconds = options.stream_buffer_seconds,
     .data_mode = options.stream ? SessionDataMode::Stream : SessionDataMode::Route,
     .route_id = options.stream ? RouteIdentifier{} : parse_route_identifier(options.route_name),
@@ -1847,7 +1881,7 @@ int run(const Options &options) {
     start_async_route_load(&session, &ui_state);
   } else if (session.data_mode == SessionDataMode::Stream) {
     session.stream_poller = std::make_unique<StreamPoller>();
-    start_stream_session(&session, &ui_state, session.stream_address, session.stream_buffer_seconds);
+    start_stream_session(&session, &ui_state, session.stream_source, session.stream_buffer_seconds);
   }
 
   const bool should_capture = !options.output_path.empty();

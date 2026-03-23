@@ -254,7 +254,11 @@ void open_cabana_signal_editor(const AppSession &session,
   CabanaSignalEditorState &editor = state->cabana_signal_editor;
   editor.open = true;
   editor.loaded = true;
+  editor.creating = false;
   editor.message_root = message.root_path;
+  editor.message_name = message.name;
+  editor.service = message.service;
+  editor.bus = message.bus;
   editor.message_address = message.address;
   editor.original_signal_name = it->name;
   editor.signal_name = it->name;
@@ -270,6 +274,56 @@ void open_cabana_signal_editor(const AppSession &session,
   editor.multiplex_value = it->multiplex_value;
   editor.receiver_name = it->receiver_name;
   editor.unit = it->unit;
+}
+
+void open_cabana_new_signal_editor(const AppSession &session,
+                                   UiState *state,
+                                   const CabanaMessageSummary &message,
+                                   int byte_index,
+                                   int bit_index) {
+  const std::optional<dbc::Database> db = load_active_dbc(session);
+  const dbc::Message *dbc_message = db.has_value() ? db->message(message.address) : nullptr;
+  if (dbc_message == nullptr) {
+    state->error_text = "No active DBC message available for creating a signal";
+    state->open_error_popup = true;
+    return;
+  }
+
+  std::string base_name = "bit_" + std::to_string(byte_index) + "_" + std::to_string(bit_index);
+  std::string signal_name = base_name;
+  int suffix = 2;
+  auto exists = [&](std::string_view candidate) {
+    return std::any_of(dbc_message->signals.begin(), dbc_message->signals.end(), [&](const dbc::Signal &signal) {
+      return signal.name == candidate;
+    });
+  };
+  while (exists(signal_name)) {
+    signal_name = base_name + "_" + std::to_string(suffix++);
+  }
+
+  CabanaSignalEditorState &editor = state->cabana_signal_editor;
+  editor.open = true;
+  editor.loaded = true;
+  editor.creating = true;
+  editor.message_root = message.root_path;
+  editor.message_name = message.name;
+  editor.service = message.service;
+  editor.bus = message.bus;
+  editor.message_address = message.address;
+  editor.original_signal_name.clear();
+  editor.signal_name = signal_name;
+  editor.start_bit = byte_index * 8 + bit_index;
+  editor.size = 1;
+  editor.factor = 1.0;
+  editor.offset = 0.0;
+  editor.min = 0.0;
+  editor.max = 1.0;
+  editor.is_signed = false;
+  editor.is_little_endian = true;
+  editor.type = static_cast<int>(dbc::Signal::Type::Normal);
+  editor.multiplex_value = 0;
+  editor.receiver_name = "XXX";
+  editor.unit.clear();
 }
 
 const CabanaMessageSummary *find_selected_message(const AppSession &session, const UiState &state) {
@@ -749,6 +803,14 @@ void draw_bit_selection_panel(AppSession *session, const CabanaMessageSummary &m
       state->cabana.similar_bits_source_byte = state->cabana.selected_bit_byte;
       state->cabana.similar_bits_source_bit = state->cabana.selected_bit_index;
     }
+  }
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Create Signal...")) {
+    open_cabana_new_signal_editor(*session,
+                                  state,
+                                  message,
+                                  state->cabana.selected_bit_byte,
+                                  state->cabana.selected_bit_index);
   }
   const auto overlaps = selected_bit_signals(message, *state);
   if (overlaps.empty()) {
@@ -1262,7 +1324,7 @@ void draw_signal_selection_table(AppSession *session, UiState *state, const Caba
     ImGui::TextDisabled("No decoded signals for this message.");
     return;
   }
-  if (ImGui::BeginTable("##cabana_signals", 5,
+  if (ImGui::BeginTable("##cabana_signals", 6,
                         ImGuiTableFlags_RowBg |
                           ImGuiTableFlags_SizingStretchProp |
                           ImGuiTableFlags_BordersInnerV,
@@ -1272,6 +1334,7 @@ void draw_signal_selection_table(AppSession *session, UiState *state, const Caba
     ImGui::TableSetupColumn("Bits", ImGuiTableColumnFlags_WidthFixed, 72.0f);
     ImGui::TableSetupColumn("Trend", ImGuiTableColumnFlags_WidthFixed, 132.0f);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 92.0f);
+    ImGui::TableSetupColumn("Edit", ImGuiTableColumnFlags_WidthFixed, 56.0f);
     ImGui::TableHeadersRow();
     for (const CabanaSignalSummary &signal : message.signals) {
       const bool selected = std::find(state->cabana.chart_signal_paths.begin(), state->cabana.chart_signal_paths.end(), signal.path)
@@ -1303,6 +1366,10 @@ void draw_signal_selection_table(AppSession *session, UiState *state, const Caba
       draw_signal_sparkline(*session, *state, signal.path, selected);
       ImGui::TableNextColumn();
       ImGui::TextUnformatted(cabana_value_label(*session, signal.path, state->tracker_time).c_str());
+      ImGui::TableNextColumn();
+      if (ImGui::SmallButton(("Edit##" + signal.path).c_str())) {
+        open_cabana_signal_editor(*session, state, message, signal);
+      }
     }
     ImGui::EndTable();
   }

@@ -200,6 +200,14 @@ struct CanFrameSample {
   std::string data;
 };
 
+struct LiveCanFrame {
+  double mono_time = 0.0;
+  uint8_t bus = 0;
+  uint32_t address = 0;
+  uint16_t bus_time = 0;
+  std::string data;
+};
+
 struct CanMessageData {
   CanMessageId id;
   std::vector<CanFrameSample> samples;
@@ -370,6 +378,7 @@ public:
 
   void setDbcName(const std::string &dbc_name);
   void appendEvent(cereal::Event::Which which, kj::ArrayPtr<const capnp::word> data);
+  void appendCanFrames(CanServiceKind service, const std::vector<LiveCanFrame> &frames);
   StreamExtractBatch takeBatch();
   const std::string &carFingerprint() const;
   const std::string &dbc_name() const;
@@ -437,6 +446,35 @@ enum class SessionDataMode : uint8_t {
   Stream,
 };
 
+enum class StreamSourceKind : uint8_t {
+  CerealLocal,
+  CerealRemote,
+  Panda,
+  SocketCan,
+};
+
+struct PandaBusConfig {
+  int can_speed_kbps = 500;
+  int data_speed_kbps = 2000;
+  bool can_fd = false;
+};
+
+struct PandaStreamConfig {
+  std::string serial;
+  std::array<PandaBusConfig, 3> buses = {};
+};
+
+struct SocketCanStreamConfig {
+  std::string device;
+};
+
+struct StreamSourceConfig {
+  StreamSourceKind kind = StreamSourceKind::CerealLocal;
+  std::string address = "127.0.0.1";
+  PandaStreamConfig panda;
+  SocketCanStreamConfig socketcan;
+};
+
 enum class AppViewMode : uint8_t {
   Plot,
   Cabana,
@@ -489,7 +527,7 @@ struct AppSession {
   std::string route_name;
   std::string data_dir;
   std::string dbc_override;
-  std::string stream_address = "127.0.0.1";
+  StreamSourceConfig stream_source;
   double stream_buffer_seconds = 30.0;
   SessionDataMode data_mode = SessionDataMode::Route;
   RouteIdentifier route_id;
@@ -608,7 +646,11 @@ struct DbcEditorState {
 struct CabanaSignalEditorState {
   bool open = false;
   bool loaded = false;
+  bool creating = false;
   std::string message_root;
+  std::string message_name;
+  std::string service;
+  int bus = -1;
   uint32_t message_address = 0;
   std::string original_signal_name;
   std::string signal_name;
@@ -712,6 +754,8 @@ struct UiState {
   std::vector<TabUiState> tabs;
   std::array<char, 128> route_buffer = {};
   std::array<char, 128> stream_address_buffer = {};
+  std::array<char, 128> panda_serial_buffer = {};
+  std::array<char, 128> socketcan_device_buffer = {};
   std::array<char, 128> rename_tab_buffer = {};
   std::array<char, 128> browser_filter = {};
   std::array<char, 512> data_dir_buffer = {};
@@ -729,7 +773,10 @@ struct UiState {
   double route_copy_feedback_until = 0.0;
   bool editing_route_slice = false;
   bool focus_route_slice_input = false;
-  bool stream_remote = false;
+  StreamSourceKind stream_source_kind = StreamSourceKind::CerealLocal;
+  std::array<int, 3> panda_can_speed_kbps = {500, 500, 500};
+  std::array<int, 3> panda_data_speed_kbps = {2000, 2000, 2000};
+  std::array<bool, 3> panda_can_fd = {false, false, false};
   float sidebar_width = 320.0f;
   double route_x_min = 0.0;
   double route_x_max = 1.0;
@@ -926,8 +973,8 @@ struct StreamPollSnapshot {
   bool active = false;
   bool connected = false;
   bool paused = false;
-  bool remote = false;
-  std::string address;
+  StreamSourceKind source_kind = StreamSourceKind::CerealLocal;
+  std::string source_label;
   std::string dbc_name;
   std::string car_fingerprint;
   double buffer_seconds = 30.0;
@@ -998,7 +1045,7 @@ public:
   StreamPoller(const StreamPoller &) = delete;
   StreamPoller &operator=(const StreamPoller &) = delete;
 
-  void start(const std::string &address,
+  void start(const StreamSourceConfig &source,
              double buffer_seconds,
              const std::string &dbc_name,
              std::optional<double> time_offset = std::nullopt);

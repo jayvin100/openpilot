@@ -1,13 +1,16 @@
 #include "tools/jotpluggler/jotpluggler.h"
 #include "tools/jotpluggler/app_common.h"
+#include "tools/jotpluggler/app_socketcan.h"
 
 #include "cereal/services.h"
+#include "common/timing.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_opengl3_loader.h"
 #include "implot.h"
 #include "libyuv.h"
 #include "msgq_repo/msgq/ipc.h"
+#include "tools/cabana/panda.h"
 #include "tools/replay/framereader.h"
 
 #include <GLFW/glfw3.h>
@@ -52,6 +55,30 @@ CameraType decoder_camera_type(CameraViewKind view) {
 
 std::string normalize_stream_address(std::string address) {
   return is_local_stream_address(address) ? "127.0.0.1" : address;
+}
+
+std::string stream_source_target_label(const StreamSourceConfig &source) {
+  switch (source.kind) {
+    case StreamSourceKind::CerealRemote:
+      return normalize_stream_address(source.address);
+    case StreamSourceKind::Panda:
+      return source.panda.serial.empty() ? std::string("auto") : source.panda.serial;
+    case StreamSourceKind::SocketCan:
+      return source.socketcan.device.empty() ? std::string("can0") : source.socketcan.device;
+    case StreamSourceKind::CerealLocal:
+    default:
+      return "127.0.0.1";
+  }
+}
+
+bool stream_batch_has_data(const StreamExtractBatch &batch) {
+  return !batch.series.empty()
+      || !batch.can_messages.empty()
+      || !batch.logs.empty()
+      || !batch.timeline.empty()
+      || !batch.enum_info.empty()
+      || !batch.car_fingerprint.empty()
+      || !batch.dbc_name.empty();
 }
 
 bool should_subscribe_stream_service(const std::string &name) {
@@ -376,7 +403,7 @@ struct StreamPoller::Impl {
     stop();
   }
 
-  void start(const std::string &requested_address,
+  void start(const StreamSourceConfig &requested_source,
              double requested_buffer_seconds,
              const std::string &dbc_name,
              std::optional<double> time_offset) {
@@ -385,9 +412,16 @@ struct StreamPoller::Impl {
       std::lock_guard<std::mutex> lock(mutex);
       pending = {};
       pending_series_slots.clear();
+      pending_can_slots.clear();
       error_text.clear();
-      address = normalize_stream_address(requested_address);
-      remote = !is_local_stream_address(requested_address);
+      source = requested_source;
+      if (source.kind == StreamSourceKind::CerealLocal) {
+        source.address = "127.0.0.1";
+      } else if (source.kind == StreamSourceKind::CerealRemote) {
+        source.address = normalize_stream_address(source.address);
+      } else if (source.kind == StreamSourceKind::SocketCan && source.socketcan.device.empty()) {
+        source.socketcan.device = "can0";
+      }
       buffer_seconds = std::max(1.0, requested_buffer_seconds);
       latest_dbc_name = dbc_name;
       latest_car_fingerprint.clear();
@@ -398,60 +432,18 @@ struct StreamPoller::Impl {
     running.store(true);
     worker = std::thread([this, dbc_name, time_offset]() {
       try {
-        if (remote) {
-          setenv("ZMQ", "1", 1);
-        } else {
-          unsetenv("ZMQ");
-        }
-
-        std::unique_ptr<Context> context(Context::create());
-        std::unique_ptr<Poller> poller(Poller::create());
-        std::vector<std::unique_ptr<SubSocket>> sockets;
-        sockets.reserve(services.size());
-        for (const auto &[name, info] : services) {
-          if (!should_subscribe_stream_service(name)) continue;
-          std::unique_ptr<SubSocket> socket(
-            SubSocket::create(context.get(), name.c_str(), address.c_str(), false, true, info.queue_size));
-          if (socket == nullptr) continue;
-          socket->setTimeout(0);
-          poller->registerSocket(socket.get());
-          sockets.push_back(std::move(socket));
-        }
-        if (sockets.empty()) throw std::runtime_error("Failed to connect to any cereal service");
-        connected.store(true);
-
         StreamAccumulator accumulator(dbc_name, time_offset);
-        while (running.load()) {
-          std::vector<SubSocket *> ready = poller->poll(1);
-          for (SubSocket *socket : ready) {
-            while (running.load()) {
-              std::unique_ptr<Message> msg(socket->receive(true));
-              if (!msg) break;
-              const size_t size = msg->getSize();
-              if (size < sizeof(capnp::word) || (size % sizeof(capnp::word)) != 0) {
-                continue;
-              }
-              if (paused.load()) {
-                received_messages.fetch_add(1);
-                continue;
-              }
-              kj::ArrayPtr<const capnp::word> data(reinterpret_cast<const capnp::word *>(msg->getData()),
-                                                   size / sizeof(capnp::word));
-              capnp::FlatArrayMessageReader event_reader(data);
-              const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-              accumulator.appendEvent(event.which(), data);
-              received_messages.fetch_add(1);
-            }
-          }
-
-          StreamExtractBatch batch = accumulator.takeBatch();
-          if (!batch.series.empty() || !batch.logs.empty() || !batch.timeline.empty() || !batch.enum_info.empty()
-              || !batch.car_fingerprint.empty() || !batch.dbc_name.empty()) {
-            std::lock_guard<std::mutex> lock(mutex);
-            merge_batch(&pending, &pending_series_slots, &batch);
-            latest_dbc_name = pending.dbc_name;
-            latest_car_fingerprint = pending.car_fingerprint;
-          }
+        switch (source.kind) {
+          case StreamSourceKind::CerealLocal:
+          case StreamSourceKind::CerealRemote:
+            run_cereal_source(&accumulator);
+            break;
+          case StreamSourceKind::Panda:
+            run_panda_source(&accumulator);
+            break;
+          case StreamSourceKind::SocketCan:
+            run_socketcan_source(&accumulator);
+            break;
         }
       } catch (const std::exception &err) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -468,6 +460,7 @@ struct StreamPoller::Impl {
       std::lock_guard<std::mutex> lock(mutex);
       pending = {};
       pending_series_slots.clear();
+      pending_can_slots.clear();
       error_text.clear();
     }
   }
@@ -486,8 +479,8 @@ struct StreamPoller::Impl {
     out.active = running.load();
     out.connected = connected.load();
     out.paused = paused.load();
-    out.remote = remote;
-    out.address = address;
+    out.source_kind = source.kind;
+    out.source_label = stream_source_target_label(source);
     out.buffer_seconds = buffer_seconds;
     out.received_messages = received_messages.load();
     std::lock_guard<std::mutex> lock(mutex);
@@ -499,13 +492,13 @@ struct StreamPoller::Impl {
   bool consume(StreamExtractBatch *batch, std::string *out_error_text) {
     std::lock_guard<std::mutex> lock(mutex);
     const bool has_error = !error_text.empty();
-    const bool has_batch = !pending.series.empty() || !pending.logs.empty() || !pending.timeline.empty() || !pending.enum_info.empty()
-      || !pending.car_fingerprint.empty() || !pending.dbc_name.empty();
+    const bool has_batch = stream_batch_has_data(pending);
     if (!has_error && !has_batch) return false;
     if (batch != nullptr) {
       *batch = std::move(pending);
       pending = {};
       pending_series_slots.clear();
+      pending_can_slots.clear();
     }
     if (out_error_text != nullptr) {
       *out_error_text = error_text;
@@ -525,15 +518,36 @@ struct StreamPoller::Impl {
     dst->values.insert(dst->values.end(), src->values.begin(), src->values.end());
   }
 
+  static void merge_can_message_data(CanMessageData *dst, CanMessageData *src) {
+    if (src->samples.empty()) {
+      return;
+    }
+    if (dst->samples.empty()) {
+      *dst = std::move(*src);
+      return;
+    }
+    dst->samples.insert(dst->samples.end(),
+                        std::make_move_iterator(src->samples.begin()),
+                        std::make_move_iterator(src->samples.end()));
+  }
+
   static void merge_batch(StreamExtractBatch *dst,
-                          std::unordered_map<std::string, size_t> *slots,
+                          std::unordered_map<std::string, size_t> *series_slots,
+                          std::unordered_map<CanMessageId, size_t, CanMessageIdHash> *can_slots,
                           StreamExtractBatch *src) {
     for (RouteSeries &series : src->series) {
-      auto [it, inserted] = slots->try_emplace(series.path, dst->series.size());
+      auto [it, inserted] = series_slots->try_emplace(series.path, dst->series.size());
       if (inserted) {
         dst->series.push_back(RouteSeries{.path = series.path});
       }
       merge_route_series(&dst->series[it->second], &series);
+    }
+    for (CanMessageData &message : src->can_messages) {
+      auto [it, inserted] = can_slots->try_emplace(message.id, dst->can_messages.size());
+      if (inserted) {
+        dst->can_messages.push_back(CanMessageData{.id = message.id});
+      }
+      merge_can_message_data(&dst->can_messages[it->second], &message);
     }
     if (!src->logs.empty()) {
       dst->logs.insert(dst->logs.end(),
@@ -556,6 +570,149 @@ struct StreamPoller::Impl {
     }
   }
 
+  void publish_batch(StreamAccumulator *accumulator) {
+    StreamExtractBatch batch = accumulator->takeBatch();
+    if (!stream_batch_has_data(batch)) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(mutex);
+    merge_batch(&pending, &pending_series_slots, &pending_can_slots, &batch);
+    latest_dbc_name = pending.dbc_name;
+    latest_car_fingerprint = pending.car_fingerprint;
+  }
+
+  void run_cereal_source(StreamAccumulator *accumulator) {
+    if (source.kind == StreamSourceKind::CerealRemote) {
+      setenv("ZMQ", "1", 1);
+    } else {
+      unsetenv("ZMQ");
+    }
+
+    std::unique_ptr<Context> context(Context::create());
+    std::unique_ptr<Poller> poller(Poller::create());
+    std::vector<std::unique_ptr<SubSocket>> sockets;
+    sockets.reserve(services.size());
+    for (const auto &[name, info] : services) {
+      if (!should_subscribe_stream_service(name)) continue;
+      std::unique_ptr<SubSocket> socket(
+        SubSocket::create(context.get(), name.c_str(), source.address.c_str(), false, true, info.queue_size));
+      if (socket == nullptr) continue;
+      socket->setTimeout(0);
+      poller->registerSocket(socket.get());
+      sockets.push_back(std::move(socket));
+    }
+    if (sockets.empty()) throw std::runtime_error("Failed to connect to any cereal service");
+    connected.store(true);
+
+    while (running.load()) {
+      std::vector<SubSocket *> ready = poller->poll(1);
+      for (SubSocket *socket : ready) {
+        while (running.load()) {
+          std::unique_ptr<Message> msg(socket->receive(true));
+          if (!msg) break;
+          const size_t size = msg->getSize();
+          if (size < sizeof(capnp::word) || (size % sizeof(capnp::word)) != 0) {
+            continue;
+          }
+          if (paused.load()) {
+            received_messages.fetch_add(1);
+            continue;
+          }
+          kj::ArrayPtr<const capnp::word> data(reinterpret_cast<const capnp::word *>(msg->getData()),
+                                               size / sizeof(capnp::word));
+          capnp::FlatArrayMessageReader event_reader(data);
+          const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
+          accumulator->appendEvent(event.which(), data);
+          received_messages.fetch_add(1);
+        }
+      }
+      publish_batch(accumulator);
+    }
+  }
+
+  void configure_panda(Panda *panda) const {
+    panda->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
+    for (size_t bus = 0; bus < source.panda.buses.size(); ++bus) {
+      const PandaBusConfig &cfg = source.panda.buses[bus];
+      panda->set_can_speed_kbps(static_cast<uint16_t>(bus), static_cast<uint16_t>(cfg.can_speed_kbps));
+      if (panda->hw_type == cereal::PandaState::PandaType::RED_PANDA
+          || panda->hw_type == cereal::PandaState::PandaType::RED_PANDA_V2) {
+        panda->set_data_speed_kbps(static_cast<uint16_t>(bus),
+                                   static_cast<uint16_t>(cfg.can_fd ? cfg.data_speed_kbps : 10));
+      }
+    }
+  }
+
+  void run_panda_source(StreamAccumulator *accumulator) {
+    std::unique_ptr<Panda> panda;
+    std::vector<can_frame> raw_can_data;
+    while (running.load()) {
+      if (!panda || !panda->connected()) {
+        connected.store(false);
+        panda = std::make_unique<Panda>(source.panda.serial);
+        configure_panda(panda.get());
+        connected.store(true);
+      }
+
+      raw_can_data.clear();
+      if (!panda->can_receive(raw_can_data)) {
+        connected.store(false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        continue;
+      }
+      if (raw_can_data.empty()) {
+        panda->send_heartbeat(false);
+        publish_batch(accumulator);
+        continue;
+      }
+
+      received_messages.fetch_add(raw_can_data.size());
+      if (!paused.load()) {
+        const double mono_time = static_cast<double>(nanos_since_boot()) / 1.0e9;
+        std::vector<LiveCanFrame> frames;
+        frames.reserve(raw_can_data.size());
+        for (const can_frame &frame : raw_can_data) {
+          frames.push_back(LiveCanFrame{
+            .mono_time = mono_time,
+            .bus = static_cast<uint8_t>(frame.src),
+            .address = static_cast<uint32_t>(frame.address),
+            .bus_time = 0,
+            .data = frame.dat,
+          });
+        }
+        accumulator->appendCanFrames(CanServiceKind::Can, frames);
+      }
+      panda->send_heartbeat(false);
+      publish_batch(accumulator);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+
+  void run_socketcan_source(StreamAccumulator *accumulator) {
+#ifdef __linux__
+    SocketCanReader reader(source.socketcan.device.empty() ? "can0" : source.socketcan.device);
+    connected.store(true);
+
+    while (running.load()) {
+      LiveCanFrame frame;
+      if (!reader.readFrame(&frame)) {
+        publish_batch(accumulator);
+        continue;
+      }
+      received_messages.fetch_add(1);
+      if (!paused.load()) {
+        std::vector<LiveCanFrame> frames;
+        frames.push_back(std::move(frame));
+        accumulator->appendCanFrames(CanServiceKind::Can, frames);
+      }
+      publish_batch(accumulator);
+    }
+#else
+    (void)accumulator;
+    throw std::runtime_error("SocketCAN is not available on this platform");
+#endif
+  }
+
   mutable std::mutex mutex;
   std::thread worker;
   std::atomic<bool> running{false};
@@ -564,12 +721,12 @@ struct StreamPoller::Impl {
   std::atomic<uint64_t> received_messages{0};
   StreamExtractBatch pending;
   std::unordered_map<std::string, size_t> pending_series_slots;
+  std::unordered_map<CanMessageId, size_t, CanMessageIdHash> pending_can_slots;
   std::string error_text;
-  std::string address = "127.0.0.1";
+  StreamSourceConfig source;
   std::string latest_dbc_name;
   std::string latest_car_fingerprint;
   double buffer_seconds = 30.0;
-  bool remote = false;
 };
 
 StreamPoller::StreamPoller()
@@ -577,11 +734,11 @@ StreamPoller::StreamPoller()
 
 StreamPoller::~StreamPoller() = default;
 
-void StreamPoller::start(const std::string &address,
+void StreamPoller::start(const StreamSourceConfig &source,
                          double buffer_seconds,
                          const std::string &dbc_name,
                          std::optional<double> time_offset) {
-  impl_->start(address, buffer_seconds, dbc_name, time_offset);
+  impl_->start(source, buffer_seconds, dbc_name, time_offset);
 }
 
 void StreamPoller::setPaused(bool paused) {

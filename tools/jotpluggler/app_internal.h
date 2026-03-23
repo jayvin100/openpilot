@@ -93,7 +93,6 @@ void clear_pane_vertical_limits(Pane *pane);
 void refresh_replaced_layout_ui(AppSession *session, UiState *state, bool mark_docks);
 void start_new_layout(AppSession *session, UiState *state, const std::string &status_text = "New untitled layout");
 void apply_dbc_override_change(AppSession *session, UiState *state, const std::string &dbc_override);
-bool ensure_dbc_editor_loaded(const AppSession &session, UiState *state);
 
 void app_push_bold_font();
 void app_pop_bold_font();
@@ -143,7 +142,7 @@ void rebuild_session_route_data(AppSession *session, UiState *state,
 void stop_stream_session(AppSession *session, UiState *state, bool preserve_data = true);
 bool start_stream_session(AppSession *session,
                           UiState *state,
-                          const std::string &address,
+                          const StreamSourceConfig &source,
                           double buffer_seconds,
                           bool preserve_existing_data = false);
 void start_async_route_load(AppSession *session, UiState *state);
