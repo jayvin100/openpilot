@@ -13,7 +13,7 @@ def driverview(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started or params.get_bool("IsDriverViewEnabled")
 
 def notcar(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return started  # pinball: always act as notcar
+  return started and CP.notCar
 
 def iscar(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not CP.notCar
@@ -113,7 +113,6 @@ procs = [
   PythonProcess("webrtcd", "system.webrtc.webrtcd", notcar),
   PythonProcess("webjoystick", "tools.bodyteleop.web", notcar),
   PythonProcess("joystick", "tools.joystick.joystick_control", and_(joystick, iscar)),
-  PythonProcess("pinballd", "tools.pinball.pinballd", notcar),
 ]
 
 managed_processes = {p.name: p for p in procs}
