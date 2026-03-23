@@ -265,6 +265,13 @@ class Updater:
       return hash_mismatch or branch_mismatch
     return False
 
+  def get_remote(self, path: str) -> str:
+    branch = self.get_branch(path)
+    try:
+      return run(["git", "config", f"branch.{branch}.remote"], path).rstrip()
+    except subprocess.CalledProcessError:
+      return "origin"
+
   def get_branch(self, path: str) -> str:
     return run(["git", "rev-parse", "--abbrev-ref", "HEAD"], path).rstrip()
 
@@ -347,7 +354,7 @@ class Updater:
     excluded_branches = ('release2', 'release2-staging')
 
     try:
-      run(["git", "ls-remote", "origin", "HEAD"], OVERLAY_MERGED)
+      run(["git", "ls-remote", self.get_remote(OVERLAY_MERGED), "HEAD"], OVERLAY_MERGED)
       self._has_internet = True
     except subprocess.CalledProcessError:
       self._has_internet = False
@@ -382,16 +389,17 @@ class Updater:
 
     setup_git_options(OVERLAY_MERGED)
 
-    run(["git", "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], OVERLAY_MERGED)
+    remote = self.get_remote(OVERLAY_MERGED)
+    run(["git", "config", "--replace-all", f"remote.{remote}.fetch", f"+refs/heads/*:refs/remotes/{remote}/*"], OVERLAY_MERGED)
 
     branch = self.target_branch
-    git_fetch_output = run(["git", "fetch", "origin", branch], OVERLAY_MERGED)
+    git_fetch_output = run(["git", "fetch", remote, branch], OVERLAY_MERGED)
     cloudlog.info("git fetch success: %s", git_fetch_output)
 
     cloudlog.info("git reset in progress")
     cmds = [
       ["git", "checkout", "--force", "--no-recurse-submodules", "-B", branch, "FETCH_HEAD"],
-      ["git", "branch", "--set-upstream-to", f"origin/{branch}"],
+      ["git", "branch", "--set-upstream-to", f"{remote}/{branch}"],
       ["git", "reset", "--hard"],
       ["git", "clean", "-xdff"],
       ["git", "submodule", "sync"],
