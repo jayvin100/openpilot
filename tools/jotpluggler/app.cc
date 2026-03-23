@@ -1047,40 +1047,31 @@ bool pane_is_empty_for_special_item(const Pane &pane) {
   return pane.kind == PaneKind::Plot && pane.curves.empty();
 }
 
-bool pane_can_accept_special_item(const Pane &pane) {
-  return pane_is_empty_for_special_item(pane) || pane_kind_is_special(pane.kind);
-}
-
-bool convert_pane_to_map(WorkspaceTab *tab, TabUiState *tab_state, int pane_index) {
+bool apply_special_item_to_pane(WorkspaceTab *tab, TabUiState *tab_state, int pane_index, std::string_view item_id) {
   if (tab == nullptr || tab_state == nullptr) return false;
   if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) return false;
+  const SpecialItemSpec *spec = special_item_spec(item_id);
+  if (spec == nullptr) return false;
   Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
+  if (!(pane_is_empty_for_special_item(pane) || pane_kind_is_special(pane.kind))) {
+    return false;
+  }
+  if (pane.kind == spec->kind && (spec->kind != PaneKind::Camera || pane.camera_view == spec->camera_view)) {
+    tab_state->active_pane_index = pane_index;
+    return false;
+  }
   const PaneKind previous_kind = pane.kind;
-  if (pane.kind == PaneKind::Map) {
-    tab_state->active_pane_index = pane_index;
-    return false;
+  pane.kind = spec->kind;
+  pane.camera_view = spec->camera_view;
+  if (spec->kind == PaneKind::Map) {
+    if (pane.title == UNTITLED_PANE_TITLE || previous_kind != PaneKind::Plot) {
+      pane.title = spec->label;
+    }
+  } else {
+    pane.title = spec->label;
+    resize_tab_pane_state(tab_state, tab->panes.size());
+    tab_state->camera_panes[static_cast<size_t>(pane_index)].fit_to_pane = true;
   }
-  pane.kind = PaneKind::Map;
-  if (pane.title == UNTITLED_PANE_TITLE || previous_kind != PaneKind::Plot) {
-    pane.title = special_item_label("map");
-  }
-  tab_state->active_pane_index = pane_index;
-  return true;
-}
-
-bool convert_pane_to_camera(WorkspaceTab *tab, TabUiState *tab_state, int pane_index, CameraViewKind view) {
-  if (tab == nullptr || tab_state == nullptr) return false;
-  if (pane_index < 0 || pane_index >= static_cast<int>(tab->panes.size())) return false;
-  Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
-  if (pane.kind == PaneKind::Camera && pane.camera_view == view) {
-    tab_state->active_pane_index = pane_index;
-    return false;
-  }
-  pane.kind = PaneKind::Camera;
-  pane.camera_view = view;
-  pane.title = camera_view_spec(view).label;
-  resize_tab_pane_state(tab_state, tab->panes.size());
-  tab_state->camera_panes[static_cast<size_t>(pane_index)].fit_to_pane = true;
   tab_state->active_pane_index = pane_index;
   return true;
 }
@@ -2292,7 +2283,7 @@ std::optional<PaneDropAction> draw_pane_drop_target(int tab_index, int pane_inde
           return deliver(std::move(action));
         }
       }
-      if (zone.zone == PaneDropZone::Center ? pane_can_accept_special_item(target_pane) : true) {
+      if (zone.zone != PaneDropZone::Center || pane_is_empty_for_special_item(target_pane) || pane_kind_is_special(target_pane.kind)) {
         if (const ImGuiPayload *p = try_accept("JOTP_SPECIAL_ITEM"); p && p->Delivery) {
           PaneDropAction action;
           action.special_item_id = static_cast<const char *>(p->Data);
@@ -2408,23 +2399,21 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
   if (tab == nullptr || tab_state == nullptr) return false;
 
   if (!action.special_item_id.empty()) {
+    const SpecialItemSpec *spec = special_item_spec(action.special_item_id);
+    if (spec == nullptr) {
+      return false;
+    }
     if (action.zone == PaneDropZone::Center) {
       if (action.target_pane_index < 0 || action.target_pane_index >= static_cast<int>(tab->panes.size())) {
         return false;
       }
-      if (!pane_can_accept_special_item(tab->panes[static_cast<size_t>(action.target_pane_index)])) {
+      if (!(pane_is_empty_for_special_item(tab->panes[static_cast<size_t>(action.target_pane_index)])
+            || pane_kind_is_special(tab->panes[static_cast<size_t>(action.target_pane_index)].kind))) {
         state->status_text = std::string(special_item_label(action.special_item_id)) + " can only replace another special pane or use an empty pane";
         return false;
       }
       const SketchLayout before_layout = session->layout;
-      bool changed = false;
-      if (action.special_item_id == "map") {
-        changed = convert_pane_to_map(tab, tab_state, action.target_pane_index);
-      } else if (const CameraViewSpec *spec = camera_view_spec_from_special_item(action.special_item_id)) {
-        changed = convert_pane_to_camera(tab, tab_state, action.target_pane_index, spec->view);
-      } else {
-        return false;
-      }
+      const bool changed = apply_special_item_to_pane(tab, tab_state, action.target_pane_index, spec->id);
       if (!changed) {
         state->status_text = std::string(special_item_label(action.special_item_id)) + " already shown in pane";
         return false;
@@ -2440,12 +2429,7 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
     if (split_pane(tab, action.target_pane_index, action.zone)) {
       tab_state->active_pane_index = static_cast<int>(tab->panes.size()) - 1;
       resize_tab_pane_state(tab_state, tab->panes.size());
-      bool changed = false;
-      if (action.special_item_id == "map") {
-        changed = convert_pane_to_map(tab, tab_state, tab_state->active_pane_index);
-      } else if (const CameraViewSpec *spec = camera_view_spec_from_special_item(action.special_item_id)) {
-        changed = convert_pane_to_camera(tab, tab_state, tab_state->active_pane_index, spec->view);
-      }
+      const bool changed = apply_special_item_to_pane(tab, tab_state, tab_state->active_pane_index, spec->id);
       if (!changed) {
         return false;
       }
@@ -2808,7 +2792,13 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
                            color,
                            thickness);
       }
-      show_hover_tooltip("New Tab");
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted("New Tab");
+        ImGui::EndTooltip();
+        ImGui::PopStyleVar();
+      }
       ImGui::PopStyleColor(3);
       ImGui::PopStyleVar();
       ImGui::EndTabBar();

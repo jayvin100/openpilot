@@ -9,11 +9,6 @@
 #include <cstdio>
 #include <fstream>
 
-bool default_fps_overlay_enabled() {
-  static const bool enabled = env_flag_enabled("JOTP_SHOW_FPS");
-  return enabled;
-}
-
 void draw_fps_overlay(const UiState &state, float top_offset) {
   if (!state.show_fps_overlay) {
     return;
@@ -44,7 +39,8 @@ void draw_fps_overlay(const UiState &state, float top_offset) {
 
 void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   if (!state->fps_overlay_initialized) {
-    state->show_fps_overlay = default_fps_overlay_enabled();
+    static const bool kDefaultShowFpsOverlay = env_flag_enabled("JOTP_SHOW_FPS");
+    state->show_fps_overlay = kDefaultShowFpsOverlay;
     state->fps_overlay_initialized = true;
   }
   ensure_shared_range(state, *session);

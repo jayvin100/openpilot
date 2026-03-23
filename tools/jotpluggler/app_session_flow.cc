@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <limits>
 
 const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path) {
   auto it = session.series_by_path.find(path);
@@ -273,17 +272,6 @@ void step_tracker(UiState *state, double direction) {
   state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
 }
 
-void show_hover_tooltip(const char *text) {
-  if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-    return;
-  }
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
-  ImGui::BeginTooltip();
-  ImGui::TextUnformatted(text);
-  ImGui::EndTooltip();
-  ImGui::PopStyleVar();
-}
-
 std::string layout_combo_label(const AppSession &session, const UiState &state) {
   const std::string base = session.layout_path.empty() ? std::string("untitled") : session.layout_path.stem().string();
   return state.layout_dirty ? base + " *" : base;
@@ -458,72 +446,6 @@ void draw_route_copy_feedback(UiState *state, ImDrawList *draw_list, ImVec2 chip
                      state->route_copy_feedback_text.c_str());
 }
 
-ImVec2 calc_icon_size(const char *icon) {
-  if (ImFont *ifont = icon_font(); ifont != nullptr && icon != nullptr && icon[0] != '\0') {
-    return ifont->CalcTextSizeA(ifont->LegacySize, std::numeric_limits<float>::max(), 0.0f, icon);
-  }
-  return ImGui::CalcTextSize(icon);
-}
-
-void draw_icon_glyph(ImDrawList *draw_list, const ImVec2 &pos, ImU32 color, const char *icon) {
-  if (ImFont *ifont = icon_font(); ifont != nullptr && icon != nullptr && icon[0] != '\0') {
-    draw_list->AddText(ifont, ifont->LegacySize, pos, color, icon);
-    return;
-  }
-  draw_list->AddText(pos, color, icon);
-}
-
-bool draw_popup_icon_button(const char *id, const char *icon, ImVec2 size, const char *tooltip = nullptr) {
-  ImDrawList *draw_list = ImGui::GetWindowDrawList();
-  const ImVec2 min = ImGui::GetCursorScreenPos();
-  const ImVec2 max(min.x + size.x, min.y + size.y);
-  if (!ImGui::InvisibleButton(id, size)) {
-  }
-  const bool hovered = ImGui::IsItemHovered();
-  const bool held = ImGui::IsItemActive();
-  const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
-  const ImU32 border = ImGui::GetColorU32(ImGuiCol_Border);
-  draw_list->AddRectFilled(min, max, bg, ImGui::GetStyle().FrameRounding);
-  draw_list->AddRect(min, max, border, ImGui::GetStyle().FrameRounding, 0, ImGui::GetStyle().FrameBorderSize);
-  const ImVec2 icon_size = calc_icon_size(icon);
-  draw_icon_glyph(draw_list,
-                  ImVec2(std::floor(min.x + (size.x - icon_size.x) * 0.5f),
-                         std::floor(min.y + (size.y - icon_size.y) * 0.5f)),
-                  ImGui::GetColorU32(ImGuiCol_Text), icon);
-  if (tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
-    ImGui::BeginTooltip();
-    ImGui::TextUnformatted(tooltip);
-    ImGui::EndTooltip();
-  }
-  return ImGui::IsItemClicked(ImGuiMouseButton_Left);
-}
-
-bool draw_popup_link_button(const char *id, const char *label, const char *icon, ImVec2 size) {
-  ImDrawList *draw_list = ImGui::GetWindowDrawList();
-  const ImVec2 min = ImGui::GetCursorScreenPos();
-  const ImVec2 max(min.x + size.x, min.y + size.y);
-  if (!ImGui::InvisibleButton(id, size)) {
-  }
-  const bool hovered = ImGui::IsItemHovered();
-  const bool held = ImGui::IsItemActive();
-  const ImU32 bg = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
-  const ImU32 border = ImGui::GetColorU32(ImGuiCol_Border);
-  draw_list->AddRectFilled(min, max, bg, ImGui::GetStyle().FrameRounding);
-  draw_list->AddRect(min, max, border, ImGui::GetStyle().FrameRounding, 0, ImGui::GetStyle().FrameBorderSize);
-  const ImVec2 label_size = ImGui::CalcTextSize(label);
-  const ImVec2 icon_size = calc_icon_size(icon);
-  constexpr float left_pad = 10.0f;
-  constexpr float right_pad = 9.0f;
-  draw_list->AddText(ImVec2(std::floor(min.x + left_pad),
-                            std::floor(min.y + (size.y - label_size.y) * 0.5f)),
-                    ImGui::GetColorU32(ImGuiCol_Text), label);
-  draw_icon_glyph(draw_list,
-                  ImVec2(std::floor(min.x + size.x - right_pad - icon_size.x),
-                         std::floor(min.y + (size.y - icon_size.y) * 0.5f)),
-                  ImGui::GetColorU32(ImGuiCol_Text), icon);
-  return ImGui::IsItemClicked(ImGuiMouseButton_Left);
-}
-
 void draw_route_info_popup(AppSession *session, UiState *state, ImVec2 anchor) {
   if (session->route_id.empty()) {
     return;
@@ -543,19 +465,26 @@ void draw_route_info_popup(AppSession *session, UiState *state, ImVec2 anchor) {
 
   const char *copy_icon = icon::CLIPBOARD;
   const char *link_icon = icon::BOX_ARROW_UP_RIGHT;
-  if (draw_popup_icon_button("##copy_route", copy_icon, ImVec2(34.0f, 26.0f), "Copy route")) {
+  const std::string useradmin_label = std::string("Useradmin ") + link_icon;
+  const std::string connect_label = std::string("comma connect ") + link_icon;
+  if (ImGui::Button(copy_icon, ImVec2(34.0f, 26.0f))) {
     ImGui::SetClipboardText(session->route_id.canonical().c_str());
     state->status_text = "Copied route to clipboard";
     state->route_copy_feedback_text = "Copied";
     state->route_copy_feedback_until = ImGui::GetTime() + 1.1;
   }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted("Copy route");
+    ImGui::EndTooltip();
+  }
   ImGui::SameLine();
-  if (draw_popup_link_button("##open_useradmin", "Useradmin", link_icon, ImVec2(132.0f, 26.0f))) {
+  if (ImGui::Button(useradmin_label.c_str(), ImVec2(132.0f, 26.0f))) {
     open_external_url(route_useradmin_url(session->route_id));
     state->status_text = "Opened useradmin";
   }
   ImGui::SameLine();
-  if (draw_popup_link_button("##open_comma_connect", "comma connect", link_icon, ImVec2(156.0f, 26.0f))) {
+  if (ImGui::Button(connect_label.c_str(), ImVec2(156.0f, 26.0f))) {
     open_external_url(route_connect_url(session->route_id));
     state->status_text = "Opened comma connect";
   }
@@ -699,11 +628,10 @@ void draw_route_id_chip(AppSession *session, UiState *state) {
                              ImGui::GetColorU32(info_hovered ? color_rgb(220, 229, 240) : color_rgb(239, 243, 248)));
   draw_list->AddCircle(info_center, info_size * 0.5f, chip_border, 20, 1.0f);
   const char *info_text = icon::INFO_CIRCLE;
-  const ImVec2 info_text_size = calc_icon_size(info_text);
-  draw_icon_glyph(draw_list,
-                  ImVec2(std::floor(info_center.x - info_text_size.x * 0.5f),
-                         std::floor(info_center.y - info_text_size.y * 0.5f)),
-                  route_chip_part_color(0, true), info_text);
+  const ImVec2 info_text_size = ImGui::CalcTextSize(info_text);
+  draw_list->AddText(ImVec2(std::floor(info_center.x - info_text_size.x * 0.5f),
+                            std::floor(info_center.y - info_text_size.y * 0.5f)),
+                     route_chip_part_color(0, true), info_text);
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
     ImGui::BeginTooltip();
     ImGui::TextUnformatted("Route details");

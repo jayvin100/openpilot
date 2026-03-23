@@ -27,7 +27,6 @@ struct UiMetrics {
   float status_bar_y = 0.0f;
 };
 
-const fs::path &repo_root();
 fs::path resolve_layout_path(const std::string &layout_arg);
 fs::path autosave_path_for_layout(const fs::path &layout_path);
 std::vector<std::string> available_layout_names();
@@ -46,7 +45,6 @@ bool apply_axis_limits_editor(AppSession *session, UiState *state);
 
 void refresh_replaced_layout_ui(AppSession *session, UiState *state, bool mark_docks);
 void start_new_layout(AppSession *session, UiState *state, const std::string &status_text = "New untitled layout");
-void apply_dbc_override_change(AppSession *session, UiState *state, const std::string &dbc_override);
 
 void app_push_bold_font();
 void app_pop_bold_font();
@@ -68,7 +66,6 @@ void reset_shared_range(UiState *state, const AppSession &session);
 void update_follow_range(UiState *state, const AppSession &session);
 void advance_playback(UiState *state, const AppSession &session);
 void step_tracker(UiState *state, double direction);
-void show_hover_tooltip(const char *text);
 std::string dbc_combo_label(const AppSession &session);
 std::string layout_combo_label(const AppSession &session, const UiState &state);
 const char *log_selector_name(LogSelector selector);
