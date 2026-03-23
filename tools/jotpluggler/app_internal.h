@@ -1,0 +1,101 @@
+#pragma once
+
+#include "tools/jotpluggler/app_common.h"
+#include "tools/jotpluggler/app_map.h"
+
+#include <filesystem>
+
+namespace fs = std::filesystem;
+struct GLFWwindow;
+
+inline constexpr float SIDEBAR_WIDTH = 320.0f;
+inline constexpr float SIDEBAR_MIN_WIDTH = 220.0f;
+inline constexpr float SIDEBAR_MAX_WIDTH = 520.0f;
+inline constexpr float TIMELINE_BAR_HEIGHT = 14.0f;
+inline constexpr float STATUS_BAR_HEIGHT = 52.0f;
+inline constexpr double MIN_HORIZONTAL_ZOOM_SECONDS = 2.0;
+
+struct UiMetrics {
+  float width = 0.0f;
+  float height = 0.0f;
+  float top_offset = 0.0f;
+  float sidebar_width = SIDEBAR_WIDTH;
+  float content_x = 0.0f;
+  float content_y = 0.0f;
+  float content_w = 0.0f;
+  float content_h = 0.0f;
+  float status_bar_y = 0.0f;
+};
+
+const fs::path &repo_root();
+fs::path resolve_layout_path(const std::string &layout_arg);
+fs::path autosave_path_for_layout(const fs::path &layout_path);
+std::vector<std::string> available_layout_names();
+void run_or_throw(const std::string &command, const std::string &action);
+
+SketchLayout make_empty_layout();
+void cancel_rename_tab(UiState *state);
+void sync_ui_state(UiState *state, const SketchLayout &layout);
+void sync_route_buffers(UiState *state, const AppSession &session);
+void sync_stream_buffers(UiState *state, const AppSession &session);
+void sync_layout_buffers(UiState *state, const AppSession &session);
+void mark_all_docks_dirty(UiState *state);
+void clear_layout_autosave(const AppSession &session);
+bool autosave_layout(AppSession *session, UiState *state);
+bool apply_axis_limits_editor(AppSession *session, UiState *state);
+
+void refresh_replaced_layout_ui(AppSession *session, UiState *state, bool mark_docks);
+void start_new_layout(AppSession *session, UiState *state, const std::string &status_text = "New untitled layout");
+void apply_dbc_override_change(AppSession *session, UiState *state, const std::string &dbc_override);
+
+void app_push_bold_font();
+void app_pop_bold_font();
+
+UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset, float sidebar_width);
+void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed);
+void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state);
+void draw_pane_windows(AppSession *session, UiState *state);
+
+const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path);
+void sync_camera_feeds(AppSession *session);
+void apply_route_data(AppSession *session, UiState *state, RouteData route_data);
+bool apply_undo(AppSession *session, UiState *state);
+bool apply_redo(AppSession *session, UiState *state);
+bool infer_stream_follow_state(const UiState &state, const AppSession &session);
+void ensure_shared_range(UiState *state, const AppSession &session);
+void clamp_shared_range(UiState *state, const AppSession &session);
+void reset_shared_range(UiState *state, const AppSession &session);
+void update_follow_range(UiState *state, const AppSession &session);
+void advance_playback(UiState *state, const AppSession &session);
+void step_tracker(UiState *state, double direction);
+void show_hover_tooltip(const char *text);
+std::string dbc_combo_label(const AppSession &session);
+std::string layout_combo_label(const AppSession &session, const UiState &state);
+const char *log_selector_name(LogSelector selector);
+const char *log_selector_description(LogSelector selector);
+std::string format_cache_bytes(uint64_t bytes);
+MapCacheStats directory_cache_stats(const fs::path &root);
+float draw_main_menu_bar(AppSession *session, UiState *state);
+
+bool reset_layout(AppSession *session, UiState *state);
+bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg);
+bool save_layout(AppSession *session, UiState *state, const std::string &layout_path);
+void rebuild_session_route_data(AppSession *session, UiState *state,
+                                const RouteLoadProgressCallback &progress = {});
+void stop_stream_session(AppSession *session, UiState *state, bool preserve_data = true);
+bool start_stream_session(AppSession *session,
+                          UiState *state,
+                          const std::string &address,
+                          double buffer_seconds,
+                          bool preserve_existing_data = false);
+void start_async_route_load(AppSession *session, UiState *state);
+void poll_async_route_load(AppSession *session, UiState *state);
+bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir);
+void draw_popups(AppSession *session, UiState *state);
+
+void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *state);
+void draw_sidebar_resizer(const UiMetrics &ui, UiState *state);
+
+void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch batch);
+
+void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const fs::path *capture_path);

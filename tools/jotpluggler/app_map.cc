@@ -1,4 +1,5 @@
 #include "tools/jotpluggler/jotpluggler.h"
+#include "tools/jotpluggler/app_common.h"
 #include "tools/jotpluggler/app_map.h"
 
 #include <GLFW/glfw3.h>
@@ -374,18 +375,7 @@ std::optional<GpsPoint> interpolate_gps(const GpsTrace &trace, double time_value
 }
 
 ImU32 map_timeline_color(TimelineEntry::Type type, float alpha = 1.0f) {
-  switch (type) {
-    case TimelineEntry::Type::Engaged:
-      return ImGui::GetColorU32(color_rgb(0, 163, 108, alpha));
-    case TimelineEntry::Type::AlertInfo:
-      return ImGui::GetColorU32(color_rgb(255, 195, 0, alpha));
-    case TimelineEntry::Type::AlertWarning:
-    case TimelineEntry::Type::AlertCritical:
-      return ImGui::GetColorU32(color_rgb(199, 0, 57, alpha));
-    case TimelineEntry::Type::None:
-    default:
-      return ImGui::GetColorU32(color_rgb(140, 150, 165, alpha));
-  }
+  return timeline_entry_color(type, alpha, {140, 150, 165});
 }
 
 ImVec2 gps_to_screen(double lat, double lon, double zoom, double top_left_x, double top_left_y, const ImVec2 &rect_min) {
@@ -540,36 +530,6 @@ std::string percent_encode(std::string_view text) {
     }
   }
   return out;
-}
-
-std::string route_google_maps_url(const GpsTrace &trace) {
-  if (trace.points.size() < 2) return {};
-  auto coord = [](const GpsPoint &p) {
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.5f,%.5f", p.lat, p.lon);
-    return std::string(buf);
-  };
-  std::string url = "https://www.google.com/maps/dir/?api=1&travelmode=driving&origin="
-                  + coord(trace.points.front()) + "&destination=" + coord(trace.points.back());
-  const size_t n = std::min<size_t>(9, trace.points.size() > 2 ? trace.points.size() - 2 : 0);
-  if (n > 0) {
-    url += "&waypoints=";
-    for (size_t i = 0; i < n; ++i) {
-      if (i) url += "%7C";
-      url += coord(trace.points[1 + ((trace.points.size() - 2) * (i + 1)) / (n + 1)]);
-    }
-  }
-  return url;
-}
-
-void open_external_url(std::string_view url) {
-#ifdef __APPLE__
-  const std::string command = "open " + shell_quote(url) + " &";
-#else
-  const std::string command = "xdg-open " + shell_quote(url) + " >/dev/null 2>&1 &";
-#endif
-  const int ret = std::system(command.c_str());
-  (void)ret;
 }
 
 std::string bbox_string(const GeoBounds &bounds) {

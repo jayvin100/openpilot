@@ -1,5 +1,11 @@
-#include "tools/jotpluggler/app_stream_flow.cc"
+#include "tools/jotpluggler/app_internal.h"
 
+#include "imgui_internal.h"
+
+#include <array>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path) {
@@ -8,15 +14,10 @@ const RouteSeries *app_find_route_series(const AppSession &session, const std::s
 }
 
 void sync_camera_feeds(AppSession *session) {
-  const std::array<std::pair<CameraViewKind, CameraFeedIndex RouteData::*>, 4> views = {{
-    {CameraViewKind::Road, &RouteData::road_camera},
-    {CameraViewKind::Driver, &RouteData::driver_camera},
-    {CameraViewKind::WideRoad, &RouteData::wide_road_camera},
-    {CameraViewKind::QRoad, &RouteData::qroad_camera},
-  }};
+  const auto &views = camera_view_specs();
   for (size_t i = 0; i < views.size(); ++i) {
     if (session->pane_camera_feeds[i]) {
-      session->pane_camera_feeds[i]->setCameraIndex(session->route_data.*(views[i].second), views[i].first);
+      session->pane_camera_feeds[i]->setCameraIndex(session->route_data.*(views[i].route_member), views[i].view);
     }
   }
 }
@@ -357,50 +358,6 @@ std::string format_duration_short(double seconds) {
   char buf[32];
   std::snprintf(buf, sizeof(buf), "%d:%02d.%03d", minutes, secs, millis);
   return buf;
-}
-
-std::string route_useradmin_url(const RouteIdentifier &route_id) {
-  return route_id.empty() ? std::string()
-                          : "https://useradmin.comma.ai/?onebox=" + route_id.dongle_id + "%7C" + route_id.log_id;
-}
-
-std::string route_connect_url(const RouteIdentifier &route_id) {
-  return route_id.empty() ? std::string()
-                          : "https://connect.comma.ai/" + route_id.canonical();
-}
-
-std::string route_google_maps_url(const GpsTrace &trace) {
-  if (trace.points.size() < 2) {
-    return {};
-  }
-  auto coord = [](const GpsPoint &p) {
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.5f,%.5f", p.lat, p.lon);
-    return std::string(buf);
-  };
-  const std::string prefix = "https://www.google.com/maps/dir/?api=1&travelmode=driving&origin="
-                           + coord(trace.points.front()) + "&destination=" + coord(trace.points.back());
-  for (size_t n = std::min<size_t>(9, trace.points.size() > 2 ? trace.points.size() - 2 : 0); ; --n) {
-    std::string url = prefix;
-    if (n > 0) {
-      url += "&waypoints=";
-      for (size_t i = 0; i < n; ++i) {
-        if (i) url += "%7C";
-        url += coord(trace.points[1 + ((trace.points.size() - 2) * (i + 1)) / (n + 1)]);
-      }
-    }
-    if (url.size() <= 1900 || n == 0) return url;
-  }
-}
-
-void open_external_url(std::string_view url) {
-#ifdef __APPLE__
-  const std::string command = "open " + shell_quote(url) + " &";
-#else
-  const std::string command = "xdg-open " + shell_quote(url) + " >/dev/null 2>&1 &";
-#endif
-  const int ret = std::system(command.c_str());
-  (void)ret;
 }
 
 bool apply_route_identifier(AppSession *session, UiState *state, const RouteIdentifier &route_id, const char *status_text) {

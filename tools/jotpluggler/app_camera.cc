@@ -30,7 +30,7 @@ bool draw_camera_fit_toggle_overlay(bool fit_to_pane) {
 }  // namespace
 
 void draw_camera_pane(AppSession *session, UiState *state, TabUiState *tab_state, int pane_index, const Pane &pane) {
-  SidebarCameraFeed *feed = session->pane_camera_feeds[static_cast<size_t>(pane.camera_view)].get();
+  CameraFeedView *feed = session->pane_camera_feeds[static_cast<size_t>(pane.camera_view)].get();
   if (feed == nullptr) {
     ImGui::TextDisabled("Camera unavailable");
     return;

@@ -1,3 +1,5 @@
+#include "tools/jotpluggler/app_internal.h"
+
 template <typename Cmp, typename SeriesAccessor, typename LogAccessor>
 std::optional<double> stream_batch_extreme_time(const StreamExtractBatch &batch,
                                                 Cmp cmp,

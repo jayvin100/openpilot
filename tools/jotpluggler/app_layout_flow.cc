@@ -1,3 +1,8 @@
+#include "tools/jotpluggler/app_internal.h"
+#include "system/hardware/hw.h"
+
+#include <unistd.h>
+
 bool reset_layout(AppSession *session, UiState *state) {
   try {
     if (session->layout_path.empty()) {
@@ -9,10 +14,7 @@ bool reset_layout(AppSession *session, UiState *state) {
     state->layout_dirty = false;
     session->autosave_path = autosave_path_for_layout(session->layout_path);
     state->undo.reset(session->layout);
-    state->tabs.clear();
-    cancel_rename_tab(state);
-    sync_ui_state(state, session->layout);
-    sync_layout_buffers(state, *session);
+    refresh_replaced_layout_ui(session, state, false);
     reset_shared_range(state, *session);
     state->status_text = "Reset layout";
     return true;
@@ -36,11 +38,7 @@ bool reload_layout(AppSession *session, UiState *state, const std::string &layou
     session->layout_path = layout_path;
     state->layout_dirty = load_draft;
     state->undo.reset(session->layout);
-    cancel_rename_tab(state);
-    state->tabs.clear();
-    sync_ui_state(state, session->layout);
-    sync_layout_buffers(state, *session);
-    mark_all_docks_dirty(state);
+    refresh_replaced_layout_ui(session, state, true);
     if (preserve_shared_range) {
       state->has_shared_range = true;
       state->x_view_min = preserved_x_min;
@@ -86,7 +84,7 @@ bool save_layout(AppSession *session, UiState *state, const std::string &layout_
 }
 
 void rebuild_session_route_data(AppSession *session, UiState *state,
-                                const RouteLoadProgressCallback &progress = {}) {
+                                const RouteLoadProgressCallback &progress) {
   apply_route_data(session, state, load_route_data(session->route_name, session->data_dir, session->dbc_override, progress));
 }
 

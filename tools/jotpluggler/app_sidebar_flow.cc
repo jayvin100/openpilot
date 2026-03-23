@@ -1,47 +1,9 @@
+#include "tools/jotpluggler/app_internal.h"
+
 std::string dbc_combo_label(const AppSession &session) {
   if (!session.dbc_override.empty()) return session.dbc_override;
   if (!session.route_data.dbc_name.empty()) return "Auto: " + session.route_data.dbc_name;
   return "Auto";
-}
-
-ImU32 timeline_entry_color(TimelineEntry::Type type, float alpha = 1.0f) {
-  switch (type) {
-    case TimelineEntry::Type::Engaged:
-      return ImGui::GetColorU32(color_rgb(0, 163, 108, alpha));
-    case TimelineEntry::Type::AlertInfo:
-      return ImGui::GetColorU32(color_rgb(255, 195, 0, alpha));
-    case TimelineEntry::Type::AlertWarning:
-    case TimelineEntry::Type::AlertCritical:
-      return ImGui::GetColorU32(color_rgb(199, 0, 57, alpha));
-    case TimelineEntry::Type::None:
-    default:
-      return ImGui::GetColorU32(color_rgb(111, 143, 175, alpha));
-  }
-}
-
-const char *timeline_entry_label(TimelineEntry::Type type) {
-  switch (type) {
-    case TimelineEntry::Type::Engaged:
-      return "engaged";
-    case TimelineEntry::Type::AlertInfo:
-      return "alert info";
-    case TimelineEntry::Type::AlertWarning:
-      return "alert warning";
-    case TimelineEntry::Type::AlertCritical:
-      return "alert critical";
-    case TimelineEntry::Type::None:
-    default:
-      return "disengaged";
-  }
-}
-
-TimelineEntry::Type timeline_type_at_time(const RouteData &route_data, double time_value) {
-  for (const TimelineEntry &entry : route_data.timeline) {
-    if (time_value >= entry.start_time && time_value <= entry.end_time) {
-      return entry.type;
-    }
-  }
-  return TimelineEntry::Type::None;
 }
 
 float timeline_time_to_x(double time_value, double route_min, double route_max, float x_min, float x_max) {
@@ -177,7 +139,7 @@ void draw_timeline_bar_contents(const AppSession &session, UiState *state, float
       ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     }
     ImGui::BeginTooltip();
-    ImGui::Text("t=%.1fs — %s", mouse_time, timeline_entry_label(timeline_type_at_time(session.route_data, mouse_time)));
+    ImGui::Text("t=%.1fs — %s", mouse_time, timeline_entry_label(timeline_type_at_time(session.route_data.timeline, mouse_time)));
     ImGui::EndTooltip();
   }
 }

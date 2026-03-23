@@ -1,12 +1,16 @@
+#include "tools/jotpluggler/app_internal.h"
+
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+#include "imgui_impl_opengl3_loader.h"
+
+#include <GLFW/glfw3.h>
+
+#include <cstdio>
+#include <fstream>
+
 bool default_fps_overlay_enabled() {
-  static const bool enabled = []() {
-    const char *raw = std::getenv("JOTP_SHOW_FPS");
-    if (raw == nullptr || raw[0] == '\0') {
-      return false;
-    }
-    const std::string value = lowercase(trim_copy(raw));
-    return !(value == "0" || value == "false" || value == "no" || value == "off");
-  }();
+  static const bool enabled = env_flag_enabled("JOTP_SHOW_FPS");
   return enabled;
 }
 
@@ -69,7 +73,7 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
     state->playback_playing = !state->playback_playing;
   }
   advance_playback(state, *session);
-  SidebarCameraFeed *sidebar_camera = session->pane_camera_feeds[static_cast<size_t>(sidebar_preview_camera_view(*session))].get();
+  CameraFeedView *sidebar_camera = session->pane_camera_feeds[static_cast<size_t>(sidebar_preview_camera_view(*session))].get();
   if (show_camera_feed && sidebar_camera != nullptr && state->has_tracker_time) {
     sidebar_camera->update(state->tracker_time);
   }

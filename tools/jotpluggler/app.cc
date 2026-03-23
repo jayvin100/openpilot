@@ -1,5 +1,7 @@
 #include "tools/jotpluggler/jotpluggler.h"
 #include "tools/jotpluggler/app_camera.h"
+#include "tools/jotpluggler/app_common.h"
+#include "tools/jotpluggler/app_internal.h"
 #include "tools/jotpluggler/app_map.h"
 #include "system/hardware/hw.h"
 #include "imgui_impl_glfw.h"
@@ -30,33 +32,11 @@
 
 #include "third_party/json11/json11.hpp"
 
-namespace fs = std::filesystem;
-
-
 constexpr const char *UNTITLED_PANE_TITLE = "...";
-
-constexpr float SIDEBAR_WIDTH = 320.0f;
-constexpr float SIDEBAR_MIN_WIDTH = 220.0f;
-constexpr float SIDEBAR_MAX_WIDTH = 520.0f;
-constexpr float TIMELINE_BAR_HEIGHT = 14.0f;
-constexpr float STATUS_BAR_HEIGHT = 52.0f;
-constexpr double MIN_HORIZONTAL_ZOOM_SECONDS = 2.0;
 constexpr double PLOT_Y_PAD_FRACTION = 0.4;
 ImFont *g_ui_font = nullptr;
 ImFont *g_ui_bold_font = nullptr;
 ImFont *g_mono_font = nullptr;
-
-struct UiMetrics {
-  float width = 0.0f;
-  float height = 0.0f;
-  float top_offset = 0.0f;
-  float sidebar_width = SIDEBAR_WIDTH;
-  float content_x = 0.0f;
-  float content_y = 0.0f;
-  float content_w = 0.0f;
-  float content_h = 0.0f;
-  float status_bar_y = 0.0f;
-};
 
 struct PlotBounds {
   double x_min = 0.0;
@@ -197,33 +177,24 @@ void run_or_throw(const std::string &command, const std::string &action) {
   if (ret != 0) throw std::runtime_error(action + " failed with exit code " + std::to_string(ret));
 }
 
-bool reload_layout(AppSession *session, UiState *state, const std::string &layout_arg);
-bool reload_session(AppSession *session, UiState *state, const std::string &route_name, const std::string &data_dir);
-void reset_shared_range(UiState *state, const AppSession &session);
-SketchLayout make_empty_layout();
-void cancel_rename_tab(UiState *state);
-void sync_ui_state(UiState *state, const SketchLayout &layout);
-void sync_layout_buffers(UiState *state, const AppSession &session);
-void mark_all_docks_dirty(UiState *state);
-bool start_stream_session(AppSession *session,
-                          UiState *state,
-                          const std::string &address,
-                          double buffer_seconds,
-                          bool preserve_existing_data = false);
-void stop_stream_session(AppSession *session, UiState *state, bool preserve_data = true);
+void refresh_replaced_layout_ui(AppSession *session, UiState *state, bool mark_docks) {
+  state->tabs.clear();
+  cancel_rename_tab(state);
+  sync_ui_state(state, session->layout);
+  sync_layout_buffers(state, *session);
+  if (mark_docks) {
+    mark_all_docks_dirty(state);
+  }
+}
 
-void start_new_layout(AppSession *session, UiState *state, const std::string &status_text = "New untitled layout") {
+void start_new_layout(AppSession *session, UiState *state, const std::string &status_text) {
   session->layout = make_empty_layout();
   session->layout_path.clear();
   session->autosave_path.clear();
   state->undo.reset(session->layout);
   state->layout_dirty = false;
   state->status_text = status_text;
-  state->tabs.clear();
-  cancel_rename_tab(state);
-  sync_ui_state(state, session->layout);
-  sync_layout_buffers(state, *session);
-  mark_all_docks_dirty(state);
+  refresh_replaced_layout_ui(session, state, true);
   reset_shared_range(state, *session);
 }
 
@@ -755,49 +726,9 @@ bool active_tab_has_map_pane(const SketchLayout &layout) {
   const int tab_index = std::clamp(layout.current_tab_index, 0, static_cast<int>(layout.tabs.size()) - 1);
   const WorkspaceTab &tab = layout.tabs[static_cast<size_t>(tab_index)];
   return std::any_of(tab.panes.begin(), tab.panes.end(), [](const Pane &pane) {
-    return pane.kind == PaneKind::Map || pane.kind == PaneKind::Camera;
+    return pane_is_special(pane);
   });
 }
-
-const char *camera_view_label(CameraViewKind view) {
-  switch (view) {
-    case CameraViewKind::Driver: return "Driver Camera";
-    case CameraViewKind::WideRoad: return "Wide Road Camera";
-    case CameraViewKind::QRoad: return "qRoad Camera";
-    case CameraViewKind::Road:
-    default: return "Road Camera";
-  }
-}
-
-CameraViewKind sidebar_preview_camera_view(const AppSession &session) {
-  return session.route_data.road_camera.entries.empty() && !session.route_data.qroad_camera.entries.empty()
-    ? CameraViewKind::QRoad
-    : CameraViewKind::Road;
-}
-
-std::optional<CameraViewKind> camera_view_from_special_item(std::string_view item_id) {
-  if (item_id == "camera_road") return CameraViewKind::Road;
-  if (item_id == "camera_driver") return CameraViewKind::Driver;
-  if (item_id == "camera_wide_road") return CameraViewKind::WideRoad;
-  if (item_id == "camera_qroad") return CameraViewKind::QRoad;
-  return std::nullopt;
-}
-
-const char *special_item_label(std::string_view item_id) {
-  if (item_id == "map") return "Map";
-  if (const auto view = camera_view_from_special_item(item_id)) {
-    return camera_view_label(*view);
-  }
-  return "Item";
-}
-
-constexpr std::array<std::pair<const char *, const char *>, 5> kBrowserSpecialItems = {{
-  {"map", "Map"},
-  {"camera_road", "Road Camera"},
-  {"camera_driver", "Driver Camera"},
-  {"camera_wide_road", "Wide Road Camera"},
-  {"camera_qroad", "qRoad Camera"},
-}};
 
 void draw_browser_special_item(const char *item_id, const char *label) {
   const ImGuiStyle &style = ImGui::GetStyle();
@@ -843,10 +774,6 @@ std::array<uint8_t, 3> app_next_curve_color(const Pane &pane) {
   return PALETTE[pane.curves.size() % PALETTE.size()];
 }
 
-#include "tools/jotpluggler/app_session_flow.cc"
-
-#include "tools/jotpluggler/app_sidebar_flow.cc"
-
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed) {
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.top_offset));
   ImGui::SetNextWindowSize(ImVec2(ui.sidebar_width, std::max(1.0f, ui.height - ui.top_offset)));
@@ -860,7 +787,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
     const RouteLoadSnapshot load = session->route_loader ? session->route_loader->snapshot() : RouteLoadSnapshot{};
     const bool show_load_progress = session->route_loader && (load.active || load.total_segments > 0);
     const bool streaming = session->data_mode == SessionDataMode::Stream;
-    SidebarCameraFeed *sidebar_camera = session->pane_camera_feeds[static_cast<size_t>(sidebar_preview_camera_view(*session))].get();
+    CameraFeedView *sidebar_camera = session->pane_camera_feeds[static_cast<size_t>(sidebar_preview_camera_view(*session))].get();
     if (show_camera_feed && sidebar_camera != nullptr) {
       sidebar_camera->draw(ImGui::GetContentRegionAvail().x, load.active);
     } else if (streaming) {
@@ -974,8 +901,8 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       for (const BrowserNode &node : session->browser_nodes) {
         collect_visible_leaf_paths(node, filter, &visible_paths);
       }
-      for (const auto &[item_id, label] : kBrowserSpecialItems) {
-        draw_browser_special_item(item_id, label);
+      for (const SpecialItemSpec &spec : special_item_specs()) {
+        draw_browser_special_item(spec.id, spec.label);
       }
       ImGui::Dummy(ImVec2(0.0f, 2.0f));
       ImGui::Separator();
@@ -1031,11 +958,7 @@ bool add_curve_to_pane(WorkspaceTab *tab, int pane_index, Curve curve) {
   Pane &pane = tab->panes[static_cast<size_t>(pane_index)];
   if (pane.kind != PaneKind::Plot) {
     pane.kind = PaneKind::Plot;
-    if (pane.title == "Map"
-        || pane.title == camera_view_label(CameraViewKind::Road)
-        || pane.title == camera_view_label(CameraViewKind::Driver)
-        || pane.title == camera_view_label(CameraViewKind::WideRoad)
-        || pane.title == camera_view_label(CameraViewKind::QRoad)) {
+    if (is_default_special_title(pane.title)) {
       pane.title = UNTITLED_PANE_TITLE;
     }
   }
@@ -1125,7 +1048,7 @@ bool pane_is_empty_for_special_item(const Pane &pane) {
 }
 
 bool pane_can_accept_special_item(const Pane &pane) {
-  return pane_is_empty_for_special_item(pane) || pane.kind == PaneKind::Map || pane.kind == PaneKind::Camera;
+  return pane_is_empty_for_special_item(pane) || pane_kind_is_special(pane.kind);
 }
 
 bool convert_pane_to_map(WorkspaceTab *tab, TabUiState *tab_state, int pane_index) {
@@ -1139,7 +1062,7 @@ bool convert_pane_to_map(WorkspaceTab *tab, TabUiState *tab_state, int pane_inde
   }
   pane.kind = PaneKind::Map;
   if (pane.title == UNTITLED_PANE_TITLE || previous_kind != PaneKind::Plot) {
-    pane.title = "Map";
+    pane.title = special_item_label("map");
   }
   tab_state->active_pane_index = pane_index;
   return true;
@@ -1155,7 +1078,7 @@ bool convert_pane_to_camera(WorkspaceTab *tab, TabUiState *tab_state, int pane_i
   }
   pane.kind = PaneKind::Camera;
   pane.camera_view = view;
-  pane.title = camera_view_label(view);
+  pane.title = camera_view_spec(view).label;
   resize_tab_pane_state(tab_state, tab->panes.size());
   tab_state->camera_panes[static_cast<size_t>(pane_index)].fit_to_pane = true;
   tab_state->active_pane_index = pane_index;
@@ -2497,8 +2420,8 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
       bool changed = false;
       if (action.special_item_id == "map") {
         changed = convert_pane_to_map(tab, tab_state, action.target_pane_index);
-      } else if (const auto view = camera_view_from_special_item(action.special_item_id)) {
-        changed = convert_pane_to_camera(tab, tab_state, action.target_pane_index, *view);
+      } else if (const CameraViewSpec *spec = camera_view_spec_from_special_item(action.special_item_id)) {
+        changed = convert_pane_to_camera(tab, tab_state, action.target_pane_index, spec->view);
       } else {
         return false;
       }
@@ -2520,8 +2443,8 @@ bool apply_pane_drop_action(AppSession *session, UiState *state, const PaneDropA
       bool changed = false;
       if (action.special_item_id == "map") {
         changed = convert_pane_to_map(tab, tab_state, tab_state->active_pane_index);
-      } else if (const auto view = camera_view_from_special_item(action.special_item_id)) {
-        changed = convert_pane_to_camera(tab, tab_state, tab_state->active_pane_index, *view);
+      } else if (const CameraViewSpec *spec = camera_view_spec_from_special_item(action.special_item_id)) {
+        changed = convert_pane_to_camera(tab, tab_state, tab_state->active_pane_index, spec->view);
       }
       if (!changed) {
         return false;
@@ -2938,10 +2861,6 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
   ImGui::PopStyleColor(2);
 }
 
-#include "tools/jotpluggler/app_layout_flow.cc"
-
-#include "tools/jotpluggler/app_render_flow.cc"
-
 int run(const Options &options) {
   try {
   const fs::path layout_path = options.layout.empty() ? fs::path() : resolve_layout_path(options.layout);
@@ -2982,8 +2901,8 @@ int run(const Options &options) {
   ImGuiRuntime imgui_runtime(glfw_runtime.window());
   configure_style();
   session.map_data = std::make_unique<MapDataManager>();
-  for (std::unique_ptr<SidebarCameraFeed> &feed : session.pane_camera_feeds) {
-    feed = std::make_unique<SidebarCameraFeed>();
+  for (std::unique_ptr<CameraFeedView> &feed : session.pane_camera_feeds) {
+    feed = std::make_unique<CameraFeedView>();
   }
   sync_camera_feeds(&session);
 
@@ -3027,7 +2946,7 @@ int run(const Options &options) {
     session.stream_poller->stop();
   }
   session.map_data.reset();
-  for (std::unique_ptr<SidebarCameraFeed> &feed : session.pane_camera_feeds) {
+  for (std::unique_ptr<CameraFeedView> &feed : session.pane_camera_feeds) {
     feed.reset();
   }
   return 0;

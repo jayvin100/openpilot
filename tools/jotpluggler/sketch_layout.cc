@@ -1,4 +1,5 @@
 #include "tools/jotpluggler/jotpluggler.h"
+#include "tools/jotpluggler/app_common.h"
 
 #include <capnp/dynamic.h>
 
@@ -834,12 +835,8 @@ Pane parse_dock_area(const json11::Json &dock_area_node) {
   } else if (kind == "camera") {
     pane.kind = PaneKind::Camera;
     const std::string camera_view = dock_area_node["camera_view"].string_value();
-    if (camera_view == "driver") {
-      pane.camera_view = CameraViewKind::Driver;
-    } else if (camera_view == "wide_road") {
-      pane.camera_view = CameraViewKind::WideRoad;
-    } else if (camera_view == "qroad") {
-      pane.camera_view = CameraViewKind::QRoad;
+    if (const CameraViewSpec *spec = camera_view_spec_from_layout_name(camera_view)) {
+      pane.camera_view = spec->view;
     } else {
       pane.camera_view = CameraViewKind::Road;
     }
@@ -1530,15 +1527,6 @@ std::optional<double> sample_series_at_time(const RouteSeries &series, double tm
   }
   const double alpha = (tm - t0) / (t1 - t0);
   return v0 + (v1 - v0) * alpha;
-}
-
-TimelineEntry::Type timeline_type_at_time(const std::vector<TimelineEntry> &timeline, double tm) {
-  for (const TimelineEntry &entry : timeline) {
-    if (tm >= entry.start_time && tm <= entry.end_time) {
-      return entry.type;
-    }
-  }
-  return TimelineEntry::Type::None;
 }
 
 }  // namespace

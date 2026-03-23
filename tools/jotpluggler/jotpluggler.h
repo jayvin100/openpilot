@@ -392,7 +392,7 @@ bool icon_menu_item(const char *glyph,
 // *****
 
 class AsyncRouteLoader;
-class SidebarCameraFeed;
+class CameraFeedView;
 class StreamPoller;
 class MapDataManager;
 
@@ -423,7 +423,7 @@ struct AppSession {
   std::vector<BrowserNode> browser_nodes;
   std::unique_ptr<AsyncRouteLoader> route_loader;
   std::unique_ptr<StreamPoller> stream_poller;
-  std::array<std::unique_ptr<SidebarCameraFeed>, 4> pane_camera_feeds;
+  std::array<std::unique_ptr<CameraFeedView>, 4> pane_camera_feeds;
   std::unique_ptr<MapDataManager> map_data;
   bool async_route_loading = false;
   double next_stream_custom_refresh_time = 0.0;
@@ -878,13 +878,13 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-class SidebarCameraFeed {
+class CameraFeedView {
 public:
-  SidebarCameraFeed();
-  ~SidebarCameraFeed();
+  CameraFeedView();
+  ~CameraFeedView();
 
-  SidebarCameraFeed(const SidebarCameraFeed &) = delete;
-  SidebarCameraFeed &operator=(const SidebarCameraFeed &) = delete;
+  CameraFeedView(const CameraFeedView &) = delete;
+  CameraFeedView &operator=(const CameraFeedView &) = delete;
 
   void setRouteData(const RouteData &route_data);
   void setCameraIndex(const CameraFeedIndex &camera_index, CameraViewKind view);

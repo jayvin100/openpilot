@@ -1,4 +1,5 @@
 #include "tools/jotpluggler/jotpluggler.h"
+#include "tools/jotpluggler/app_common.h"
 
 #include "cereal/services.h"
 #include "imgui_impl_glfw.h"
@@ -35,23 +36,8 @@ namespace {
 std::atomic<bool> g_glfw_alive{false};
 
 bool camera_timing_logging_enabled() {
-  static const bool enabled = []() {
-    const char *raw = std::getenv("JOTP_CAMERA_TIMINGS");
-    if (raw == nullptr || raw[0] == '\0') return false;
-    const std::string value = lowercase(trim_copy(raw));
-    return !(value == "0" || value == "false" || value == "no" || value == "off");
-  }();
+  static const bool enabled = env_flag_enabled("JOTP_CAMERA_TIMINGS");
   return enabled;
-}
-
-const char *camera_view_name(CameraViewKind view) {
-  switch (view) {
-    case CameraViewKind::Driver: return "driver";
-    case CameraViewKind::WideRoad: return "wide";
-    case CameraViewKind::QRoad: return "qroad";
-    case CameraViewKind::Road:
-    default: return "road";
-  }
 }
 
 CameraType decoder_camera_type(CameraViewKind view) {
@@ -614,7 +600,7 @@ bool StreamPoller::consume(StreamExtractBatch *batch, std::string *error_text) {
   return impl_->consume(batch, error_text);
 }
 
-struct SidebarCameraFeed::Impl {
+struct CameraFeedView::Impl {
   struct RequestKey {
     int segment = -1;
     int decode_index = -1;
@@ -943,7 +929,7 @@ struct SidebarCameraFeed::Impl {
     }
     if (result.success && result.decode_ms > 0.0 && camera_timing_logging_enabled()) {
       std::fprintf(stderr, "camera[%s] seg=%d idx=%d %.1fms\n",
-                   camera_view_name(camera_view),
+                   camera_view_spec(camera_view).runtime_name,
                    result.key.segment,
                    result.key.decode_index,
                    result.decode_ms);
@@ -1070,7 +1056,7 @@ struct SidebarCameraFeed::Impl {
       if (camera_timing_logging_enabled()) {
         const double load_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - load_begin).count();
         std::fprintf(stderr, "camera[%s] %s-load seg=%d %.1fms\n",
-                     camera_view_name(camera_view), reason, segment, load_ms);
+                     camera_view_spec(camera_view).runtime_name, reason, segment, load_ms);
       }
       return reader;
     }
@@ -1223,27 +1209,27 @@ struct SidebarCameraFeed::Impl {
   int frame_height = 0;
 };
 
-SidebarCameraFeed::SidebarCameraFeed()
+CameraFeedView::CameraFeedView()
   : impl_(std::make_unique<Impl>()) {}
 
-SidebarCameraFeed::~SidebarCameraFeed() = default;
+CameraFeedView::~CameraFeedView() = default;
 
-void SidebarCameraFeed::setRouteData(const RouteData &route_data) {
+void CameraFeedView::setRouteData(const RouteData &route_data) {
   impl_->setRouteData(route_data);
 }
 
-void SidebarCameraFeed::setCameraIndex(const CameraFeedIndex &camera_index, CameraViewKind view) {
+void CameraFeedView::setCameraIndex(const CameraFeedIndex &camera_index, CameraViewKind view) {
   impl_->setCameraIndex(camera_index, view);
 }
 
-void SidebarCameraFeed::update(double tracker_time) {
+void CameraFeedView::update(double tracker_time) {
   impl_->update(tracker_time);
 }
 
-void SidebarCameraFeed::draw(float width, bool loading) {
+void CameraFeedView::draw(float width, bool loading) {
   impl_->draw(width, loading);
 }
 
-void SidebarCameraFeed::drawSized(ImVec2 size, bool loading, bool fit_to_pane) {
+void CameraFeedView::drawSized(ImVec2 size, bool loading, bool fit_to_pane) {
   impl_->drawSized(size, loading, fit_to_pane);
 }
