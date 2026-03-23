@@ -1,7 +1,480 @@
 #include "tools/jotpluggler/app_internal.h"
 #include "system/hardware/hw.h"
 
+#include <fstream>
 #include <unistd.h>
+
+namespace {
+
+enum class ModalAction {
+  None,
+  Primary,
+  Secondary,
+};
+
+struct FindSignalMatch {
+  const std::string *path = nullptr;
+  int score = 0;
+};
+
+void open_queued_popup(bool &flag, const char *name) {
+  if (flag) {
+    ImGui::OpenPopup(name);
+    flag = false;
+  }
+}
+
+ModalAction draw_modal_action_row(const char *primary_label,
+                                  const char *secondary_label = "Cancel",
+                                  float width = 120.0f) {
+  if (ImGui::Button(primary_label, ImVec2(width, 0.0f))) {
+    return ModalAction::Primary;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button(secondary_label, ImVec2(width, 0.0f))) {
+    return ModalAction::Secondary;
+  }
+  return ModalAction::None;
+}
+
+std::vector<FindSignalMatch> find_signal_matches(const AppSession &session, std::string_view query) {
+  std::vector<FindSignalMatch> matches;
+  if (query.empty()) {
+    return matches;
+  }
+  const std::string needle = lowercase(query);
+  for (const std::string &path : session.route_data.paths) {
+    const std::string hay = lowercase(path);
+    const size_t pos = hay.find(needle);
+    if (pos == std::string::npos) {
+      continue;
+    }
+    const size_t slash = path.find_last_of('/');
+    const std::string_view label = slash == std::string::npos ? std::string_view(path) : std::string_view(path).substr(slash + 1);
+    int score = static_cast<int>(pos * 8 + path.size());
+    if (lowercase(label) == needle) score -= 60;
+    if (hay.rfind(needle, 0) == 0) score -= 30;
+    matches.push_back({.path = &path, .score = score});
+  }
+  std::sort(matches.begin(), matches.end(), [](const FindSignalMatch &a, const FindSignalMatch &b) {
+    return std::tie(a.score, *a.path) < std::tie(b.score, *b.path);
+  });
+  if (matches.size() > 200) {
+    matches.resize(200);
+  }
+  return matches;
+}
+
+bool open_find_signal_result(AppSession *session, UiState *state, const std::string &path) {
+  for (const CabanaMessageSummary &message : session->cabana_messages) {
+    const auto signal_it = std::find_if(message.signals.begin(), message.signals.end(), [&](const CabanaSignalSummary &signal) {
+      return signal.path == path;
+    });
+    if (signal_it != message.signals.end()) {
+      state->view_mode = AppViewMode::Cabana;
+      state->cabana.selected_message_root = message.root_path;
+      state->cabana.chart_signal_paths = {path};
+      state->cabana.has_bit_selection = false;
+      state->cabana.similar_bit_matches.clear();
+      state->status_text = "Opened signal in Cabana";
+      return true;
+    }
+  }
+
+  state->view_mode = AppViewMode::Plot;
+  state->selected_browser_paths = {path};
+  state->selected_browser_path = path;
+  state->browser_selection_anchor = path;
+  state->status_text = "Selected signal " + path;
+  return true;
+}
+
+void draw_open_route_popup(AppSession *session, UiState *state) {
+  if (!ImGui::BeginPopupModal("Open Route", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  ImGui::TextUnformatted("Load a route into the current layout.");
+  ImGui::Separator();
+  ImGui::InputText("Route", state->route_buffer.data(), state->route_buffer.size());
+  ImGui::InputText("Data Dir", state->data_dir_buffer.data(), state->data_dir_buffer.size());
+  ImGui::Spacing();
+  switch (draw_modal_action_row("Load")) {
+    case ModalAction::Primary:
+      reload_session(session, state, std::string(state->route_buffer.data()), std::string(state->data_dir_buffer.data()));
+      ImGui::CloseCurrentPopup();
+      break;
+    case ModalAction::Secondary:
+      sync_route_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+      break;
+    case ModalAction::None:
+      break;
+  }
+  ImGui::EndPopup();
+}
+
+void draw_stream_popup(AppSession *session, UiState *state) {
+  if (!ImGui::BeginPopupModal("Live Stream", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  ImGui::TextUnformatted("Connect to live cereal services.");
+  ImGui::Separator();
+  if (ImGui::RadioButton("Local (MSGQ)", !state->stream_remote)) {
+    state->stream_remote = false;
+  }
+  if (ImGui::RadioButton("Remote (ZMQ)", state->stream_remote)) {
+    state->stream_remote = true;
+  }
+  ImGui::BeginDisabled(!state->stream_remote);
+  ImGui::InputText("Address", state->stream_address_buffer.data(), state->stream_address_buffer.size());
+  ImGui::EndDisabled();
+  ImGui::InputDouble("Buffer (seconds)", &state->stream_buffer_seconds, 0.0, 0.0, "%.0f");
+  ImGui::Spacing();
+  switch (draw_modal_action_row("Connect")) {
+    case ModalAction::Primary: {
+      const std::string address = state->stream_remote ? std::string(state->stream_address_buffer.data()) : "127.0.0.1";
+      if (start_stream_session(session, state, address, state->stream_buffer_seconds, false)) {
+        ImGui::CloseCurrentPopup();
+      }
+      break;
+    }
+    case ModalAction::Secondary:
+      sync_stream_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+      break;
+    case ModalAction::None:
+      break;
+  }
+  ImGui::EndPopup();
+}
+
+void draw_load_layout_popup(AppSession *session, UiState *state) {
+  if (!ImGui::BeginPopupModal("Load Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  ImGui::TextUnformatted("Load a JotPlugger JSON layout.");
+  ImGui::Separator();
+  ImGui::InputText("Layout", state->load_layout_buffer.data(), state->load_layout_buffer.size());
+  ImGui::Spacing();
+  switch (draw_modal_action_row("Load")) {
+    case ModalAction::Primary:
+      if (reload_layout(session, state, std::string(state->load_layout_buffer.data()))) {
+        ImGui::CloseCurrentPopup();
+      }
+      break;
+    case ModalAction::Secondary:
+      sync_layout_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+      break;
+    case ModalAction::None:
+      break;
+  }
+  ImGui::EndPopup();
+}
+
+void draw_save_layout_popup(AppSession *session, UiState *state) {
+  if (!ImGui::BeginPopupModal("Save Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  ImGui::TextUnformatted("Save the current workspace as a JotPlugger JSON layout.");
+  ImGui::Separator();
+  ImGui::InputText("Layout", state->save_layout_buffer.data(), state->save_layout_buffer.size());
+  ImGui::Spacing();
+  switch (draw_modal_action_row("Save")) {
+    case ModalAction::Primary:
+      if (save_layout(session, state, std::string(state->save_layout_buffer.data()))) {
+        ImGui::CloseCurrentPopup();
+      }
+      break;
+    case ModalAction::Secondary:
+      sync_layout_buffers(state, *session);
+      ImGui::CloseCurrentPopup();
+      break;
+    case ModalAction::None:
+      break;
+  }
+  ImGui::EndPopup();
+}
+
+void draw_preferences_popup(AppSession *session, UiState *state) {
+  if (!ImGui::BeginPopupModal("Preferences", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  if (session->map_data) {
+    const MapCacheStats map_cache = session->map_data->cacheStats();
+    const MapCacheStats download_cache = directory_cache_stats(Path::download_cache_root());
+    ImGui::TextUnformatted("Map");
+    ImGui::Separator();
+    ImGui::Text("Map cache: %s in %zu file%s",
+                format_cache_bytes(map_cache.bytes).c_str(),
+                map_cache.files,
+                map_cache.files == 1 ? "" : "s");
+    if (ImGui::Button("Clear Map Cache", ImVec2(120.0f, 0.0f))) {
+      session->map_data->clearCache();
+      state->status_text = "Cleared map cache";
+    }
+    ImGui::Spacing();
+    ImGui::TextUnformatted("comma Download Cache");
+    ImGui::Separator();
+    ImGui::Text("Download cache: %s in %zu file%s",
+                format_cache_bytes(download_cache.bytes).c_str(),
+                download_cache.files,
+                download_cache.files == 1 ? "" : "s");
+    ImGui::TextDisabled("%s", Path::download_cache_root().c_str());
+    ImGui::Spacing();
+  }
+  if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+}
+
+void draw_find_signal_popup(AppSession *session, UiState *state) {
+  if (!ImGui::BeginPopupModal("Find Signal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  ImGui::TextUnformatted("Search decoded signals across the loaded route.");
+  ImGui::Separator();
+  ImGui::SetNextItemWidth(560.0f);
+  ImGui::InputTextWithHint("##find_signal_query", "Search signal path or name...", state->find_signal_buffer.data(), state->find_signal_buffer.size());
+  if (ImGui::IsWindowAppearing()) {
+    ImGui::SetKeyboardFocusHere(-1);
+  }
+  const std::vector<FindSignalMatch> matches = find_signal_matches(*session, state->find_signal_buffer.data());
+  ImGui::Spacing();
+  ImGui::TextDisabled("%zu match%s", matches.size(), matches.size() == 1 ? "" : "es");
+  if (ImGui::BeginChild("##find_signal_results", ImVec2(760.0f, 360.0f), true)) {
+    for (const FindSignalMatch &match : matches) {
+      const std::string &path = *match.path;
+      const size_t slash = path.find_last_of('/');
+      const std::string_view label = slash == std::string::npos ? std::string_view(path) : std::string_view(path).substr(slash + 1);
+      if (ImGui::Selectable((std::string(label) + "##" + path).c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
+        if (open_find_signal_result(session, state, path)) {
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      ImGui::SameLine(280.0f);
+      ImGui::TextDisabled("%s", path.c_str());
+    }
+  }
+  ImGui::EndChild();
+  ImGui::Spacing();
+  if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+}
+
+const fs::path &repo_root() {
+  static const fs::path root = []() {
+#ifdef JOTP_REPO_ROOT
+    return fs::path(JOTP_REPO_ROOT);
+#else
+    return fs::current_path();
+#endif
+  }();
+  return root;
+}
+
+std::string default_dbc_template() {
+  return "VERSION \"\"\n\nNS_ :\nBS_:\nBU_: XXX\n";
+}
+
+std::string active_dbc_name(const AppSession &session) {
+  return !session.dbc_override.empty() ? session.dbc_override : session.route_data.dbc_name;
+}
+
+fs::path generated_dbc_dir() {
+  return repo_root() / "tools" / "jotpluggler" / "generated_dbcs";
+}
+
+fs::path resolve_dbc_editor_source(const std::string &dbc_name) {
+  for (const fs::path &candidate : {
+         repo_root() / "opendbc" / "dbc" / (dbc_name + ".dbc"),
+         generated_dbc_dir() / (dbc_name + ".dbc"),
+       }) {
+    if (fs::exists(candidate)) {
+      return candidate;
+    }
+  }
+  return {};
+}
+
+std::string read_text_file(const fs::path &path) {
+  std::ifstream in(path);
+  if (!in.is_open()) {
+    throw std::runtime_error("Failed to open " + path.string());
+  }
+  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+void load_dbc_editor_state(const AppSession &session, UiState *state) {
+  DbcEditorState &editor = state->dbc_editor;
+  const std::string dbc_name = active_dbc_name(session);
+  editor.source_name = dbc_name.empty() ? "untitled" : dbc_name;
+  editor.source_path.clear();
+  if (dbc_name.empty()) {
+    editor.save_name = "custom_can";
+    editor.text = default_dbc_template();
+  } else {
+    const fs::path path = resolve_dbc_editor_source(dbc_name);
+    editor.source_path = path.string();
+    editor.text = path.empty() ? default_dbc_template() : read_text_file(path);
+    editor.save_name = path.string().find("/generated_dbcs/") != std::string::npos ? dbc_name : dbc_name + "_edited";
+  }
+  editor.loaded = true;
+}
+
+bool save_dbc_editor_contents(AppSession *session, UiState *state) {
+  DbcEditorState &editor = state->dbc_editor;
+  editor.save_name = trim_copy(editor.save_name);
+  if (editor.save_name.empty()) {
+    state->error_text = "DBC name cannot be empty";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (!editor.source_path.empty()
+      && editor.source_path.find("/opendbc/dbc/") != std::string::npos
+      && editor.save_name == editor.source_name) {
+    state->error_text = "Save edited opendbc files under a new name";
+    state->open_error_popup = true;
+    return false;
+  }
+  try {
+    dbc::Database::fromContent(editor.text, editor.save_name + ".dbc");
+    fs::create_directories(generated_dbc_dir());
+    const fs::path output = generated_dbc_dir() / (editor.save_name + ".dbc");
+    std::ofstream out(output);
+    if (!out.is_open()) {
+      throw std::runtime_error("Failed to open " + output.string());
+    }
+    out << editor.text;
+    if (!out.good()) {
+      throw std::runtime_error("Failed while writing " + output.string());
+    }
+    apply_dbc_override_change(session, state, editor.save_name);
+    editor.source_name = editor.save_name;
+    editor.source_path = output.string();
+    editor.loaded = false;
+    state->status_text = "Saved DBC " + editor.save_name;
+    return true;
+  } catch (const std::exception &err) {
+    state->error_text = err.what();
+    state->open_error_popup = true;
+    return false;
+  }
+}
+
+void draw_dbc_editor_popup(AppSession *session, UiState *state) {
+  if (!ImGui::BeginPopupModal("DBC Editor", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  DbcEditorState &editor = state->dbc_editor;
+  if (!editor.loaded) {
+    load_dbc_editor_state(*session, state);
+  }
+  ImGui::TextUnformatted("Edit DBC text and save it into generated_dbcs.");
+  ImGui::Separator();
+  ImGui::SetNextItemWidth(260.0f);
+  input_text_string("DBC Name", &editor.save_name, ImGuiInputTextFlags_AutoSelectAll);
+  if (!editor.source_path.empty()) {
+    ImGui::TextDisabled("%s", editor.source_path.c_str());
+  } else {
+    ImGui::TextDisabled("New in-memory DBC");
+  }
+  ImGui::Spacing();
+  input_text_multiline_string("##dbc_editor_text", &editor.text, ImVec2(920.0f, 520.0f), ImGuiInputTextFlags_AllowTabInput);
+  ImGui::Spacing();
+  if (ImGui::Button("Apply + Save", ImVec2(140.0f, 0.0f))) {
+    if (save_dbc_editor_contents(session, state)) {
+      ImGui::CloseCurrentPopup();
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Reload Source", ImVec2(140.0f, 0.0f))) {
+    editor.loaded = false;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+    editor.loaded = false;
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+}
+
+void draw_axis_limits_popup(AppSession *session, UiState *state) {
+  if (!ImGui::BeginPopupModal("Edit Axis Limits", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  const WorkspaceTab *tab = app_active_tab(session->layout, *state);
+  const bool valid_pane = tab != nullptr
+    && state->axis_limits.pane_index >= 0
+    && state->axis_limits.pane_index < static_cast<int>(tab->panes.size());
+  if (!valid_pane) {
+    ImGui::TextWrapped("The selected pane is no longer available.");
+    ImGui::Spacing();
+    if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+      state->axis_limits.pane_index = -1;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+    return;
+  }
+
+  ImGui::TextUnformatted("X range applies to the active tab. Y limits apply to the selected pane.");
+  ImGui::Separator();
+  ImGui::TextUnformatted("Horizontal");
+  ImGui::SetNextItemWidth(180.0f);
+  ImGui::InputDouble("X Min", &state->axis_limits.x_min, 0.0, 0.0, "%.3f");
+  ImGui::SetNextItemWidth(180.0f);
+  ImGui::InputDouble("X Max", &state->axis_limits.x_max, 0.0, 0.0, "%.3f");
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Vertical");
+  ImGui::Checkbox("Use Y Min", &state->axis_limits.y_min_enabled);
+  ImGui::BeginDisabled(!state->axis_limits.y_min_enabled);
+  ImGui::SetNextItemWidth(180.0f);
+  ImGui::InputDouble("Y Min", &state->axis_limits.y_min, 0.0, 0.0, "%.6g");
+  ImGui::EndDisabled();
+  ImGui::Checkbox("Use Y Max", &state->axis_limits.y_max_enabled);
+  ImGui::BeginDisabled(!state->axis_limits.y_max_enabled);
+  ImGui::SetNextItemWidth(180.0f);
+  ImGui::InputDouble("Y Max", &state->axis_limits.y_max, 0.0, 0.0, "%.6g");
+  ImGui::EndDisabled();
+  ImGui::Spacing();
+  switch (draw_modal_action_row("Apply")) {
+    case ModalAction::Primary:
+      if (apply_axis_limits_editor(session, state)) {
+        state->axis_limits.pane_index = -1;
+        ImGui::CloseCurrentPopup();
+      }
+      break;
+    case ModalAction::Secondary:
+      state->axis_limits.pane_index = -1;
+      ImGui::CloseCurrentPopup();
+      break;
+    case ModalAction::None:
+      break;
+  }
+  ImGui::EndPopup();
+}
+
+void draw_error_popup(UiState *state) {
+  if (state->open_error_popup) {
+    ImGui::OpenPopup("Error");
+    state->open_error_popup = false;
+  }
+  if (!ImGui::BeginPopupModal("Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    return;
+  }
+  ImGui::TextWrapped("%s", state->error_text.c_str());
+  ImGui::Spacing();
+  if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+}
+
+}  // namespace
 
 bool reset_layout(AppSession *session, UiState *state) {
   try {
@@ -212,183 +685,28 @@ bool reload_session(AppSession *session, UiState *state, const std::string &rout
 }
 
 void draw_popups(AppSession *session, UiState *state) {
-  auto open_popup = [](bool &flag, const char *name) {
-    if (flag) { ImGui::OpenPopup(name); flag = false; }
-  };
-  open_popup(state->open_open_route, "Open Route");
-  if (state->open_stream) { sync_stream_buffers(state, *session); }
-  open_popup(state->open_stream, "Live Stream");
-  if (state->open_load_layout || state->open_save_layout) { sync_layout_buffers(state, *session); }
-  open_popup(state->open_load_layout, "Load Layout");
-  open_popup(state->open_save_layout, "Save Layout");
-  open_popup(state->open_preferences, "Preferences");
-  open_popup(state->axis_limits.open, "Edit Axis Limits");
+  open_queued_popup(state->open_open_route, "Open Route");
+  if (state->open_stream) {
+    sync_stream_buffers(state, *session);
+  }
+  open_queued_popup(state->open_stream, "Live Stream");
+  if (state->open_load_layout || state->open_save_layout) {
+    sync_layout_buffers(state, *session);
+  }
+  open_queued_popup(state->open_load_layout, "Load Layout");
+  open_queued_popup(state->open_save_layout, "Save Layout");
+  open_queued_popup(state->open_preferences, "Preferences");
+  open_queued_popup(state->dbc_editor.open, "DBC Editor");
+  open_queued_popup(state->open_find_signal, "Find Signal");
+  open_queued_popup(state->axis_limits.open, "Edit Axis Limits");
 
-  if (ImGui::BeginPopupModal("Open Route", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Load a route into the current layout.");
-    ImGui::Separator();
-    ImGui::InputText("Route", state->route_buffer.data(), state->route_buffer.size());
-    ImGui::InputText("Data Dir", state->data_dir_buffer.data(), state->data_dir_buffer.size());
-    ImGui::Spacing();
-    if (ImGui::Button("Load", ImVec2(120.0f, 0.0f))) {
-      reload_session(session, state, std::string(state->route_buffer.data()), std::string(state->data_dir_buffer.data()));
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-      sync_route_buffers(state, *session);
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-  if (ImGui::BeginPopupModal("Live Stream", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Connect to live cereal services.");
-    ImGui::Separator();
-    if (ImGui::RadioButton("Local (MSGQ)", !state->stream_remote)) {
-      state->stream_remote = false;
-    }
-    if (ImGui::RadioButton("Remote (ZMQ)", state->stream_remote)) {
-      state->stream_remote = true;
-    }
-    ImGui::BeginDisabled(!state->stream_remote);
-    ImGui::InputText("Address", state->stream_address_buffer.data(), state->stream_address_buffer.size());
-    ImGui::EndDisabled();
-    ImGui::InputDouble("Buffer (seconds)", &state->stream_buffer_seconds, 0.0, 0.0, "%.0f");
-    ImGui::Spacing();
-    if (ImGui::Button("Connect", ImVec2(120.0f, 0.0f))) {
-      const std::string address = state->stream_remote ? std::string(state->stream_address_buffer.data()) : "127.0.0.1";
-      if (start_stream_session(session, state, address, state->stream_buffer_seconds, false)) {
-        ImGui::CloseCurrentPopup();
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-      sync_stream_buffers(state, *session);
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-  if (ImGui::BeginPopupModal("Load Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Load a JotPlugger JSON layout.");
-    ImGui::Separator();
-    ImGui::InputText("Layout", state->load_layout_buffer.data(), state->load_layout_buffer.size());
-    ImGui::Spacing();
-    if (ImGui::Button("Load", ImVec2(120.0f, 0.0f))) {
-      if (reload_layout(session, state, std::string(state->load_layout_buffer.data()))) {
-        ImGui::CloseCurrentPopup();
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-      sync_layout_buffers(state, *session);
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-  if (ImGui::BeginPopupModal("Save Layout", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Save the current workspace as a JotPlugger JSON layout.");
-    ImGui::Separator();
-    ImGui::InputText("Layout", state->save_layout_buffer.data(), state->save_layout_buffer.size());
-    ImGui::Spacing();
-    if (ImGui::Button("Save", ImVec2(120.0f, 0.0f))) {
-      if (save_layout(session, state, std::string(state->save_layout_buffer.data()))) {
-        ImGui::CloseCurrentPopup();
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-      sync_layout_buffers(state, *session);
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-  if (ImGui::BeginPopupModal("Preferences", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    if (session->map_data) {
-      const MapCacheStats map_cache = session->map_data->cacheStats();
-      const MapCacheStats download_cache = directory_cache_stats(Path::download_cache_root());
-      ImGui::TextUnformatted("Map");
-      ImGui::Separator();
-      ImGui::Text("Map cache: %s in %zu file%s",
-                  format_cache_bytes(map_cache.bytes).c_str(),
-                  map_cache.files,
-                  map_cache.files == 1 ? "" : "s");
-      if (ImGui::Button("Clear Map Cache", ImVec2(120.0f, 0.0f))) {
-        session->map_data->clearCache();
-        state->status_text = "Cleared map cache";
-      }
-      ImGui::Spacing();
-      ImGui::TextUnformatted("comma Download Cache");
-      ImGui::Separator();
-      ImGui::Text("Download cache: %s in %zu file%s",
-                  format_cache_bytes(download_cache.bytes).c_str(),
-                  download_cache.files,
-                  download_cache.files == 1 ? "" : "s");
-      ImGui::TextDisabled("%s", Path::download_cache_root().c_str());
-      ImGui::Spacing();
-    }
-    if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-  if (ImGui::BeginPopupModal("Edit Axis Limits", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    const WorkspaceTab *tab = app_active_tab(session->layout, *state);
-    const bool valid_pane = tab != nullptr
-      && state->axis_limits.pane_index >= 0
-      && state->axis_limits.pane_index < static_cast<int>(tab->panes.size());
-    if (!valid_pane) {
-      ImGui::TextWrapped("The selected pane is no longer available.");
-      ImGui::Spacing();
-      if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
-        state->axis_limits.pane_index = -1;
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::EndPopup();
-    } else {
-      ImGui::TextUnformatted("X range applies to the active tab. Y limits apply to the selected pane.");
-      ImGui::Separator();
-      ImGui::TextUnformatted("Horizontal");
-      ImGui::SetNextItemWidth(180.0f);
-      ImGui::InputDouble("X Min", &state->axis_limits.x_min, 0.0, 0.0, "%.3f");
-      ImGui::SetNextItemWidth(180.0f);
-      ImGui::InputDouble("X Max", &state->axis_limits.x_max, 0.0, 0.0, "%.3f");
-      ImGui::Spacing();
-      ImGui::TextUnformatted("Vertical");
-      ImGui::Checkbox("Use Y Min", &state->axis_limits.y_min_enabled);
-      ImGui::BeginDisabled(!state->axis_limits.y_min_enabled);
-      ImGui::SetNextItemWidth(180.0f);
-      ImGui::InputDouble("Y Min", &state->axis_limits.y_min, 0.0, 0.0, "%.6g");
-      ImGui::EndDisabled();
-      ImGui::Checkbox("Use Y Max", &state->axis_limits.y_max_enabled);
-      ImGui::BeginDisabled(!state->axis_limits.y_max_enabled);
-      ImGui::SetNextItemWidth(180.0f);
-      ImGui::InputDouble("Y Max", &state->axis_limits.y_max, 0.0, 0.0, "%.6g");
-      ImGui::EndDisabled();
-      ImGui::Spacing();
-      if (ImGui::Button("Apply", ImVec2(120.0f, 0.0f))) {
-        if (apply_axis_limits_editor(session, state)) {
-          state->axis_limits.pane_index = -1;
-          ImGui::CloseCurrentPopup();
-        }
-      }
-      ImGui::SameLine();
-      if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-        state->axis_limits.pane_index = -1;
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::EndPopup();
-    }
-  }
-  if (state->open_error_popup) {
-    ImGui::OpenPopup("Error");
-    state->open_error_popup = false;
-  }
-  if (ImGui::BeginPopupModal("Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextWrapped("%s", state->error_text.c_str());
-    ImGui::Spacing();
-    if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
+  draw_open_route_popup(session, state);
+  draw_stream_popup(session, state);
+  draw_load_layout_popup(session, state);
+  draw_save_layout_popup(session, state);
+  draw_preferences_popup(session, state);
+  draw_dbc_editor_popup(session, state);
+  draw_find_signal_popup(session, state);
+  draw_axis_limits_popup(session, state);
+  draw_error_popup(state);
 }

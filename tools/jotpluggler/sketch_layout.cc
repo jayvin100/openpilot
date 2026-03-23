@@ -16,6 +16,7 @@
 #include <set>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 
@@ -102,13 +103,16 @@ struct SeriesAccumulator {
 
   std::vector<RouteSeries> fixed_series;
   std::vector<RouteSeries> dynamic_series;
+  std::vector<CanMessageData> can_messages;
   std::unordered_map<std::string, size_t> dynamic_slots;
   std::unordered_map<std::string, std::vector<size_t>> list_scalar_slots;
+  std::unordered_map<CanMessageId, size_t, CanMessageIdHash> can_message_slots;
   std::unordered_map<std::string, EnumInfo> enum_info;
 };
 
 struct LoadedRouteArtifacts {
   std::vector<RouteSeries> series;
+  std::vector<CanMessageData> can_messages;
   std::vector<LogEntry> logs;
   std::vector<TimelineEntry> timeline;
   std::unordered_map<std::string, EnumInfo> enum_info;
@@ -1098,6 +1102,30 @@ void append_fixed_scalar_point(RouteSeries *series, double tm, double value) {
   series->values.push_back(value);
 }
 
+CanMessageData *ensure_can_message(CanServiceKind service, uint8_t bus, uint32_t address, SeriesAccumulator *series) {
+  const CanMessageId id{service, bus, address};
+  auto [it, inserted] = series->can_message_slots.try_emplace(id, series->can_messages.size());
+  if (inserted) {
+    series->can_messages.push_back(CanMessageData{.id = id});
+  }
+  return &series->can_messages[it->second];
+}
+
+void append_can_frame(CanServiceKind service,
+                      uint8_t bus,
+                      uint32_t address,
+                      uint16_t bus_time,
+                      capnp::Data::Reader dat,
+                      double tm,
+                      SeriesAccumulator *series) {
+  CanMessageData *message = ensure_can_message(service, bus, address, series);
+  message->samples.push_back(CanFrameSample{
+    .mono_time = tm,
+    .bus_time = bus_time,
+    .data = std::string(reinterpret_cast<const char *>(dat.begin()), dat.size()),
+  });
+}
+
 SeriesAccumulator make_series_accumulator(const SchemaIndex &schema) {
   SeriesAccumulator out(schema.fixed_series_count);
   for (size_t i = 0; i < schema.fixed_paths.size(); ++i) {
@@ -1243,7 +1271,10 @@ void append_event_fast(cereal::Event::Which which,
   append_fixed_scalar_point(&series->fixed_series[static_cast<size_t>(service.seconds_slot)],
                             tm,
                             tm);
-  if (skip_raw_can && (service.service_name == "can" || service.service_name == "sendcan")) {
+  if (service.service_name == "can" || service.service_name == "sendcan") {
+    const CanServiceKind can_service = service.service_name == "can"
+      ? CanServiceKind::Can
+      : CanServiceKind::Sendcan;
     auto decode_message = [&](uint8_t bus, uint32_t address, const auto &dat_reader) {
       if (can_dbc == nullptr) {
         return;
@@ -1271,14 +1302,32 @@ void append_event_fast(cereal::Event::Which which,
     };
     if (service.service_name == "can") {
       for (const auto &msg : event.getCan()) {
+        append_can_frame(can_service,
+                         static_cast<uint8_t>(msg.getSrc()),
+                         msg.getAddress(),
+                         msg.getBusTimeDEPRECATED(),
+                         msg.getDat(),
+                         tm,
+                         series);
+        if (!skip_raw_can) continue;
         decode_message(static_cast<uint8_t>(msg.getSrc()), msg.getAddress(), msg.getDat());
       }
     } else {
       for (const auto &msg : event.getSendcan()) {
+        append_can_frame(can_service,
+                         static_cast<uint8_t>(msg.getSrc()),
+                         msg.getAddress(),
+                         msg.getBusTimeDEPRECATED(),
+                         msg.getDat(),
+                         tm,
+                         series);
+        if (!skip_raw_can) continue;
         decode_message(static_cast<uint8_t>(msg.getSrc()), msg.getAddress(), msg.getDat());
       }
     }
-    return;
+    if (skip_raw_can) {
+      return;
+    }
   }
 
   const capnp::DynamicStruct::Reader dynamic_event(event);
@@ -1320,6 +1369,20 @@ void merge_route_series(RouteSeries *dst, RouteSeries *src) {
   dst->values.insert(dst->values.end(), src->values.begin(), src->values.end());
 }
 
+void merge_can_message_data(CanMessageData *dst, CanMessageData *src) {
+  if (src->samples.empty()) {
+    return;
+  }
+  if (dst->samples.empty()) {
+    *dst = std::move(*src);
+    return;
+  }
+  dst->samples.reserve(dst->samples.size() + src->samples.size());
+  dst->samples.insert(dst->samples.end(),
+                      std::make_move_iterator(src->samples.begin()),
+                      std::make_move_iterator(src->samples.end()));
+}
+
 void merge_series_accumulator(SeriesAccumulator *dst, SeriesAccumulator *src) {
   if (dst->fixed_series.size() != src->fixed_series.size()) {
     throw std::runtime_error("Fixed-series slot count mismatch during merge");
@@ -1332,6 +1395,10 @@ void merge_series_accumulator(SeriesAccumulator *dst, SeriesAccumulator *src) {
     if (series.path.empty()) continue;
     RouteSeries &dst_series = dst->dynamic_series[ensure_dynamic_slot(series.path, dst)];
     merge_route_series(&dst_series, &series);
+  }
+  for (auto &message : src->can_messages) {
+    CanMessageData &dst_message = *ensure_can_message(message.id.service, message.id.bus, message.id.address, dst);
+    merge_can_message_data(&dst_message, &message);
   }
   for (auto &[path, info] : src->enum_info) {
     dst->enum_info.try_emplace(path, std::move(info));
@@ -1395,6 +1462,7 @@ std::vector<RouteSeries> collect_series(SeriesAccumulator &&series) {
 }
 
 RouteData build_route_data(std::vector<RouteSeries> &&series_list,
+                           std::vector<CanMessageData> &&can_messages,
                            std::vector<LogEntry> &&logs,
                            std::vector<TimelineEntry> &&timeline,
                            std::unordered_map<std::string, EnumInfo> &&enum_info,
@@ -1443,6 +1511,21 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list,
     route_data.x_min = route_data.logs.front().mono_time;
     route_data.x_max = route_data.logs.back().mono_time;
   }
+  if (!route_data.has_time_range) {
+    bool initialized = false;
+    for (const CanMessageData &message : can_messages) {
+      if (message.samples.empty()) continue;
+      if (!initialized) {
+        route_data.x_min = message.samples.front().mono_time;
+        route_data.x_max = message.samples.back().mono_time;
+        initialized = true;
+      } else {
+        route_data.x_min = std::min(route_data.x_min, message.samples.front().mono_time);
+        route_data.x_max = std::max(route_data.x_max, message.samples.back().mono_time);
+      }
+    }
+    route_data.has_time_range = initialized;
+  }
   if (!route_data.has_time_range && !timeline.empty()) {
     route_data.has_time_range = true;
     route_data.x_min = timeline.front().start_time;
@@ -1459,6 +1542,11 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list,
     for (LogEntry &entry : route_data.logs) {
       entry.boot_time = entry.mono_time;
       entry.mono_time -= time_offset;
+    }
+    for (CanMessageData &message : can_messages) {
+      for (CanFrameSample &sample : message.samples) {
+        sample.mono_time -= time_offset;
+      }
     }
     for (TimelineEntry &entry : timeline) {
       entry.start_time -= time_offset;
@@ -1481,6 +1569,11 @@ RouteData build_route_data(std::vector<RouteSeries> &&series_list,
     merged_timeline.push_back(std::move(entry));
   }
   route_data.timeline = std::move(merged_timeline);
+  std::sort(can_messages.begin(), can_messages.end(), [](const CanMessageData &a, const CanMessageData &b) {
+    return std::make_tuple(a.id.service, a.id.bus, a.id.address)
+         < std::make_tuple(b.id.service, b.id.bus, b.id.address);
+  });
+  route_data.can_messages = std::move(can_messages);
 
   route_data.enum_info = std::move(enum_info);
   route_data.car_fingerprint = std::move(car_fingerprint);
@@ -1831,6 +1924,7 @@ LoadedRouteArtifacts load_route_series_parallel(
   }
   LoadedRouteArtifacts artifacts;
   artifacts.series = collect_series(std::move(merged));
+  artifacts.can_messages = std::move(merged.can_messages);
   artifacts.logs = std::move(logs);
   artifacts.timeline = std::move(timeline);
   artifacts.enum_info = std::move(merged.enum_info);
@@ -1955,11 +2049,14 @@ StreamExtractBatch StreamAccumulator::takeBatch() {
     batch.time_offset = *impl_->time_offset;
   }
   if (impl_->logs.empty() && impl_->timeline.empty()
-      && populated_series_count(impl_->series) == 0 && impl_->series.enum_info.empty()) {
+      && populated_series_count(impl_->series) == 0
+      && impl_->series.enum_info.empty()
+      && impl_->series.can_messages.empty()) {
     return batch;
   }
 
   SeriesAccumulator emitted = std::move(impl_->series);
+  batch.can_messages = std::move(emitted.can_messages);
   batch.enum_info = std::move(emitted.enum_info);
   batch.series = collect_series(std::move(emitted));
   batch.logs = std::move(impl_->logs);
@@ -2022,6 +2119,7 @@ RouteData load_route_data(const std::string &route_name,
   LoadedRouteArtifacts artifacts = load_route_series_parallel(segments, schema, can_dbc ? &*can_dbc : nullptr,
                                                              route.selector, !resolved_dbc.empty(), &stats);
   RouteData route_data = build_route_data(std::move(artifacts.series),
+                                          std::move(artifacts.can_messages),
                                           std::move(artifacts.logs),
                                           std::move(artifacts.timeline),
                                           std::move(artifacts.enum_info),
@@ -2042,7 +2140,6 @@ RouteIdentifier parse_route_identifier(std::string_view route_name) {
   return make_route_identifier(parse_route_selection(std::string(route_name)), {});
 }
 
-const std::vector<std::string> &available_dbc_names() {
-  static const std::vector<std::string> names = available_dbc_names_impl();
-  return names;
+std::vector<std::string> available_dbc_names() {
+  return available_dbc_names_impl();
 }

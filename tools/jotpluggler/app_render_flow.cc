@@ -43,6 +43,11 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
     state->show_fps_overlay = kDefaultShowFpsOverlay;
     state->fps_overlay_initialized = true;
   }
+  if (!state->view_mode_initialized) {
+    static const bool kDefaultCabanaMode = env_flag_enabled("JOTP_START_CABANA");
+    state->view_mode = kDefaultCabanaMode ? AppViewMode::Cabana : AppViewMode::Plot;
+    state->view_mode_initialized = true;
+  }
   ensure_shared_range(state, *session);
   if (state->follow_latest) {
     update_follow_range(state, *session);
@@ -59,6 +64,9 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
       apply_undo(session, state);
     }
   }
+  if (!ImGui::GetIO().WantTextInput && ctrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+    state->open_find_signal = true;
+  }
   if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
     step_tracker(state, -1.0);
   }
@@ -74,13 +82,21 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
     sidebar_camera->update(state->tracker_time);
   }
   const float menu_height = draw_main_menu_bar(session, state);
-  const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height, state->sidebar_width);
-  state->sidebar_width = ui.sidebar_width;
-  draw_sidebar(session, ui, state, show_camera_feed);
-  draw_workspace(session, ui, state);
-  draw_sidebar_resizer(ui, state);
-  if (!state->custom_series.selected && !state->logs.selected) {
-    draw_pane_windows(session, state);
+  const bool cabana_mode = state->view_mode == AppViewMode::Cabana;
+  const UiMetrics ui = compute_ui_metrics(ImGui::GetMainViewport()->Size, menu_height,
+                                          cabana_mode ? 0.0f : state->sidebar_width);
+  if (!cabana_mode) {
+    state->sidebar_width = ui.sidebar_width;
+    draw_sidebar(session, ui, state, show_camera_feed);
+    draw_workspace(session, ui, state);
+    draw_sidebar_resizer(ui, state);
+    if (!state->custom_series.selected && !state->logs.selected) {
+      draw_pane_windows(session, state);
+    }
+  } else {
+    state->custom_series.selected = false;
+    state->logs.selected = false;
+    draw_cabana_mode(session, ui, state);
   }
   draw_status_bar(*session, ui, state);
   draw_popups(session, state);

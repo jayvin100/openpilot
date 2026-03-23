@@ -1,5 +1,7 @@
 #include "tools/jotpluggler/app_internal.h"
 
+#include <tuple>
+
 template <typename Cmp, typename SeriesAccessor, typename LogAccessor>
 std::optional<double> stream_batch_extreme_time(const StreamExtractBatch &batch,
                                                 Cmp cmp,
@@ -19,6 +21,12 @@ std::optional<double> stream_batch_extreme_time(const StreamExtractBatch &batch,
   if (!batch.timeline.empty()) {
     const double t = cmp(batch.timeline.front().start_time, batch.timeline.back().end_time);
     result = result.has_value() ? cmp(*result, t) : t;
+  }
+  for (const CanMessageData &message : batch.can_messages) {
+    if (!message.samples.empty()) {
+      const double t = cmp(message.samples.front().mono_time, message.samples.back().mono_time);
+      result = result.has_value() ? cmp(*result, t) : t;
+    }
   }
   return result;
 }
@@ -56,6 +64,11 @@ void append_stream_timeline_entries(std::vector<TimelineEntry> *timeline, std::v
       timeline->push_back(std::move(entry));
     }
   }
+}
+
+bool can_message_less(const CanMessageData &a, const CanMessageData &b) {
+  return std::make_tuple(a.id.service, a.id.bus, a.id.address)
+       < std::make_tuple(b.id.service, b.id.bus, b.id.address);
 }
 
 void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch batch) {
@@ -117,6 +130,24 @@ void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch 
     append_stream_timeline_entries(&session->route_data.timeline, std::move(batch.timeline));
   }
 
+  bool can_messages_changed = false;
+  for (CanMessageData &incoming : batch.can_messages) {
+    auto it = std::lower_bound(session->route_data.can_messages.begin(),
+                               session->route_data.can_messages.end(),
+                               incoming,
+                               can_message_less);
+    if (it == session->route_data.can_messages.end()
+        || can_message_less(incoming, *it)
+        || can_message_less(*it, incoming)) {
+      session->route_data.can_messages.insert(it, std::move(incoming));
+    } else {
+      it->samples.insert(it->samples.end(),
+                         std::make_move_iterator(incoming.samples.begin()),
+                         std::make_move_iterator(incoming.samples.end()));
+    }
+    can_messages_changed = true;
+  }
+
   if (new_paths) {
     const size_t old_path_count = session->route_data.paths.size() - new_series.size();
     std::sort(session->route_data.paths.begin() + static_cast<ptrdiff_t>(old_path_count), session->route_data.paths.end());
@@ -140,6 +171,9 @@ void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch 
       const bool enum_like = session->route_data.enum_info.find(path) != session->route_data.enum_info.end();
       session->route_data.series_formats[path] = compute_series_format(series_it->second->values, enum_like);
     }
+  }
+  if (new_paths || can_messages_changed) {
+    rebuild_cabana_messages(session);
   }
 
   const std::optional<double> earliest_time = earliest_stream_batch_time(batch);

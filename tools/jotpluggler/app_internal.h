@@ -4,9 +4,53 @@
 #include "tools/jotpluggler/app_map.h"
 
 #include <filesystem>
+#include <optional>
 
 namespace fs = std::filesystem;
 struct GLFWwindow;
+
+enum class PaneDropZone {
+  Center,
+  Left,
+  Right,
+  Top,
+  Bottom,
+};
+
+enum class PaneMenuActionKind {
+  None,
+  OpenAxisLimits,
+  OpenCustomSeries,
+  SplitLeft,
+  SplitRight,
+  SplitTop,
+  SplitBottom,
+  ResetView,
+  ResetHorizontal,
+  ResetVertical,
+  Clear,
+  Close,
+};
+
+struct PaneMenuAction {
+  PaneMenuActionKind kind = PaneMenuActionKind::None;
+  int pane_index = -1;
+};
+
+struct PaneCurveDragPayload {
+  int tab_index = -1;
+  int pane_index = -1;
+  int curve_index = -1;
+};
+
+struct PaneDropAction {
+  PaneDropZone zone = PaneDropZone::Center;
+  int target_pane_index = -1;
+  bool from_browser = false;
+  std::vector<std::string> browser_paths;
+  std::string special_item_id;
+  PaneCurveDragPayload curve_ref;
+};
 
 inline constexpr float SIDEBAR_WIDTH = 320.0f;
 inline constexpr float SIDEBAR_MIN_WIDTH = 220.0f;
@@ -42,9 +86,14 @@ void mark_all_docks_dirty(UiState *state);
 void clear_layout_autosave(const AppSession &session);
 bool autosave_layout(AppSession *session, UiState *state);
 bool apply_axis_limits_editor(AppSession *session, UiState *state);
+void open_axis_limits_editor(const AppSession &session, UiState *state, int pane_index);
+void persist_shared_range_to_tab(WorkspaceTab *tab, const UiState &state);
+void clear_pane_vertical_limits(Pane *pane);
 
 void refresh_replaced_layout_ui(AppSession *session, UiState *state, bool mark_docks);
 void start_new_layout(AppSession *session, UiState *state, const std::string &status_text = "New untitled layout");
+void apply_dbc_override_change(AppSession *session, UiState *state, const std::string &dbc_override);
+bool ensure_dbc_editor_loaded(const AppSession &session, UiState *state);
 
 void app_push_bold_font();
 void app_pop_bold_font();
@@ -53,6 +102,18 @@ UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset, float sidebar
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed);
 void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state);
 void draw_pane_windows(AppSession *session, UiState *state);
+void draw_cabana_mode(AppSession *session, const UiMetrics &ui, UiState *state);
+void rebuild_cabana_messages(AppSession *session);
+
+// app_plot.cc
+void draw_plot(const AppSession &session, Pane *pane, UiState *state);
+bool draw_pane_close_button_overlay();
+void draw_pane_frame_overlay();
+std::optional<PaneMenuAction> draw_pane_context_menu(const WorkspaceTab &tab, int pane_index);
+bool curve_has_samples(const AppSession &session, const Curve &curve);
+bool curve_has_local_samples(const Curve &curve);
+std::string app_curve_display_name(const Curve &curve);
+bool mark_layout_dirty(AppSession *session, UiState *state);
 
 const RouteSeries *app_find_route_series(const AppSession &session, const std::string &path);
 void sync_camera_feeds(AppSession *session);

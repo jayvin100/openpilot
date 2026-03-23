@@ -171,6 +171,40 @@ struct SeriesFormat {
   char fmt[16] = "%7.3f";
 };
 
+enum class CanServiceKind : uint8_t {
+  Can,
+  Sendcan,
+};
+
+struct CanMessageId {
+  CanServiceKind service = CanServiceKind::Can;
+  uint8_t bus = 0;
+  uint32_t address = 0;
+
+  bool operator==(const CanMessageId &other) const {
+    return service == other.service && bus == other.bus && address == other.address;
+  }
+};
+
+struct CanMessageIdHash {
+  size_t operator()(const CanMessageId &id) const {
+    return (static_cast<size_t>(id.service) << 40)
+         ^ (static_cast<size_t>(id.bus) << 32)
+         ^ static_cast<size_t>(id.address);
+  }
+};
+
+struct CanFrameSample {
+  double mono_time = 0.0;
+  uint16_t bus_time = 0;
+  std::string data;
+};
+
+struct CanMessageData {
+  CanMessageId id;
+  std::vector<CanFrameSample> samples;
+};
+
 struct TimelineEntry {
   enum class Type : uint8_t {
     None,
@@ -267,6 +301,7 @@ struct RouteData {
   std::vector<RouteSeries> series;
   std::vector<std::string> paths;
   std::vector<std::string> roots;
+  std::vector<CanMessageData> can_messages;
   CameraFeedIndex road_camera;
   CameraFeedIndex driver_camera;
   CameraFeedIndex wide_road_camera;
@@ -286,6 +321,7 @@ struct RouteData {
 
 struct StreamExtractBatch {
   std::vector<RouteSeries> series;
+  std::vector<CanMessageData> can_messages;
   std::vector<LogEntry> logs;
   std::vector<TimelineEntry> timeline;
   std::unordered_map<std::string, EnumInfo> enum_info;
@@ -345,7 +381,7 @@ private:
 };
 
 SketchLayout load_sketch_layout(const std::filesystem::path &layout_path);
-const std::vector<std::string> &available_dbc_names();
+std::vector<std::string> available_dbc_names();
 std::vector<std::string> collect_route_roots_for_paths(const std::vector<std::string> &paths);
 RouteData load_route_data(const std::string &route_name,
                           const std::string &data_dir = {},
@@ -401,10 +437,50 @@ enum class SessionDataMode : uint8_t {
   Stream,
 };
 
+enum class AppViewMode : uint8_t {
+  Plot,
+  Cabana,
+};
+
 struct BrowserNode {
   std::string label;
   std::string full_path;
   std::vector<BrowserNode> children;
+};
+
+struct CabanaSignalSummary {
+  std::string path;
+  std::string name;
+  int start_bit = 0;
+  int msb = 0;
+  int lsb = 0;
+  int size = 0;
+  bool is_little_endian = false;
+  bool has_bit_range = false;
+};
+
+struct CabanaMessageSummary {
+  std::string root_path;
+  std::string service;
+  std::string name;
+  std::vector<CabanaSignalSummary> signals;
+  int bus = -1;
+  uint32_t address = 0;
+  bool has_address = false;
+  size_t sample_count = 0;
+  double frequency_hz = 0.0;
+};
+
+struct CabanaSimilarBitMatch {
+  std::string message_root;
+  std::string label;
+  int bus = -1;
+  uint32_t address = 0;
+  int byte_index = -1;
+  int bit_index = -1;
+  double score = 0.0;
+  double ones_ratio = 0.0;
+  double flip_ratio = 0.0;
 };
 
 struct AppSession {
@@ -421,6 +497,7 @@ struct AppSession {
   RouteData route_data;
   std::unordered_map<std::string, RouteSeries *> series_by_path;
   std::vector<BrowserNode> browser_nodes;
+  std::vector<CabanaMessageSummary> cabana_messages;
   std::unique_ptr<AsyncRouteLoader> route_loader;
   std::unique_ptr<StreamPoller> stream_poller;
   std::array<std::unique_ptr<CameraFeedView>, 4> pane_camera_feeds;
@@ -489,6 +566,25 @@ struct LogsUiState {
   LogTimeMode time_mode = LogTimeMode::Route;
 };
 
+struct CabanaUiState {
+  float messages_width = 340.0f;
+  float right_width = 420.0f;
+  float detail_top_height = 250.0f;
+  float right_top_height = 260.0f;
+  std::array<char, 128> message_filter = {};
+  std::string selected_message_root;
+  std::vector<std::string> chart_signal_paths;
+  int detail_tab = 0;
+  CameraViewKind camera_view = CameraViewKind::Road;
+  bool has_bit_selection = false;
+  int selected_bit_byte = -1;
+  int selected_bit_index = -1;
+  std::string similar_bits_source_root;
+  int similar_bits_source_byte = -1;
+  int similar_bits_source_bit = -1;
+  std::vector<CabanaSimilarBitMatch> similar_bit_matches;
+};
+
 struct AxisLimitsEditorState {
   bool open = false;
   int pane_index = -1;
@@ -498,6 +594,36 @@ struct AxisLimitsEditorState {
   bool y_max_enabled = false;
   double y_min = 0.0;
   double y_max = 1.0;
+};
+
+struct DbcEditorState {
+  bool open = false;
+  bool loaded = false;
+  std::string source_name;
+  std::string source_path;
+  std::string save_name;
+  std::string text;
+};
+
+struct CabanaSignalEditorState {
+  bool open = false;
+  bool loaded = false;
+  std::string message_root;
+  uint32_t message_address = 0;
+  std::string original_signal_name;
+  std::string signal_name;
+  int start_bit = 0;
+  int size = 1;
+  double factor = 1.0;
+  double offset = 0.0;
+  double min = 0.0;
+  double max = 0.0;
+  bool is_signed = false;
+  bool is_little_endian = true;
+  int type = 0;
+  int multiplex_value = 0;
+  std::string receiver_name;
+  std::string unit;
 };
 
 enum class TimelineDragMode : uint8_t {
@@ -558,6 +684,7 @@ struct UiState {
   bool open_load_layout = false;
   bool open_save_layout = false;
   bool open_preferences = false;
+  bool open_find_signal = false;
   bool request_close = false;
   bool request_reset_layout = false;
   bool request_save_layout = false;
@@ -565,6 +692,7 @@ struct UiState {
   bool request_duplicate_tab = false;
   bool request_close_tab = false;
   bool follow_latest = false;
+  bool cabana_mode_initialized = false;
   bool has_shared_range = false;
   bool has_tracker_time = false;
   bool layout_dirty = false;
@@ -573,11 +701,13 @@ struct UiState {
   bool show_deprecated_fields = false;
   bool show_fps_overlay = false;
   bool fps_overlay_initialized = false;
+  bool view_mode_initialized = false;
   bool suppress_range_side_effects = false;
   int active_tab_index = 0;
   int next_tab_runtime_id = 1;
   int requested_tab_index = -1;
   int rename_tab_index = -1;
+  AppViewMode view_mode = AppViewMode::Plot;
   bool focus_rename_tab_input = false;
   std::vector<TabUiState> tabs;
   std::array<char, 128> route_buffer = {};
@@ -587,6 +717,7 @@ struct UiState {
   std::array<char, 512> data_dir_buffer = {};
   std::array<char, 512> load_layout_buffer = {};
   std::array<char, 512> save_layout_buffer = {};
+  std::array<char, 256> find_signal_buffer = {};
   std::string selected_browser_path;
   std::vector<std::string> selected_browser_paths;
   std::string browser_selection_anchor;
@@ -613,6 +744,9 @@ struct UiState {
   double timeline_drag_anchor_x_min = 0.0;
   double timeline_drag_anchor_x_max = 0.0;
   AxisLimitsEditorState axis_limits;
+  DbcEditorState dbc_editor;
+  CabanaSignalEditorState cabana_signal_editor;
+  CabanaUiState cabana;
   CustomSeriesEditorState custom_series;
   LogsUiState logs;
   UndoStack undo;
