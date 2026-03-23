@@ -45,7 +45,7 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   }
   if (!state->view_mode_initialized) {
     static const bool kDefaultCabanaMode = env_flag_enabled("JOTP_START_CABANA");
-    state->view_mode = kDefaultCabanaMode ? AppViewMode::Cabana : AppViewMode::Plot;
+    state->view_mode = (state->start_cabana || kDefaultCabanaMode) ? AppViewMode::Cabana : AppViewMode::Plot;
     state->view_mode_initialized = true;
   }
   ensure_shared_range(state, *session);

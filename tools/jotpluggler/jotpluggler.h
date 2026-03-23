@@ -34,6 +34,7 @@ struct Options {
   bool show = false;
   bool sync_load = false;
   bool stream = false;
+  bool start_cabana = false;
   double stream_buffer_seconds = 30.0;
 };
 
@@ -606,15 +607,22 @@ struct LogsUiState {
 };
 
 struct CabanaUiState {
-  float messages_width = 340.0f;
-  float right_width = 420.0f;
-  float detail_top_height = 250.0f;
-  float right_top_height = 260.0f;
+  float messages_width = 300.0f;
+  float right_width = 320.0f;
+  float detail_top_height = 360.0f;
+  float right_top_height = 240.0f;
   std::array<char, 128> message_filter = {};
+  std::array<char, 96> signal_filter = {};
+  bool suppress_defined_signals = false;
   std::string selected_message_root;
+  std::vector<std::string> open_message_roots;
   std::vector<std::string> chart_signal_paths;
   int detail_tab = 0;
   CameraViewKind camera_view = CameraViewKind::Road;
+  bool heatmap_live_mode = true;
+  bool logs_hex_mode = true;
+  int logs_filter_compare = 0;
+  std::array<char, 48> logs_filter_value = {};
   bool has_bit_selection = false;
   int selected_bit_byte = -1;
   int selected_bit_index = -1;
@@ -747,6 +755,7 @@ struct UiState {
   bool show_fps_overlay = false;
   bool fps_overlay_initialized = false;
   bool view_mode_initialized = false;
+  bool start_cabana = false;
   bool suppress_range_side_effects = false;
   int active_tab_index = 0;
   int next_tab_runtime_id = 1;

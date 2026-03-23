@@ -19,16 +19,20 @@
 namespace {
 
 constexpr float kSplitterThickness = 10.0f;
-constexpr float kMinMessagesWidth = 240.0f;
-constexpr float kMinCenterWidth = 320.0f;
-constexpr float kMinRightWidth = 280.0f;
+constexpr float kMinMessagesWidth = 210.0f;
+constexpr float kMinCenterWidth = 240.0f;
+constexpr float kMinRightWidth = 260.0f;
 constexpr float kMinTopHeight = 140.0f;
 constexpr float kMinBottomHeight = 120.0f;
-constexpr std::array<std::array<uint8_t, 3>, 4> kSignalHighlightColors = {{
+constexpr std::array<std::array<uint8_t, 3>, 8> kSignalHighlightColors = {{
+  {102, 86, 169},
   {69, 137, 255},
   {55, 171, 112},
   {232, 171, 44},
   {198, 89, 71},
+  {92, 155, 181},
+  {134, 172, 79},
+  {150, 112, 63},
 }};
 
 const fs::path &cabana_repo_root() {
@@ -177,6 +181,18 @@ struct BitBehaviorStats {
   size_t samples = 0;
 };
 
+struct BinaryMatrixLayout {
+  size_t byte_count = 0;
+  std::vector<std::vector<int>> cell_signals;
+  std::vector<bool> is_msb;
+  std::vector<bool> is_lsb;
+  size_t overlapping_cells = 0;
+};
+
+bool signal_contains_bit(const CabanaSignalSummary &signal, size_t byte_index, int bit_index);
+void sync_cabana_selection(AppSession *session, UiState *state);
+void clear_similar_bit_results(UiState *state);
+
 DbcNameLookup build_dbc_name_lookup(const std::optional<dbc::Database> &db) {
   DbcNameLookup out;
   if (!db.has_value()) {
@@ -225,13 +241,6 @@ const CanMessageData *find_message_data(const AppSession &session, const CabanaM
     return nullptr;
   }
   return &*it;
-}
-
-const CabanaSignalSummary *find_signal_summary(const CabanaMessageSummary &message, std::string_view path) {
-  auto it = std::find_if(message.signals.begin(), message.signals.end(), [&](const CabanaSignalSummary &signal) {
-    return signal.path == path;
-  });
-  return it == message.signals.end() ? nullptr : &*it;
 }
 
 void open_cabana_signal_editor(const AppSession &session,
@@ -336,6 +345,47 @@ const CabanaMessageSummary *find_selected_message(const AppSession &session, con
   return it == session.cabana_messages.end() ? nullptr : &*it;
 }
 
+const CabanaMessageSummary *find_message_by_root(const AppSession &session, std::string_view root_path) {
+  auto it = std::find_if(session.cabana_messages.begin(), session.cabana_messages.end(), [&](const CabanaMessageSummary &message) {
+    return message.root_path == root_path;
+  });
+  return it == session.cabana_messages.end() ? nullptr : &*it;
+}
+
+void select_cabana_message(AppSession *session, UiState *state, std::string_view root_path) {
+  state->cabana.selected_message_root.assign(root_path);
+  if (std::find(state->cabana.open_message_roots.begin(), state->cabana.open_message_roots.end(), root_path)
+      == state->cabana.open_message_roots.end()) {
+    state->cabana.open_message_roots.emplace_back(root_path);
+  }
+  state->cabana.signal_filter[0] = '\0';
+  state->cabana.chart_signal_paths.clear();
+  sync_cabana_selection(session, state);
+}
+
+void close_cabana_message_tab(AppSession *session, UiState *state, std::string_view root_path) {
+  auto &roots = state->cabana.open_message_roots;
+  auto it = std::find(roots.begin(), roots.end(), root_path);
+  if (it == roots.end()) {
+    return;
+  }
+  const bool closing_selected = state->cabana.selected_message_root == root_path;
+  const size_t index = static_cast<size_t>(it - roots.begin());
+  roots.erase(it);
+  if (!closing_selected) {
+    return;
+  }
+  if (roots.empty()) {
+    state->cabana.selected_message_root.clear();
+    state->cabana.chart_signal_paths.clear();
+    state->cabana.has_bit_selection = false;
+    clear_similar_bit_results(state);
+    return;
+  }
+  const size_t next_index = std::min(index, roots.size() - 1);
+  select_cabana_message(session, state, roots[next_index]);
+}
+
 bool similar_bit_results_match_selection(const UiState &state) {
   return state.cabana.has_bit_selection
       && state.cabana.similar_bits_source_root == state.cabana.selected_message_root
@@ -373,8 +423,14 @@ void sync_cabana_selection(AppSession *session, UiState *state) {
     state->cabana.camera_view = sidebar_preview_camera_view(*session);
     state->cabana_mode_initialized = true;
   }
+  auto &open_roots = state->cabana.open_message_roots;
+  open_roots.erase(std::remove_if(open_roots.begin(), open_roots.end(), [&](const std::string &root_path) {
+                     return find_message_by_root(*session, root_path) == nullptr;
+                   }),
+                   open_roots.end());
   if (session->cabana_messages.empty()) {
     state->cabana.selected_message_root.clear();
+    state->cabana.open_message_roots.clear();
     state->cabana.chart_signal_paths.clear();
     state->cabana.has_bit_selection = false;
     clear_similar_bit_results(state);
@@ -382,10 +438,11 @@ void sync_cabana_selection(AppSession *session, UiState *state) {
   }
   const CabanaMessageSummary *selected = find_selected_message(*session, *state);
   if (selected == nullptr) {
-    state->cabana.selected_message_root = session->cabana_messages.front().root_path;
+    state->cabana.selected_message_root.clear();
+    state->cabana.chart_signal_paths.clear();
     state->cabana.has_bit_selection = false;
     clear_similar_bit_results(state);
-    selected = &session->cabana_messages.front();
+    return;
   }
 
   std::unordered_set<std::string> allowed;
@@ -397,10 +454,141 @@ void sync_cabana_selection(AppSession *session, UiState *state) {
                    [&](const std::string &path) { return !allowed.count(path); }),
     state->cabana.chart_signal_paths.end());
 
-  if (state->cabana.chart_signal_paths.empty()) {
-    for (size_t i = 0; i < std::min<size_t>(4, selected->signals.size()); ++i) {
-      state->cabana.chart_signal_paths.push_back(selected->signals[i].path);
+}
+
+std::string format_cabana_time(double seconds) {
+  seconds = std::max(0.0, seconds);
+  const int total = static_cast<int>(seconds);
+  const int minutes = total / 60;
+  const int secs = total % 60;
+  char text[32];
+  std::snprintf(text, sizeof(text), "%02d:%02d", minutes, secs);
+  return text;
+}
+
+void draw_cabana_panel_title(const char *title, std::string_view subtitle = {}) {
+  app_push_bold_font();
+  ImGui::TextUnformatted(title);
+  app_pop_bold_font();
+  if (!subtitle.empty()) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("%.*s", static_cast<int>(subtitle.size()), subtitle.data());
+  }
+  ImGui::Spacing();
+}
+
+bool draw_cabana_bottom_tab(const char *id, const char *label, bool active, float width) {
+  ImGui::PushStyleColor(ImGuiCol_Button, active ? color_rgb(255, 255, 255) : color_rgb(239, 242, 246));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? color_rgb(255, 255, 255) : color_rgb(245, 247, 250));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, color_rgb(255, 255, 255));
+  const bool clicked = ImGui::Button((std::string(label) + id).c_str(), ImVec2(width, 26.0f));
+  ImGui::PopStyleColor(3);
+  const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+  ImDrawList *draw = ImGui::GetWindowDrawList();
+  draw->AddRect(rect.Min, rect.Max, ImGui::GetColorU32(active ? color_rgb(191, 197, 205) : color_rgb(210, 216, 222)));
+  if (active) {
+    draw->AddLine(ImVec2(rect.Min.x + 1.0f, rect.Max.y), ImVec2(rect.Max.x - 1.0f, rect.Max.y),
+                  ImGui::GetColorU32(color_rgb(255, 255, 255)), 2.0f);
+  }
+  return clicked;
+}
+
+void draw_cabana_detail_tab_strip(UiState *state) {
+  const float strip_h = 30.0f;
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 4.0f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(245, 246, 248));
+  ImGui::BeginChild("##cabana_detail_bottom_tabs", ImVec2(0.0f, strip_h), false, ImGuiWindowFlags_NoScrollbar);
+  const ImVec2 pos = ImGui::GetWindowPos();
+  const ImVec2 size = ImGui::GetWindowSize();
+  const ImRect rect(pos, ImVec2(pos.x + size.x, pos.y + size.y));
+  ImDrawList *draw = ImGui::GetWindowDrawList();
+  draw->AddLine(ImVec2(rect.Min.x, rect.Min.y + 1.0f), ImVec2(rect.Max.x, rect.Min.y + 1.0f),
+                ImGui::GetColorU32(color_rgb(207, 212, 219)));
+  ImGui::SetCursorPosX(8.0f);
+  if (draw_cabana_bottom_tab("##msg", "Msg", state->cabana.detail_tab == 0, 72.0f)) {
+    state->cabana.detail_tab = 0;
+  }
+  ImGui::SameLine(0.0f, 4.0f);
+  if (draw_cabana_bottom_tab("##logs", "Logs", state->cabana.detail_tab == 1, 76.0f)) {
+    state->cabana.detail_tab = 1;
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar();
+}
+
+void draw_cabana_message_tabs(AppSession *session, UiState *state) {
+  auto &roots = state->cabana.open_message_roots;
+  if (roots.empty()) {
+    return;
+  }
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(244, 246, 248));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+  ImGui::BeginChild("##cabana_message_tabs", ImVec2(0.0f, 32.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+  for (size_t i = 0; i < roots.size(); ++i) {
+    const CabanaMessageSummary *message = find_message_by_root(*session, roots[i]);
+    if (message == nullptr) {
+      continue;
     }
+    if (i > 0) ImGui::SameLine(0.0f, 4.0f);
+    const bool active = state->cabana.selected_message_root == roots[i];
+    const std::string label = message->name + "###cabana_tab_" + roots[i];
+    ImGui::PushStyleColor(ImGuiCol_Button, active ? color_rgb(255, 255, 255) : color_rgb(236, 239, 243));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color_rgb(249, 250, 252));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, color_rgb(255, 255, 255));
+    if (ImGui::Button(label.c_str(), ImVec2(0.0f, 24.0f))) {
+      select_cabana_message(session, state, roots[i]);
+    }
+    ImGui::PopStyleColor(3);
+    const ImRect tab_rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    ImDrawList *draw = ImGui::GetWindowDrawList();
+    draw->AddRect(tab_rect.Min, tab_rect.Max, ImGui::GetColorU32(active ? color_rgb(188, 194, 202) : color_rgb(207, 213, 220)));
+    if (active) {
+      draw->AddLine(ImVec2(tab_rect.Min.x + 1.0f, tab_rect.Max.y), ImVec2(tab_rect.Max.x - 1.0f, tab_rect.Max.y),
+                    ImGui::GetColorU32(color_rgb(255, 255, 255)), 2.0f);
+    }
+    ImGui::SameLine(0.0f, 0.0f);
+    const std::string close_id = "x##cabana_tab_close_" + roots[i];
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - 20.0f);
+    if (ImGui::SmallButton(close_id.c_str())) {
+      close_cabana_message_tab(session, state, roots[i]);
+      --i;
+    }
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+}
+
+void draw_cabana_welcome_panel() {
+  const ImVec2 avail = ImGui::GetContentRegionAvail();
+  const float center_x = ImGui::GetCursorPosX() + avail.x * 0.5f;
+  ImGui::Dummy(ImVec2(0.0f, std::max(28.0f, avail.y * 0.18f)));
+  app_push_bold_font();
+  const char *title = "CABANA";
+  const float title_w = ImGui::CalcTextSize(title).x;
+  ImGui::SetCursorPosX(std::max(0.0f, center_x - title_w * 0.5f));
+  ImGui::TextUnformatted(title);
+  app_pop_bold_font();
+  ImGui::Spacing();
+  const char *hint = "<-Select a message to view details";
+  const float hint_w = ImGui::CalcTextSize(hint).x;
+  ImGui::SetCursorPosX(std::max(0.0f, center_x - hint_w * 0.5f));
+  ImGui::TextDisabled("%s", hint);
+  ImGui::Spacing();
+  const std::array<std::pair<const char *, const char *>, 3> shortcuts = {{
+    {"Pause", "Space"},
+    {"Help", "F1"},
+    {"Find Signal", "Ctrl/Cmd+F"},
+  }};
+  for (const auto &[label, key] : shortcuts) {
+    const float row_w = 160.0f;
+    ImGui::SetCursorPosX(std::max(0.0f, center_x - row_w * 0.5f));
+    ImGui::TextDisabled("%s", label);
+    ImGui::SameLine(0.0f, 12.0f);
+    ImGui::BeginDisabled();
+    ImGui::SmallButton(key);
+    ImGui::EndDisabled();
   }
 }
 
@@ -665,16 +853,143 @@ size_t can_message_payload_width(const CanMessageData &message) {
   return width;
 }
 
-std::string format_can_payload(const std::string &data) {
-  std::string text;
-  text.reserve(data.size() * 3);
-  for (size_t i = 0; i < data.size(); ++i) {
-    if (!text.empty()) text.push_back(' ');
-    char hex[4];
-    std::snprintf(hex, sizeof(hex), "%02X", static_cast<unsigned char>(data[i]));
-    text += hex;
+size_t cabana_signal_byte_count(const CabanaMessageSummary &message) {
+  size_t width = 0;
+  for (const CabanaSignalSummary &signal : message.signals) {
+    if (!signal.has_bit_range) {
+      continue;
+    }
+    width = std::max(width, static_cast<size_t>(std::max(signal.msb / 8, signal.lsb / 8) + 1));
   }
-  return text;
+  return width;
+}
+
+BinaryMatrixLayout build_binary_matrix_layout(const CabanaMessageSummary &message, size_t byte_count) {
+  BinaryMatrixLayout layout;
+  layout.byte_count = byte_count;
+  layout.cell_signals.resize(byte_count * 8);
+  layout.is_msb.assign(byte_count * 8, false);
+  layout.is_lsb.assign(byte_count * 8, false);
+  for (size_t i = 0; i < message.signals.size(); ++i) {
+    const CabanaSignalSummary &signal = message.signals[i];
+    if (!signal.has_bit_range) {
+      continue;
+    }
+    for (size_t byte = 0; byte < byte_count; ++byte) {
+      for (int bit = 0; bit < 8; ++bit) {
+        if (signal_contains_bit(signal, byte, bit)) {
+          layout.cell_signals[byte * 8 + static_cast<size_t>(bit)].push_back(static_cast<int>(i));
+        }
+      }
+    }
+    const size_t msb_byte = static_cast<size_t>(signal.msb / 8);
+    const size_t lsb_byte = static_cast<size_t>(signal.lsb / 8);
+    if (msb_byte < byte_count) {
+      layout.is_msb[msb_byte * 8 + static_cast<size_t>(signal.msb & 7)] = true;
+    }
+    if (lsb_byte < byte_count) {
+      layout.is_lsb[lsb_byte * 8 + static_cast<size_t>(signal.lsb & 7)] = true;
+    }
+  }
+  for (std::vector<int> &signals : layout.cell_signals) {
+    std::stable_sort(signals.begin(), signals.end(), [&](int a, int b) {
+      return message.signals[static_cast<size_t>(a)].size > message.signals[static_cast<size_t>(b)].size;
+    });
+    if (signals.size() > 1) {
+      ++layout.overlapping_cells;
+    }
+  }
+  return layout;
+}
+
+bool cell_has_signal(const BinaryMatrixLayout &layout, int byte_index, int bit_index, int signal_index) {
+  if (byte_index < 0 || bit_index < 0 || bit_index > 7) {
+    return false;
+  }
+  if (static_cast<size_t>(byte_index) >= layout.byte_count) {
+    return false;
+  }
+  const std::vector<int> &signals = layout.cell_signals[static_cast<size_t>(byte_index) * 8 + static_cast<size_t>(bit_index)];
+  return std::find(signals.begin(), signals.end(), signal_index) != signals.end();
+}
+
+std::vector<float> compute_bit_flip_heat(const CanMessageData &message,
+                                         size_t byte_count,
+                                         bool live_mode,
+                                         size_t tracker_index) {
+  std::vector<float> heat(byte_count * 8, 0.0f);
+  if (message.samples.size() < 2 || byte_count == 0) {
+    return heat;
+  }
+
+  size_t begin = 0;
+  size_t end = message.samples.size();
+  if (live_mode) {
+    end = std::min(message.samples.size(), tracker_index + 1);
+    const size_t window = 96;
+    begin = end > window ? end - window : 0;
+  }
+  if (end <= begin + 1) {
+    return heat;
+  }
+
+  std::vector<uint32_t> flip_counts(byte_count * 8, 0);
+  uint32_t max_count = 1;
+  std::string prev = message.samples[begin].data;
+  for (size_t i = begin + 1; i < end; ++i) {
+    const std::string &current = message.samples[i].data;
+    for (size_t byte = 0; byte < byte_count; ++byte) {
+      const uint8_t before = byte < prev.size() ? static_cast<uint8_t>(prev[byte]) : 0;
+      const uint8_t after = byte < current.size() ? static_cast<uint8_t>(current[byte]) : 0;
+      const uint8_t diff = before ^ after;
+      if (diff == 0) {
+        continue;
+      }
+      for (int bit = 0; bit < 8; ++bit) {
+        if ((diff & (1u << bit)) == 0) {
+          continue;
+        }
+        uint32_t &count = flip_counts[byte * 8 + static_cast<size_t>(bit)];
+        ++count;
+        max_count = std::max(max_count, count);
+      }
+    }
+    prev = current;
+  }
+
+  for (size_t i = 0; i < flip_counts.size(); ++i) {
+    if (flip_counts[i] == 0) {
+      continue;
+    }
+    const float frac = static_cast<float>(flip_counts[i]) / static_cast<float>(max_count);
+    heat[i] = std::sqrt(frac);
+  }
+  return heat;
+}
+
+bool signal_charted(const UiState &state, std::string_view path) {
+  return std::find(state.cabana.chart_signal_paths.begin(), state.cabana.chart_signal_paths.end(), path)
+      != state.cabana.chart_signal_paths.end();
+}
+
+ImU32 signal_fill_color(size_t index, float alpha_scale, bool emphasized) {
+  const auto &rgb = kSignalHighlightColors[index % kSignalHighlightColors.size()];
+  const float alpha = emphasized ? std::clamp(0.34f + alpha_scale * 0.38f, 0.34f, 0.78f)
+                                 : std::clamp(0.14f + alpha_scale * 0.28f, 0.14f, 0.48f);
+  return ImGui::GetColorU32(color_rgb(rgb, alpha));
+}
+
+ImU32 signal_border_color(size_t index, bool emphasized) {
+  const auto &rgb = kSignalHighlightColors[index % kSignalHighlightColors.size()];
+  return ImGui::GetColorU32(color_rgb(rgb[0], rgb[1], rgb[2], emphasized ? 0.95f : 0.78f));
+}
+
+void draw_cell_hatching(ImDrawList *draw, const ImRect &rect, ImU32 color, float spacing) {
+  for (float x = rect.Min.x - rect.GetHeight(); x < rect.Max.x; x += spacing) {
+    const ImVec2 a(std::max(rect.Min.x, x), std::min(rect.Max.y, rect.Min.y + (rect.Min.x - x) + rect.GetHeight()));
+    const ImVec2 b(std::min(rect.Max.x, x + rect.GetHeight()), std::max(rect.Min.y, rect.Max.y - (rect.Max.x - x)));
+    draw->AddLine(a, b, color, 1.0f);
+  }
 }
 
 bool signal_contains_bit(const CabanaSignalSummary &signal, size_t byte_index, int bit_index) {
@@ -700,24 +1015,17 @@ bool signal_contains_bit(const CabanaSignalSummary &signal, size_t byte_index, i
   }
 }
 
-bool byte_overlaps_signal(const CabanaSignalSummary &signal, size_t byte_index) {
-  for (int bit = 0; bit < 8; ++bit) {
-    if (signal_contains_bit(signal, byte_index, bit)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 std::vector<std::pair<const CabanaSignalSummary *, ImU32>> highlighted_signals(const CabanaMessageSummary &message, const UiState &state) {
   std::vector<std::pair<const CabanaSignalSummary *, ImU32>> out;
   for (const std::string &path : state.cabana.chart_signal_paths) {
-    const CabanaSignalSummary *signal = find_signal_summary(message, path);
-    if (signal == nullptr || !signal->has_bit_range) {
-      continue;
+    for (size_t i = 0; i < message.signals.size(); ++i) {
+      const CabanaSignalSummary &signal = message.signals[i];
+      if (signal.path != path || !signal.has_bit_range) {
+        continue;
+      }
+      out.push_back({&signal, signal_fill_color(i, 0.5f, true)});
+      break;
     }
-    const auto &rgb = kSignalHighlightColors[out.size() % kSignalHighlightColors.size()];
-    out.push_back({signal, ImGui::GetColorU32(color_rgb(rgb, 0.26f))});
   }
   return out;
 }
@@ -897,12 +1205,10 @@ void draw_bit_selection_panel(AppSession *session, const CabanaMessageSummary &m
         ImGui::TableNextColumn();
         const std::string label = match.label + "##" + match.message_root + "_" + std::to_string(match.byte_index) + "_" + std::to_string(match.bit_index);
         if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
-          state->cabana.selected_message_root = match.message_root;
-          state->cabana.chart_signal_paths.clear();
+          select_cabana_message(session, state, match.message_root);
           state->cabana.has_bit_selection = true;
           state->cabana.selected_bit_byte = match.byte_index;
           state->cabana.selected_bit_index = match.bit_index;
-          sync_cabana_selection(session, state);
         }
         ImGui::TableNextColumn();
         ImGui::Text("B%d.%d", match.byte_index, match.bit_index);
@@ -939,10 +1245,53 @@ void draw_payload_bytes(std::string_view data, const std::string *prev_data = nu
   app_pop_mono_font();
 }
 
+void draw_payload_preview_boxes(const char *id, std::string_view data, const std::string *prev_data, float max_width) {
+  constexpr float kByteW = 17.0f;
+  constexpr float kByteH = 16.0f;
+  constexpr float kGap = 2.0f;
+  const size_t capacity = std::max<size_t>(1, static_cast<size_t>((max_width + kGap) / (kByteW + kGap)));
+  const size_t visible = std::min(data.size(), capacity);
+  const bool truncated = visible < data.size();
+  const float ellipsis_w = truncated ? 10.0f : 0.0f;
+  const float width = std::max(18.0f, visible * (kByteW + kGap) - (visible > 0 ? kGap : 0.0f) + ellipsis_w);
+  ImGui::InvisibleButton(id, ImVec2(width, kByteH));
+  const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+  ImDrawList *draw = ImGui::GetWindowDrawList();
+  app_push_mono_font();
+  for (size_t i = 0; i < visible; ++i) {
+    const unsigned char after = static_cast<unsigned char>(data[i]);
+    const bool has_prev = prev_data != nullptr && i < prev_data->size();
+    const unsigned char before = has_prev ? static_cast<unsigned char>((*prev_data)[i]) : after;
+    ImU32 fill = ImGui::GetColorU32(color_rgb(235, 238, 242));
+    if (has_prev && after != before) {
+      fill = ImGui::GetColorU32(after > before ? color_rgb(205, 223, 255) : color_rgb(251, 218, 212));
+    }
+    const float x0 = rect.Min.x + static_cast<float>(i) * (kByteW + kGap);
+    const ImRect box(ImVec2(x0, rect.Min.y), ImVec2(x0 + kByteW, rect.Min.y + kByteH));
+    draw->AddRectFilled(box.Min, box.Max, fill, 2.0f);
+    draw->AddRect(box.Min, box.Max, ImGui::GetColorU32(color_rgb(198, 204, 212)), 2.0f);
+    char hex[4];
+    std::snprintf(hex, sizeof(hex), "%02X", after);
+    const ImVec2 text_size = ImGui::CalcTextSize(hex);
+    draw->AddText(ImGui::GetFont(),
+                  ImGui::GetFontSize(),
+                  ImVec2(box.Min.x + (box.GetWidth() - text_size.x) * 0.5f,
+                         box.Min.y + (box.GetHeight() - text_size.y) * 0.5f - 1.0f),
+                  ImGui::GetColorU32(color_rgb(52, 58, 66)),
+                  hex);
+  }
+  if (truncated) {
+    draw->AddText(ImVec2(rect.Max.x - 9.0f, rect.Min.y - 1.0f),
+                  ImGui::GetColorU32(color_rgb(122, 129, 138)),
+                  "...");
+  }
+  app_pop_mono_font();
+}
+
 void draw_signal_sparkline(const AppSession &session,
-                           const UiState &state,
-                           std::string_view signal_path,
-                           bool selected) {
+                          const UiState &state,
+                          std::string_view signal_path,
+                          bool selected) {
   const RouteSeries *series = app_find_route_series(session, std::string(signal_path));
   const float width = std::max(96.0f, ImGui::GetColumnWidth() - 12.0f);
   const ImVec2 size(width, 24.0f);
@@ -1130,27 +1479,24 @@ void draw_can_frame_view(const CanMessageData &message,
                          UiState *state,
                          double tracker_time) {
   if (message.samples.empty()) {
-    app_push_bold_font();
-    ImGui::TextUnformatted("Message View");
-    app_pop_bold_font();
-    ImGui::Spacing();
+    draw_cabana_panel_title("Binary View");
     ImGui::TextDisabled("No raw CAN frames available.");
     return;
   }
   const size_t sample_index = closest_can_sample_index(message, tracker_time);
   const CanFrameSample &sample = message.samples[sample_index];
   const CanFrameSample *prev = sample_index > 0 ? &message.samples[sample_index - 1] : nullptr;
+  const size_t byte_count = std::max(can_message_payload_width(message), cabana_signal_byte_count(summary));
+  const BinaryMatrixLayout layout = build_binary_matrix_layout(summary, byte_count);
+  const std::vector<float> heat = compute_bit_flip_heat(message, byte_count, state->cabana.heatmap_live_mode, sample_index);
   const auto highlighted = highlighted_signals(summary, *state);
 
-  app_push_bold_font();
-  ImGui::TextUnformatted("Frame View");
-  app_pop_bold_font();
-  ImGui::Spacing();
+  draw_cabana_panel_title("Binary View");
   ImGui::TextDisabled("tracker %.3fs", tracker_time);
   ImGui::SameLine();
   ImGui::TextDisabled("frame %.3fs", sample.mono_time);
   ImGui::SameLine();
-  ImGui::TextDisabled("len %zu", sample.data.size());
+  ImGui::TextDisabled("bytes %zu", sample.data.size());
   ImGui::SameLine();
   ImGui::TextDisabled("bus %d", summary.bus);
   if (sample.bus_time != 0) {
@@ -1161,151 +1507,310 @@ void draw_can_frame_view(const CanMessageData &message,
     ImGui::SameLine();
     ImGui::TextDisabled("dt %.1f ms", 1000.0 * (sample.mono_time - prev->mono_time));
   }
-  ImGui::Spacing();
-  app_push_mono_font();
-  ImGui::TextWrapped("%s", format_can_payload(sample.data).c_str());
-  app_pop_mono_font();
+  if (layout.overlapping_cells > 0) {
+    ImGui::SameLine(0.0f, 12.0f);
+    ImGui::TextColored(color_rgb(174, 115, 38), "%zu overlapping cell%s",
+                       layout.overlapping_cells, layout.overlapping_cells == 1 ? "" : "s");
+  }
   ImGui::Spacing();
   draw_signal_overlay_legend(highlighted);
-  draw_bit_selection_panel(session, summary, state);
 
-  const float table_height = std::min(170.0f, ImGui::GetContentRegionAvail().y * 0.55f);
-  if (ImGui::BeginTable("##cabana_frame_bytes", 3,
-                        ImGuiTableFlags_RowBg |
-                          ImGuiTableFlags_BordersInnerV |
+  const float footer_reserve = state->cabana.has_bit_selection ? 165.0f : 48.0f;
+  const float matrix_height = std::max(180.0f, ImGui::GetContentRegionAvail().y - footer_reserve);
+  const float index_w = 30.0f;
+  const float data_w = std::max(42.0f, (ImGui::GetContentRegionAvail().x - index_w - 12.0f) / 9.0f);
+  const float bit_w = data_w;
+  const float hex_w = data_w;
+  const float row_h = 36.0f;
+  const ImU32 base_bg = ImGui::GetColorU32(color_rgb(248, 249, 251));
+  const ImU32 heat_high = ImGui::GetColorU32(color_rgb(72, 117, 202));
+  const ImU32 cell_border = ImGui::GetColorU32(color_rgb(206, 211, 218, 0.55f));
+  const ImU32 text_color = ImGui::GetColorU32(color_rgb(30, 34, 41));
+  const ImU32 marker_color = ImGui::GetColorU32(color_rgb(92, 99, 110));
+  const ImU32 invalid_hatch = ImGui::GetColorU32(color_rgb(182, 188, 196, 0.85f));
+  const ImU32 overlap_hatch = ImGui::GetColorU32(color_rgb(68, 72, 78, 0.45f));
+  const ImU32 selection_border = ImGui::GetColorU32(color_rgb(33, 38, 44, 0.95f));
+  const ImU32 hover_border = ImGui::GetColorU32(color_rgb(33, 38, 44, 0.35f));
+
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0.0f, 0.0f));
+  if (ImGui::BeginTable("##cabana_binary_matrix", 10,
+                        ImGuiTableFlags_SizingFixedFit |
                           ImGuiTableFlags_ScrollY |
-                          ImGuiTableFlags_SizingFixedFit,
-                        ImVec2(0.0f, table_height))) {
-    ImGui::TableSetupColumn("Byte", ImGuiTableColumnFlags_WidthFixed, 48.0f);
-    ImGui::TableSetupColumn("Hex", ImGuiTableColumnFlags_WidthFixed, 48.0f);
-    ImGui::TableSetupColumn("Bits", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableHeadersRow();
-    for (size_t i = 0; i < sample.data.size(); ++i) {
-      ImGui::TableNextRow();
-      ImGui::TableNextColumn();
-      ImGui::Text("%zu", i);
-      ImGui::TableNextColumn();
-      app_push_mono_font();
-      for (const auto &[signal, color] : highlighted) {
-        if (byte_overlaps_signal(*signal, i)) {
-          const ImVec2 min = ImGui::GetCursorScreenPos();
-          const ImVec2 max = ImVec2(min.x + ImGui::GetColumnWidth(), min.y + ImGui::GetTextLineHeightWithSpacing());
-          ImGui::GetWindowDrawList()->AddRectFilled(min, max, color, 3.0f);
-          break;
-        }
-      }
-      ImGui::Text("%02X", static_cast<unsigned char>(sample.data[i]));
-      app_pop_mono_font();
-      ImGui::TableNextColumn();
-      app_push_mono_font();
-      for (int bit = 7; bit >= 0; --bit) {
-        const bool changed = prev != nullptr && can_bit(prev->data, i, bit) != can_bit(sample.data, i, bit);
-        for (const auto &[signal, color] : highlighted) {
-          if (signal_contains_bit(*signal, i, bit)) {
-            const ImVec2 min = ImGui::GetCursorScreenPos();
-            const ImVec2 max = ImVec2(min.x + ImGui::CalcTextSize("0").x + 4.0f, min.y + ImGui::GetTextLineHeightWithSpacing());
-            ImGui::GetWindowDrawList()->AddRectFilled(min, max, color, 3.0f);
-            break;
-          }
-        }
-        if (changed) {
-          ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(199, 74, 59));
-        }
-        ImGui::TextUnformatted(can_bit(sample.data, i, bit) ? "1" : "0");
-        if (cabana_bit_selected(*state, i, bit)) {
-          const ImVec2 min = ImGui::GetItemRectMin();
-          const ImVec2 max = ImGui::GetItemRectMax();
-          ImGui::GetWindowDrawList()->AddRect(min, max, ImGui::GetColorU32(color_rgb(36, 42, 50, 0.9f)), 2.0f, 0, 2.0f);
-        }
-        if (changed) {
-          ImGui::PopStyleColor();
-        }
-        if (bit > 0) ImGui::SameLine(0.0f, 6.0f);
-      }
-      app_pop_mono_font();
+                          ImGuiTableFlags_NoPadInnerX |
+                          ImGuiTableFlags_NoPadOuterX,
+                        ImVec2(0.0f, matrix_height))) {
+    ImGui::TableSetupColumn("##byte", ImGuiTableColumnFlags_WidthFixed, index_w);
+    for (int i = 0; i < 8; ++i) {
+      ImGui::TableSetupColumn(("##bit" + std::to_string(i)).c_str(), ImGuiTableColumnFlags_WidthFixed, bit_w);
     }
-    ImGui::EndTable();
-  }
+    ImGui::TableSetupColumn("##hex", ImGuiTableColumnFlags_WidthFixed, hex_w);
 
-  ImGui::Spacing();
-  app_push_bold_font();
-  ImGui::TextUnformatted("Bit Grid");
-  app_pop_bold_font();
-  if (ImGui::BeginTable("##cabana_bits", static_cast<int>(sample.data.size()) + 1,
-                        ImGuiTableFlags_RowBg |
-                          ImGuiTableFlags_Borders |
-                          ImGuiTableFlags_SizingFixedFit |
-                          ImGuiTableFlags_NoHostExtendX,
-                        ImVec2(0.0f, 0.0f))) {
-    ImGui::TableSetupColumn("bit", ImGuiTableColumnFlags_WidthFixed, 44.0f);
-    for (size_t i = 0; i < sample.data.size(); ++i) {
-      const std::string label = "B" + std::to_string(i);
-      ImGui::TableSetupColumn(label.c_str(), ImGuiTableColumnFlags_WidthFixed, 34.0f);
-    }
-    ImGui::TableHeadersRow();
-    for (int bit = 7; bit >= 0; --bit) {
-      ImGui::TableNextRow();
+    for (size_t byte = 0; byte < byte_count; ++byte) {
+      ImGui::TableNextRow(0, row_h);
+
       ImGui::TableNextColumn();
-      ImGui::Text("%d", bit);
-      for (size_t byte = 0; byte < sample.data.size(); ++byte) {
+      {
+        const ImRect cell(ImGui::GetCursorScreenPos(),
+                          ImVec2(ImGui::GetCursorScreenPos().x + ImGui::GetColumnWidth(),
+                                 ImGui::GetCursorScreenPos().y + row_h));
+        ImGui::Dummy(ImVec2(ImGui::GetColumnWidth(), row_h));
+        ImDrawList *draw = ImGui::GetWindowDrawList();
+        draw->AddRectFilled(cell.Min, cell.Max, ImGui::GetColorU32(color_rgb(244, 246, 249)));
+        draw->AddRect(cell.Min, cell.Max, cell_border);
+        const std::string label = std::to_string(byte);
+        const ImVec2 text_size = ImGui::CalcTextSize(label.c_str());
+        draw->AddText(ImVec2(cell.Min.x + (cell.GetWidth() - text_size.x) * 0.5f,
+                             cell.Min.y + (cell.GetHeight() - text_size.y) * 0.5f),
+                      ImGui::GetColorU32(color_rgb(84, 92, 103)),
+                      label.c_str());
+      }
+
+      for (int bit = 7; bit >= 0; --bit) {
         ImGui::TableNextColumn();
-        const bool changed = prev != nullptr && can_bit(prev->data, byte, bit) != can_bit(sample.data, byte, bit);
-        const float cell_w = ImGui::GetColumnWidth();
-        const float cell_h = ImGui::GetTextLineHeightWithSpacing();
         ImGui::PushID(static_cast<int>(byte * 16 + static_cast<size_t>(bit)));
-        ImGui::InvisibleButton("##cabana_bit_cell", ImVec2(cell_w, cell_h));
+        ImGui::InvisibleButton("##cabana_binary_bit", ImVec2(ImGui::GetColumnWidth(), row_h));
         const bool hovered = ImGui::IsItemHovered();
-        if (ImGui::IsItemClicked()) {
+        if (ImGui::IsItemClicked() && byte < sample.data.size()) {
           state->cabana.has_bit_selection = true;
           state->cabana.selected_bit_byte = static_cast<int>(byte);
           state->cabana.selected_bit_index = bit;
         }
         const ImRect cell(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-        for (const auto &[signal, color] : highlighted) {
-          if (signal_contains_bit(*signal, byte, bit)) {
-            ImGui::GetWindowDrawList()->AddRectFilled(cell.Min, cell.Max, color);
-            break;
+        ImDrawList *draw = ImGui::GetWindowDrawList();
+        const size_t cell_index = byte * 8 + static_cast<size_t>(bit);
+        const bool valid = byte < sample.data.size();
+        const float heat_alpha = cell_index < heat.size() ? heat[cell_index] : 0.0f;
+        const std::vector<int> &cell_signals = layout.cell_signals[cell_index];
+        draw->AddRectFilled(cell.Min, cell.Max, mix_color(base_bg, heat_high, heat_alpha * 0.55f));
+
+        if (valid && !cell_signals.empty()) {
+          for (int signal_index : cell_signals) {
+            const CabanaSignalSummary &signal = summary.signals[static_cast<size_t>(signal_index)];
+            const bool emphasized = signal_charted(*state, signal.path);
+            const bool draw_left = !cell_has_signal(layout, static_cast<int>(byte), bit + 1, signal_index);
+            const bool draw_right = !cell_has_signal(layout, static_cast<int>(byte), bit - 1, signal_index);
+            const bool draw_top = !cell_has_signal(layout, static_cast<int>(byte) - 1, bit, signal_index);
+            const bool draw_bottom = !cell_has_signal(layout, static_cast<int>(byte) + 1, bit, signal_index);
+            ImRect inner = cell;
+            inner.Min.x += draw_left ? 3.0f : 1.0f;
+            inner.Max.x -= draw_right ? 3.0f : 1.0f;
+            inner.Min.y += draw_top ? 2.0f : 1.0f;
+            inner.Max.y -= draw_bottom ? 2.0f : 1.0f;
+            draw->AddRectFilled(inner.Min, inner.Max, signal_fill_color(static_cast<size_t>(signal_index), heat_alpha, emphasized), 2.0f);
+            const ImU32 border_color = signal_border_color(static_cast<size_t>(signal_index), emphasized);
+            const float thickness = emphasized ? 2.0f : 1.0f;
+            if (draw_left) draw->AddLine(ImVec2(inner.Min.x, inner.Min.y), ImVec2(inner.Min.x, inner.Max.y), border_color, thickness);
+            if (draw_right) draw->AddLine(ImVec2(inner.Max.x, inner.Min.y), ImVec2(inner.Max.x, inner.Max.y), border_color, thickness);
+            if (draw_top) draw->AddLine(ImVec2(inner.Min.x, inner.Min.y), ImVec2(inner.Max.x, inner.Min.y), border_color, thickness);
+            if (draw_bottom) draw->AddLine(ImVec2(inner.Min.x, inner.Max.y), ImVec2(inner.Max.x, inner.Max.y), border_color, thickness);
           }
+          if (cell_signals.size() > 1) {
+            draw_cell_hatching(draw, cell, overlap_hatch, 6.0f);
+          }
+        } else if (!valid) {
+          draw->AddRectFilled(cell.Min, cell.Max, ImGui::GetColorU32(color_rgb(241, 243, 246)));
+          draw_cell_hatching(draw, cell, invalid_hatch, 7.0f);
         }
-        if (changed) {
-          ImGui::GetWindowDrawList()->AddRect(cell.Min, cell.Max, ImGui::GetColorU32(color_rgb(199, 74, 59, 0.9f)), 0.0f, 0, 1.5f);
+
+        draw->AddRect(cell.Min, cell.Max, cell_border);
+        if (valid) {
+          app_push_mono_font();
+          const char bit_text[2] = {static_cast<char>(can_bit(sample.data, byte, bit) ? '1' : '0'), '\0'};
+          const ImVec2 text_size = ImGui::CalcTextSize(bit_text);
+          draw->AddText(ImGui::GetFont(),
+                        ImGui::GetFontSize(),
+                        ImVec2(cell.Min.x + (cell.GetWidth() - text_size.x) * 0.5f,
+                               cell.Min.y + (cell.GetHeight() - text_size.y) * 0.5f - 1.0f),
+                        text_color,
+                        bit_text);
+          app_pop_mono_font();
+        }
+        if (layout.is_msb[cell_index] || layout.is_lsb[cell_index]) {
+          const char marker[2] = {layout.is_msb[cell_index] ? 'M' : 'L', '\0'};
+          draw->AddText(ImVec2(cell.Max.x - 11.0f, cell.Max.y - 14.0f), marker_color, marker);
         }
         if (cabana_bit_selected(*state, byte, bit)) {
-          ImGui::GetWindowDrawList()->AddRect(cell.Min, cell.Max, ImGui::GetColorU32(color_rgb(36, 42, 50, 0.95f)), 2.0f, 0, 2.0f);
+          draw->AddRect(cell.Min, cell.Max, selection_border, 0.0f, 0, 2.0f);
         } else if (hovered) {
-          ImGui::GetWindowDrawList()->AddRect(cell.Min, cell.Max, ImGui::GetColorU32(color_rgb(36, 42, 50, 0.35f)), 2.0f, 0, 1.0f);
+          draw->AddRect(cell.Min, cell.Max, hover_border, 0.0f, 0, 1.0f);
         }
-        app_push_mono_font();
-        const char bit_text[2] = {static_cast<char>(can_bit(sample.data, byte, bit) ? '1' : '0'), '\0'};
-        const ImVec2 text_size = ImGui::CalcTextSize(bit_text);
-        ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(),
-                                            ImGui::GetFontSize(),
-                                            ImVec2(cell.Min.x + (cell_w - text_size.x) * 0.5f,
-                                                   cell.Min.y + (cell_h - text_size.y) * 0.5f),
-                                            ImGui::GetColorU32(color_rgb(24, 28, 34)),
-                                            bit_text);
-        app_pop_mono_font();
         ImGui::PopID();
+      }
+
+      ImGui::TableNextColumn();
+      {
+        ImGui::Dummy(ImVec2(ImGui::GetColumnWidth(), row_h));
+        const ImRect cell(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+        ImDrawList *draw = ImGui::GetWindowDrawList();
+        float byte_heat = 0.0f;
+        for (int bit = 0; bit < 8; ++bit) {
+          byte_heat = std::max(byte_heat, heat[byte * 8 + static_cast<size_t>(bit)]);
+        }
+        draw->AddRectFilled(cell.Min, cell.Max, mix_color(base_bg, heat_high, byte_heat * 0.5f));
+        draw->AddRect(cell.Min, cell.Max, cell_border);
+        if (byte < sample.data.size()) {
+          app_push_mono_font();
+          char hex[4];
+          std::snprintf(hex, sizeof(hex), "%02X", static_cast<unsigned char>(sample.data[byte]));
+          const ImVec2 text_size = ImGui::CalcTextSize(hex);
+          draw->AddText(ImGui::GetFont(),
+                        ImGui::GetFontSize(),
+                        ImVec2(cell.Min.x + (cell.GetWidth() - text_size.x) * 0.5f,
+                               cell.Min.y + (cell.GetHeight() - text_size.y) * 0.5f - 1.0f),
+                        text_color,
+                        hex);
+          app_pop_mono_font();
+        } else {
+          draw_cell_hatching(draw, cell, invalid_hatch, 7.0f);
+        }
       }
     }
     ImGui::EndTable();
   }
+  ImGui::PopStyleVar();
+
   ImGui::Spacing();
-  draw_can_heatmap(message, highlighted, tracker_time);
+  draw_bit_selection_panel(session, summary, state);
 }
 
 void draw_empty_panel(const char *title, const char *message) {
-  app_push_bold_font();
-  ImGui::TextUnformatted(title);
-  app_pop_bold_font();
-  ImGui::Spacing();
+  draw_cabana_panel_title(title);
   ImGui::TextDisabled("%s", message);
 }
 
-void draw_messages_panel(AppSession *session, UiState *state) {
+void draw_cabana_toolbar_button(const char *label, bool enabled, const std::function<void()> &on_click) {
+  ImGui::BeginDisabled(!enabled);
+  if (ImGui::Button(label)) {
+    on_click();
+  }
+  ImGui::EndDisabled();
+}
+
+bool message_has_overlaps(const CabanaMessageSummary &message, const CanMessageData *message_data) {
+  const size_t byte_count = std::max(message_data == nullptr ? 0 : can_message_payload_width(*message_data),
+                                     cabana_signal_byte_count(message));
+  if (byte_count == 0) {
+    return false;
+  }
+  return build_binary_matrix_layout(message, byte_count).overlapping_cells > 0;
+}
+
+void draw_cabana_warning_banner(const std::vector<std::string> &warnings) {
+  if (warnings.empty()) {
+    return;
+  }
+  const float height = 28.0f + std::max(0.0f, (static_cast<float>(warnings.size()) - 1.0f) * 16.0f);
+  ImGui::InvisibleButton("##cabana_warning_banner", ImVec2(ImGui::GetContentRegionAvail().x, height));
+  const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+  ImDrawList *draw = ImGui::GetWindowDrawList();
+  draw->AddRectFilled(rect.Min, rect.Max, ImGui::GetColorU32(color_rgb(251, 245, 229)), 4.0f);
+  draw->AddRect(rect.Min, rect.Max, ImGui::GetColorU32(color_rgb(221, 191, 121)), 4.0f, 0, 1.0f);
+  draw->AddText(ImVec2(rect.Min.x + 10.0f, rect.Min.y + 6.0f),
+                ImGui::GetColorU32(color_rgb(164, 106, 28)),
+                "!");
+  float y = rect.Min.y + 5.0f;
+  for (const std::string &warning : warnings) {
+    draw->AddText(ImVec2(rect.Min.x + 24.0f, y),
+                  ImGui::GetColorU32(color_rgb(109, 82, 34)),
+                  warning.c_str());
+    y += 16.0f;
+  }
+}
+
+void draw_detail_toolbar(AppSession *session,
+                         UiState *state,
+                         const CabanaMessageSummary &message,
+                         const CanMessageData *message_data) {
+  const std::string meta = message.service + " bus " + std::to_string(message.bus)
+                         + (message.has_address ? "  " + format_can_address(message.address) : std::string());
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(245, 247, 250));
+  ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(209, 214, 220));
+  ImGui::BeginChild("##cabana_detail_toolbar", ImVec2(0.0f, 40.0f), true);
   app_push_bold_font();
-  ImGui::TextUnformatted("Messages");
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted(message.name.c_str());
   app_pop_bold_font();
+  ImGui::SameLine(0.0f, 8.0f);
+  ImGui::TextDisabled("%s", meta.c_str());
+  if (message.frequency_hz > 0.0) {
+    ImGui::SameLine(0.0f, 10.0f);
+    ImGui::TextDisabled("%.1f Hz", message.frequency_hz);
+  }
+  if (message_data != nullptr) {
+    ImGui::SameLine(0.0f, 10.0f);
+    ImGui::TextDisabled("%zu frames", message_data->samples.size());
+  }
+
+  ImGui::SameLine(std::max(340.0f, ImGui::GetWindowContentRegionMax().x * 0.48f));
+  ImGui::TextUnformatted("Heatmap:");
+  ImGui::SameLine(0.0f, 6.0f);
+  if (ImGui::RadioButton("Live", state->cabana.heatmap_live_mode)) {
+    state->cabana.heatmap_live_mode = true;
+  }
+  ImGui::SameLine(0.0f, 8.0f);
+  if (ImGui::RadioButton("All", !state->cabana.heatmap_live_mode)) {
+    state->cabana.heatmap_live_mode = false;
+  }
+  ImGui::SameLine(0.0f, 14.0f);
+  draw_cabana_toolbar_button("Edit DBC...", true, [&]() {
+    state->dbc_editor.open = true;
+    state->dbc_editor.loaded = false;
+  });
+  ImGui::SameLine(0.0f, 6.0f);
+  draw_cabana_toolbar_button("Export Raw CSV", message_data != nullptr, [&]() {
+    fs::path output_path;
+    std::string error;
+    if (export_raw_can_csv(*session, message, &error, &output_path)) {
+      state->status_text = "Exported raw CSV " + output_path.filename().string();
+    } else {
+      state->status_text = error;
+    }
+  });
+  ImGui::SameLine(0.0f, 6.0f);
+  draw_cabana_toolbar_button("Export Decoded CSV", message_data != nullptr, [&]() {
+    fs::path output_path;
+    std::string error;
+    if (export_decoded_can_csv(*session, message, &error, &output_path)) {
+      state->status_text = "Exported decoded CSV " + output_path.filename().string();
+    } else {
+      state->status_text = error;
+    }
+  });
+  const std::string dbc_text = session->route_data.dbc_name.empty() ? "DBC: Auto / none"
+                                                                    : "DBC: " + session->route_data.dbc_name;
+  const float right_w = ImGui::CalcTextSize(dbc_text.c_str()).x + 10.0f;
+  ImGui::SameLine(std::max(0.0f, ImGui::GetWindowContentRegionMax().x - right_w));
+  ImGui::TextDisabled("%s", dbc_text.c_str());
+  ImGui::EndChild();
+  ImGui::PopStyleColor(2);
+  ImGui::PopStyleVar(2);
+}
+
+void draw_messages_panel(AppSession *session, UiState *state) {
+  size_t signal_count = 0;
+  for (const CabanaMessageSummary &message : session->cabana_messages) {
+    signal_count += message.signals.size();
+  }
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(245, 246, 248));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+  ImGui::BeginChild("##cabana_messages_header", ImVec2(0.0f, 34.0f), false, ImGuiWindowFlags_NoScrollbar);
+  app_push_bold_font();
+  ImGui::Text("Messages: %zu", session->cabana_messages.size());
+  app_pop_bold_font();
+  ImGui::SameLine(0.0f, 10.0f);
+  ImGui::TextDisabled("%zu decoded signals", signal_count);
+  const float clear_w = 38.0f;
+  ImGui::SameLine(std::max(0.0f, ImGui::GetWindowContentRegionMax().x - clear_w - 128.0f));
+  if (ImGui::SmallButton("Clear")) {
+    state->cabana.message_filter[0] = '\0';
+  }
+  ImGui::SameLine(0.0f, 8.0f);
+  ImGui::Checkbox("Suppress Signals", &state->cabana.suppress_defined_signals);
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
   ImGui::Spacing();
   ImGui::SetNextItemWidth(-1.0f);
   ImGui::InputTextWithHint("##cabana_message_filter", "Filter messages...", state->cabana.message_filter.data(),
@@ -1317,18 +1822,22 @@ void draw_messages_panel(AppSession *session, UiState *state) {
     return;
   }
 
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 2.0f));
   if (ImGui::BeginTable("##cabana_messages", 6,
                         ImGuiTableFlags_RowBg |
+                          ImGuiTableFlags_ScrollX |
                           ImGuiTableFlags_ScrollY |
                           ImGuiTableFlags_BordersInnerV |
-                          ImGuiTableFlags_SizingStretchProp,
+                          ImGuiTableFlags_BordersOuterH |
+                          ImGuiTableFlags_SizingFixedFit,
                         ImGui::GetContentRegionAvail())) {
-    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-    ImGui::TableSetupColumn("Src", ImGuiTableColumnFlags_WidthFixed, 54.0f);
-    ImGui::TableSetupColumn("Bus", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-    ImGui::TableSetupColumn("Addr", ImGuiTableColumnFlags_WidthFixed, 72.0f);
-    ImGui::TableSetupColumn("Hz", ImGuiTableColumnFlags_WidthFixed, 54.0f);
-    ImGui::TableSetupColumn("Signals", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 148.0f);
+    ImGui::TableSetupColumn("Bus", ImGuiTableColumnFlags_WidthFixed, 36.0f);
+    ImGui::TableSetupColumn("Addr", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+    ImGui::TableSetupColumn("Hz", ImGuiTableColumnFlags_WidthFixed, 46.0f);
+    ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+    ImGui::TableSetupColumn("Bytes", ImGuiTableColumnFlags_WidthFixed, 96.0f);
     ImGui::TableHeadersRow();
 
     const std::string filter = trim_copy(state->cabana.message_filter.data());
@@ -1348,21 +1857,20 @@ void draw_messages_panel(AppSession *session, UiState *state) {
             && !contains_case_insensitive(std::to_string(message.bus), filter)) {
           continue;
         }
+        if (state->cabana.suppress_defined_signals && !message.signals.empty()) {
+          continue;
+        }
 
-        ImGui::TableNextRow();
+        ImGui::TableNextRow(0, 20.0f);
         ImGui::TableNextColumn();
         const bool selected = state->cabana.selected_message_root == message.root_path;
         if (ImGui::Selectable((message.name + "##" + message.root_path).c_str(), selected,
                               ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
-          state->cabana.selected_message_root = message.root_path;
-          state->cabana.chart_signal_paths.clear();
-          sync_cabana_selection(session, state);
+          select_cabana_message(session, state, message.root_path);
         }
 
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(message.service.c_str());
-        ImGui::TableNextColumn();
-        ImGui::Text("%d", message.bus);
+        ImGui::Text("%c%d", message.service == "sendcan" ? 'S' : 'C', message.bus);
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(addr_buf);
         ImGui::TableNextColumn();
@@ -1372,31 +1880,81 @@ void draw_messages_panel(AppSession *session, UiState *state) {
           ImGui::TextDisabled("--");
         }
         ImGui::TableNextColumn();
-        ImGui::Text("%zu", message.signals.size());
+        ImGui::Text("%zu", message.sample_count);
+        ImGui::TableNextColumn();
+        const CanMessageData *message_data = find_message_data(*session, message);
+        if (message_data != nullptr && !message_data->samples.empty()) {
+          const CanFrameSample &last = message_data->samples.back();
+          const CanFrameSample *prev = message_data->samples.size() > 1 ? &message_data->samples[message_data->samples.size() - 2] : nullptr;
+          draw_payload_preview_boxes(("##msg_bytes_" + message.root_path).c_str(), last.data, prev == nullptr ? nullptr : &prev->data, 92.0f);
+        } else {
+          ImGui::TextDisabled("--");
+        }
       }
     }
     ImGui::EndTable();
   }
+  ImGui::PopStyleVar();
+}
+
+void draw_signal_toolbar(AppSession *session, UiState *state, const CabanaMessageSummary &message) {
+  const size_t charted = state->cabana.chart_signal_paths.size();
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(245, 246, 248));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+  ImGui::BeginChild("##cabana_signals_header", ImVec2(0.0f, 34.0f), false, ImGuiWindowFlags_NoScrollbar);
+  app_push_bold_font();
+  ImGui::Text("Signals: %zu", message.signals.size());
+  app_pop_bold_font();
+  if (charted > 0) {
+    ImGui::SameLine(0.0f, 10.0f);
+    ImGui::TextDisabled("%zu charted", charted);
+  }
+  ImGui::SameLine(std::max(220.0f, ImGui::GetWindowContentRegionMax().x - 188.0f));
+  ImGui::SetNextItemWidth(180.0f);
+  ImGui::InputTextWithHint("##cabana_signal_filter", "Filter Signal", state->cabana.signal_filter.data(),
+                           state->cabana.signal_filter.size());
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+  ImGui::Spacing();
 }
 
 void draw_signal_selection_table(AppSession *session, UiState *state, const CabanaMessageSummary &message) {
+  draw_signal_toolbar(session, state, message);
   if (message.signals.empty()) {
     ImGui::TextDisabled("No decoded signals for this message.");
     return;
   }
+  const std::string filter = trim_copy(state->cabana.signal_filter.data());
+  size_t visible_count = 0;
+  for (const CabanaSignalSummary &signal : message.signals) {
+    if (filter.empty() || contains_case_insensitive(signal.name, filter)) {
+      ++visible_count;
+    }
+  }
+  if (visible_count == 0) {
+    ImGui::TextDisabled("No signals match this filter.");
+    return;
+  }
+
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 3.0f));
   if (ImGui::BeginTable("##cabana_signals", 6,
                         ImGuiTableFlags_RowBg |
                           ImGuiTableFlags_SizingStretchProp |
-                          ImGuiTableFlags_BordersInnerV,
+                          ImGuiTableFlags_BordersInnerV |
+                          ImGuiTableFlags_ScrollY,
                         ImGui::GetContentRegionAvail())) {
-    ImGui::TableSetupColumn("Chart", ImGuiTableColumnFlags_WidthFixed, 54.0f);
-    ImGui::TableSetupColumn("Signal", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-    ImGui::TableSetupColumn("Bits", ImGuiTableColumnFlags_WidthFixed, 72.0f);
-    ImGui::TableSetupColumn("Trend", ImGuiTableColumnFlags_WidthFixed, 132.0f);
-    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 92.0f);
-    ImGui::TableSetupColumn("Edit", ImGuiTableColumnFlags_WidthFixed, 56.0f);
+    ImGui::TableSetupColumn("Chart", ImGuiTableColumnFlags_WidthFixed, 42.0f);
+    ImGui::TableSetupColumn("Signal", ImGuiTableColumnFlags_WidthStretch, 1.9f);
+    ImGui::TableSetupColumn("Bits", ImGuiTableColumnFlags_WidthFixed, 66.0f);
+    ImGui::TableSetupColumn("Trend", ImGuiTableColumnFlags_WidthFixed, 152.0f);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+    ImGui::TableSetupColumn("Edit", ImGuiTableColumnFlags_WidthFixed, 54.0f);
     ImGui::TableHeadersRow();
     for (const CabanaSignalSummary &signal : message.signals) {
+      if (!filter.empty() && !contains_case_insensitive(signal.name, filter)) {
+        continue;
+      }
       const bool selected = std::find(state->cabana.chart_signal_paths.begin(), state->cabana.chart_signal_paths.end(), signal.path)
                          != state->cabana.chart_signal_paths.end();
       ImGui::TableNextRow();
@@ -1413,9 +1971,16 @@ void draw_signal_selection_table(AppSession *session, UiState *state, const Caba
         }
       }
       ImGui::TableNextColumn();
-      if (ImGui::Selectable((signal.name + "##" + signal.path).c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
+      ImGui::PushID(signal.path.c_str());
+      ImGui::ColorButton("##sig_color",
+                         ImGui::ColorConvertU32ToFloat4(signal_fill_color(std::hash<std::string>{}(signal.path), 0.55f, selected)),
+                         ImGuiColorEditFlags_NoTooltip,
+                         ImVec2(10.0f, 10.0f));
+      ImGui::SameLine(0.0f, 6.0f);
+      if (ImGui::Selectable((signal.name + "##name").c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
         state->cabana.chart_signal_paths = {signal.path};
       }
+      ImGui::PopID();
       ImGui::TableNextColumn();
       if (signal.has_bit_range) {
         ImGui::TextDisabled("%d|%d", signal.start_bit, signal.size);
@@ -1433,6 +1998,61 @@ void draw_signal_selection_table(AppSession *session, UiState *state, const Caba
     }
     ImGui::EndTable();
   }
+  ImGui::PopStyleVar();
+}
+
+void draw_logs_toolbar(const AppSession &session,
+                       UiState *state,
+                       const CabanaMessageSummary &message,
+                       bool can_show_signal_mode,
+                       bool show_signal_mode) {
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(245, 246, 248));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+  ImGui::BeginChild("##cabana_logs_toolbar", ImVec2(0.0f, 34.0f), false, ImGuiWindowFlags_NoScrollbar);
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Display:");
+  ImGui::SameLine(0.0f, 6.0f);
+  ImGui::BeginDisabled(!can_show_signal_mode);
+  if (ImGui::RadioButton("Signal", show_signal_mode)) {
+    state->cabana.logs_hex_mode = false;
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine(0.0f, 8.0f);
+  if (ImGui::RadioButton("Hex", !show_signal_mode)) {
+    state->cabana.logs_hex_mode = true;
+  }
+
+  const std::string signal_path = !state->cabana.chart_signal_paths.empty() ? state->cabana.chart_signal_paths.front() : std::string();
+  if (can_show_signal_mode) {
+    const size_t slash = signal_path.find_last_of('/');
+    const std::string signal_name = slash == std::string::npos ? signal_path : signal_path.substr(slash + 1);
+    ImGui::SameLine(0.0f, 12.0f);
+    ImGui::TextDisabled("%s", signal_name.c_str());
+    if (show_signal_mode) {
+      static constexpr const char *kOps[] = {">", "=", "!=", "<"};
+      ImGui::SameLine(0.0f, 10.0f);
+      ImGui::SetNextItemWidth(54.0f);
+      ImGui::Combo("##cabana_logs_cmp", &state->cabana.logs_filter_compare, kOps, IM_ARRAYSIZE(kOps));
+      ImGui::SameLine(0.0f, 6.0f);
+      ImGui::SetNextItemWidth(96.0f);
+      ImGui::InputTextWithHint("##cabana_logs_value", "value", state->cabana.logs_filter_value.data(),
+                               state->cabana.logs_filter_value.size());
+    }
+  }
+
+  const float export_w = 76.0f;
+  ImGui::SameLine(std::max(0.0f, ImGui::GetWindowContentRegionMax().x - export_w));
+  if (ImGui::SmallButton("Export")) {
+    fs::path output_path;
+    std::string error;
+    const bool ok = show_signal_mode ? export_decoded_can_csv(session, message, &error, &output_path)
+                                     : export_raw_can_csv(session, message, &error, &output_path);
+    state->status_text = ok ? ("Exported " + output_path.filename().string()) : error;
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+  ImGui::Spacing();
 }
 
 void draw_message_history(const AppSession &session, UiState *state, const CabanaMessageSummary &message) {
@@ -1449,24 +2069,44 @@ void draw_message_history(const AppSession &session, UiState *state, const Caban
   const auto format_it = signal_path.empty() ? session.route_data.series_formats.end() : session.route_data.series_formats.find(signal_path);
   const auto enum_it = signal_path.empty() ? session.route_data.enum_info.end() : session.route_data.enum_info.find(signal_path);
   const size_t current_index = closest_can_sample_index(*message_data, state->tracker_time);
+  const bool can_show_signal_mode = series != nullptr;
+  const bool show_signal_mode = can_show_signal_mode && !state->cabana.logs_hex_mode;
 
-  app_push_bold_font();
-  ImGui::Text("History: %s", message.name.c_str());
-  app_pop_bold_font();
-  ImGui::Spacing();
+  draw_logs_toolbar(session, state, message, can_show_signal_mode, show_signal_mode);
 
-  const int columns = series != nullptr ? 4 : 3;
+  const bool have_filter = show_signal_mode && state->cabana.logs_filter_value[0] != '\0';
+  const double filter_value = have_filter ? std::strtod(state->cabana.logs_filter_value.data(), nullptr) : 0.0;
+  auto passes_filter = [&](double value) {
+    if (!have_filter) return true;
+    switch (state->cabana.logs_filter_compare) {
+      case 0: return value > filter_value;
+      case 1: return value == filter_value;
+      case 2: return value != filter_value;
+      case 3: return value < filter_value;
+      default: return true;
+    }
+  };
+
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(5.0f, 3.0f));
+  const int columns = (!show_signal_mode && series != nullptr) ? 4 : 3;
   if (ImGui::BeginTable("##cabana_history", columns,
                         ImGuiTableFlags_RowBg |
                           ImGuiTableFlags_ScrollY |
                           ImGuiTableFlags_SizingStretchProp |
-                          ImGuiTableFlags_BordersInnerV,
+                          ImGuiTableFlags_BordersInnerV |
+                          ImGuiTableFlags_BordersOuterH |
+                          ImGuiTableFlags_NoPadOuterX,
                         ImGui::GetContentRegionAvail())) {
-    ImGui::TableSetupColumn("t", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 96.0f);
     ImGui::TableSetupColumn("dt", ImGuiTableColumnFlags_WidthFixed, 72.0f);
-    ImGui::TableSetupColumn("data", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    if (series != nullptr) {
-      ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, 108.0f);
+    if (show_signal_mode) {
+      ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    } else {
+      ImGui::TableSetupColumn("Data", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    }
+    if (!show_signal_mode && series != nullptr) {
+      ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 108.0f);
     }
     ImGui::TableHeadersRow();
 
@@ -1476,6 +2116,13 @@ void draw_message_history(const AppSession &session, UiState *state, const Caban
       for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
         const CanFrameSample &sample = message_data->samples[static_cast<size_t>(i)];
         const CanFrameSample *prev = i > 0 ? &message_data->samples[static_cast<size_t>(i - 1)] : nullptr;
+        std::optional<double> value;
+        if (series != nullptr) {
+          value = app_sample_xy_value_at_time(series->times, series->values, false, sample.mono_time);
+          if (show_signal_mode && (!value.has_value() || !passes_filter(*value))) {
+            continue;
+          }
+        }
 
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
@@ -1495,11 +2142,24 @@ void draw_message_history(const AppSession &session, UiState *state, const Caban
         }
 
         ImGui::TableNextColumn();
-        draw_payload_bytes(sample.data, prev == nullptr ? nullptr : &prev->data);
+        if (show_signal_mode) {
+          if (value.has_value()) {
+            if (format_it != session.route_data.series_formats.end()) {
+              ImGui::TextUnformatted(format_display_value(*value,
+                                                          format_it->second,
+                                                          enum_it == session.route_data.enum_info.end() ? nullptr : &enum_it->second).c_str());
+            } else {
+              ImGui::Text("%.4f", *value);
+            }
+          } else {
+            ImGui::TextDisabled("--");
+          }
+        } else {
+          draw_payload_bytes(sample.data, prev == nullptr ? nullptr : &prev->data);
+        }
 
-        if (series != nullptr) {
+        if (!show_signal_mode && series != nullptr) {
           ImGui::TableNextColumn();
-          const std::optional<double> value = app_sample_xy_value_at_time(series->times, series->values, false, sample.mono_time);
           if (value.has_value()) {
             if (format_it != session.route_data.series_formats.end()) {
               ImGui::TextUnformatted(format_display_value(*value,
@@ -1516,86 +2176,45 @@ void draw_message_history(const AppSession &session, UiState *state, const Caban
     }
     ImGui::EndTable();
   }
+  ImGui::PopStyleVar();
 }
 
 void draw_detail_panel(AppSession *session, UiState *state, const CabanaMessageSummary &message, float top_height) {
-  if (ImGui::BeginTabBar("##cabana_detail_tabs", ImGuiTabBarFlags_None)) {
-    if (ImGui::BeginTabItem("Msg")) {
-      state->cabana.detail_tab = 0;
-      app_push_bold_font();
-      ImGui::TextUnformatted(message.name.c_str());
-      app_pop_bold_font();
-      ImGui::SameLine();
-      ImGui::TextDisabled("%s bus %d", message.service.c_str(), message.bus);
-      if (message.has_address) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("0x%03X", message.address);
-      }
-      ImGui::Spacing();
-      ImGui::TextDisabled("%zu decoded signals", message.signals.size());
-      const CanMessageData *message_data = find_message_data(*session, message);
-      if (message_data != nullptr) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("  %zu raw frames", message_data->samples.size());
-      }
-      ImGui::SameLine();
-      if (message.frequency_hz > 0.0) {
-        ImGui::TextDisabled("  %.1f Hz", message.frequency_hz);
-      }
-      ImGui::Spacing();
-      if (ImGui::SmallButton("Export Raw CSV")) {
-        fs::path output_path;
-        std::string error;
-        if (export_raw_can_csv(*session, message, &error, &output_path)) {
-          state->status_text = "Exported raw CSV " + output_path.filename().string();
-        } else {
-          state->status_text = error;
-        }
-      }
-      ImGui::SameLine();
-      if (ImGui::SmallButton("Export Decoded CSV")) {
-        fs::path output_path;
-        std::string error;
-        if (export_decoded_can_csv(*session, message, &error, &output_path)) {
-          state->status_text = "Exported decoded CSV " + output_path.filename().string();
-        } else {
-          state->status_text = error;
-        }
-      }
-      ImGui::SameLine();
-      ImGui::TextDisabled("%s", cabana_export_dir().string().c_str());
-      ImGui::Spacing();
-      ImGui::BeginChild("##cabana_msg_top", ImVec2(0.0f, top_height), true);
-      if (message_data != nullptr) {
-        draw_can_frame_view(*message_data, session, message, state, state->tracker_time);
-      } else {
-        draw_empty_panel("Message View", "No raw CAN frames available for this message.");
-      }
-      ImGui::Spacing();
-      ImGui::Separator();
-      ImGui::Spacing();
-      ImGui::TextDisabled("Current DBC: %s", session->route_data.dbc_name.empty() ? "Auto / none" : session->route_data.dbc_name.c_str());
-      ImGui::SameLine();
-      if (ImGui::SmallButton("Edit DBC...")) {
-        state->dbc_editor.open = true;
-        state->dbc_editor.loaded = false;
-      }
-      ImGui::EndChild();
-      draw_horizontal_splitter("##cabana_detail_splitter", ImGui::GetContentRegionAvail().x, kMinTopHeight,
-                               std::max(kMinTopHeight, ImGui::GetContentRegionAvail().y - kMinBottomHeight),
-                               &state->cabana.detail_top_height);
-      ImGui::BeginChild("##cabana_signals_bottom", ImVec2(0.0f, 0.0f), true);
-      draw_signal_selection_table(session, state, message);
-      ImGui::EndChild();
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("History")) {
-      state->cabana.detail_tab = 1;
-      draw_message_history(*session, state, message);
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
+  const CanMessageData *message_data = find_message_data(*session, message);
+  draw_cabana_message_tabs(session, state);
+  draw_detail_toolbar(session, state, message, message_data);
+  std::vector<std::string> warnings;
+  if (message_has_overlaps(message, message_data)) {
+    warnings.push_back("One or more decoded signals overlap in the binary view.");
   }
+  draw_cabana_warning_banner(warnings);
+  ImGui::Spacing();
+
+  const float bottom_tabs_h = 30.0f;
+  ImGui::BeginChild("##cabana_detail_content", ImVec2(0.0f, std::max(0.0f, ImGui::GetContentRegionAvail().y - bottom_tabs_h)), false);
+  if (state->cabana.detail_tab == 0) {
+    ImGui::BeginChild("##cabana_msg_top", ImVec2(0.0f, top_height), false);
+    if (message_data != nullptr) {
+      draw_can_frame_view(*message_data, session, message, state, state->tracker_time);
+    } else {
+      draw_empty_panel("Binary View", "No raw CAN frames available for this message.");
+    }
+    ImGui::EndChild();
+    draw_horizontal_splitter("##cabana_detail_splitter", ImGui::GetContentRegionAvail().x, kMinTopHeight,
+                             std::max(kMinTopHeight, ImGui::GetContentRegionAvail().y - kMinBottomHeight),
+                             &state->cabana.detail_top_height);
+    ImGui::BeginChild("##cabana_signals_bottom", ImVec2(0.0f, 0.0f), false);
+    draw_signal_selection_table(session, state, message);
+    ImGui::EndChild();
+  } else {
+    if (message_data != nullptr) {
+      draw_can_heatmap(*message_data, highlighted_signals(message, *state), state->tracker_time);
+      ImGui::Spacing();
+    }
+    draw_message_history(*session, state, message);
+  }
+  ImGui::EndChild();
+  draw_cabana_detail_tab_strip(state);
 }
 
 void draw_video_panel(AppSession *session, UiState *state, float height) {
@@ -1608,13 +2227,10 @@ void draw_video_panel(AppSession *session, UiState *state, float height) {
     }
   }
 
-  app_push_bold_font();
-  ImGui::TextUnformatted("Video");
-  app_pop_bold_font();
-  ImGui::Spacing();
+  draw_cabana_panel_title("Video");
 
   if (available_views.empty()) {
-    ImGui::BeginChild("##cabana_video_empty", ImVec2(0.0f, height), true);
+    ImGui::BeginChild("##cabana_video_empty", ImVec2(0.0f, height), false);
     ImGui::TextDisabled("No camera streams available.");
     ImGui::EndChild();
     return;
@@ -1626,35 +2242,114 @@ void draw_video_panel(AppSession *session, UiState *state, float height) {
     state->cabana.camera_view = available_views.front()->view;
   }
 
-  if (ImGui::BeginTabBar("##cabana_video_tabs", ImGuiTabBarFlags_None)) {
-    for (const CameraViewSpec *spec : available_views) {
-      if (ImGui::BeginTabItem(spec->label)) {
-        state->cabana.camera_view = spec->view;
-        CameraFeedView *feed = session->pane_camera_feeds[static_cast<size_t>(spec->view)].get();
-        if (feed != nullptr && state->has_tracker_time) {
-          feed->update(state->tracker_time);
-        }
-        if (feed != nullptr) {
-          feed->drawSized(ImVec2(ImGui::GetContentRegionAvail().x, std::max(0.0f, height - 36.0f)),
-                          session->async_route_loading,
-                          true);
-        } else {
-          ImGui::TextDisabled("Camera unavailable");
-        }
-        ImGui::EndTabItem();
-      }
+  auto short_label = [](const CameraViewSpec &spec) {
+    switch (spec.view) {
+      case CameraViewKind::Road: return "Road";
+      case CameraViewKind::Driver: return "Driver";
+      case CameraViewKind::WideRoad: return "Wide";
+      case CameraViewKind::QRoad: return "qRoad";
     }
-    ImGui::EndTabBar();
+    return "Cam";
+  };
+
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(245, 246, 248));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+  ImGui::BeginChild("##cabana_video_header", ImVec2(0.0f, 32.0f), false, ImGuiWindowFlags_NoScrollbar);
+  app_push_bold_font();
+  ImGui::TextUnformatted("Video");
+  app_pop_bold_font();
+  ImGui::SameLine(0.0f, 10.0f);
+  for (size_t i = 0; i < available_views.size(); ++i) {
+    const CameraViewSpec &spec = *available_views[i];
+    if (i > 0) ImGui::SameLine(0.0f, 4.0f);
+    const float width = spec.view == CameraViewKind::Driver ? 66.0f : 58.0f;
+    if (draw_cabana_bottom_tab(("##video_" + std::to_string(i)).c_str(),
+                               short_label(spec),
+                               state->cabana.camera_view == spec.view,
+                               width)) {
+      state->cabana.camera_view = spec.view;
+    }
   }
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+
+  const CameraViewSpec &active_spec = camera_view_spec(state->cabana.camera_view);
+  CameraFeedView *feed = session->pane_camera_feeds[static_cast<size_t>(active_spec.view)].get();
+  if (feed != nullptr && state->has_tracker_time) {
+    feed->update(state->tracker_time);
+  }
+  if (feed == nullptr) {
+    ImGui::TextDisabled("Camera unavailable");
+    return;
+  }
+
+  const float controls_h = 58.0f;
+  feed->drawSized(ImVec2(ImGui::GetContentRegionAvail().x, std::max(0.0f, height - controls_h)),
+                  session->async_route_loading,
+                  true);
+
+  const double current = state->has_tracker_time ? state->tracker_time : session->route_data.x_min;
+  const double total = session->route_data.has_time_range ? session->route_data.x_max : current;
+  double slider_value = current;
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(247, 248, 250));
+  ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(209, 214, 220));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 5.0f));
+  ImGui::BeginChild("##cabana_video_controls", ImVec2(0.0f, controls_h), true, ImGuiWindowFlags_NoScrollbar);
+  const float button_w = 24.0f;
+  if (ImGui::Button("|<", ImVec2(button_w, 0.0f))) {
+    step_tracker(state, -1.0);
+  }
+  ImGui::SameLine(0.0f, 4.0f);
+  if (ImGui::Button(state->playback_playing ? "||" : ">", ImVec2(button_w, 0.0f))) {
+    state->playback_playing = !state->playback_playing;
+  }
+  ImGui::SameLine(0.0f, 4.0f);
+  if (ImGui::Button(">|", ImVec2(button_w, 0.0f))) {
+    step_tracker(state, 1.0);
+  }
+  ImGui::SameLine(0.0f, 8.0f);
+  ImGui::TextDisabled("%s / %s", format_cabana_time(current).c_str(), format_cabana_time(total).c_str());
+  if (session->route_data.has_time_range) {
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::SliderScalar("##cabana_video_slider",
+                            ImGuiDataType_Double,
+                            &slider_value,
+                            &session->route_data.x_min,
+                            &session->route_data.x_max,
+                            "")) {
+      state->tracker_time = slider_value;
+      state->has_tracker_time = true;
+    }
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor(2);
 }
 
 void draw_chart_panel(AppSession *session, UiState *state, const CabanaMessageSummary *message) {
+  const size_t chart_count = state->cabana.chart_signal_paths.size();
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(245, 246, 248));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
+  ImGui::BeginChild("##cabana_charts_header", ImVec2(0.0f, 30.0f), false, ImGuiWindowFlags_NoScrollbar);
   app_push_bold_font();
-  ImGui::TextUnformatted("Charts");
+  ImGui::Text("Charts: %zu", chart_count);
   app_pop_bold_font();
-  ImGui::Spacing();
+  if (chart_count > 0) {
+    ImGui::SameLine(0.0f, 10.0f);
+    ImGui::TextDisabled("%s", chart_count == 1 ? "1 selected signal" : "selected signals");
+    const float clear_w = 44.0f;
+    ImGui::SameLine(std::max(0.0f, ImGui::GetWindowContentRegionMax().x - clear_w));
+    if (ImGui::SmallButton("Clear")) {
+      state->cabana.chart_signal_paths.clear();
+    }
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+
   if (message == nullptr || state->cabana.chart_signal_paths.empty()) {
-    ImGui::BeginChild("##cabana_chart_empty", ImVec2(0.0f, 0.0f), true);
+    ImGui::BeginChild("##cabana_chart_empty", ImVec2(0.0f, 0.0f), false);
     ImGui::TextDisabled("Select one or more signals to chart.");
     ImGui::EndChild();
     return;
@@ -1669,7 +2364,7 @@ void draw_chart_panel(AppSession *session, UiState *state, const CabanaMessageSu
     curve.color = app_next_curve_color(pane);
     pane.curves.push_back(std::move(curve));
   }
-  ImGui::BeginChild("##cabana_chart_plot", ImVec2(0.0f, 0.0f), true);
+  ImGui::BeginChild("##cabana_chart_plot", ImVec2(0.0f, 0.0f), false);
   draw_plot(*session, &pane, state);
   ImGui::EndChild();
 }
@@ -1762,53 +2457,70 @@ void draw_cabana_mode(AppSession *session, const UiMetrics &ui, UiState *state) 
 
   ImGui::SetNextWindowPos(ImVec2(ui.content_x, ui.content_y));
   ImGui::SetNextWindowSize(ImVec2(ui.content_w, ui.content_h));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 10.0f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(244, 246, 248));
-  ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(186, 191, 198));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5.0f, 3.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 2.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding, 0.0f);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(238, 240, 243));
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
                                  ImGuiWindowFlags_NoMove |
                                  ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoSavedSettings;
   if (ImGui::Begin("##cabana_mode_host", nullptr, flags)) {
     const ImVec2 avail = ImGui::GetContentRegionAvail();
+    auto begin_panel = [&](const char *id, const ImVec2 &size) {
+      ImGui::PushStyleColor(ImGuiCol_ChildBg, color_rgb(255, 255, 255));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+      return ImGui::BeginChild(id, size, false, ImGuiWindowFlags_NoScrollbar);
+    };
+    auto end_panel = [&]() {
+      ImGui::EndChild();
+      ImGui::PopStyleVar();
+      ImGui::PopStyleColor();
+    };
+
+    const CabanaMessageSummary *message = find_selected_message(*session, *state);
+    const float min_center_width = message != nullptr ? kMinCenterWidth : 140.0f;
     float messages_width = std::clamp(state->cabana.messages_width, kMinMessagesWidth,
-                                      std::max(kMinMessagesWidth, avail.x - kMinCenterWidth - kMinRightWidth - 2.0f * kSplitterThickness));
+                                      std::max(kMinMessagesWidth, avail.x - min_center_width - kMinRightWidth - 2.0f * kSplitterThickness));
     float right_width = std::clamp(state->cabana.right_width, kMinRightWidth,
-                                   std::max(kMinRightWidth, avail.x - messages_width - kMinCenterWidth - 2.0f * kSplitterThickness));
-    const float max_messages = std::max(kMinMessagesWidth, avail.x - right_width - kMinCenterWidth - 2.0f * kSplitterThickness);
+                                   std::max(kMinRightWidth, avail.x - messages_width - min_center_width - 2.0f * kSplitterThickness));
+    const float max_messages = std::max(kMinMessagesWidth, avail.x - right_width - min_center_width - 2.0f * kSplitterThickness);
     messages_width = std::min(messages_width, max_messages);
-    const float center_width = std::max(kMinCenterWidth, avail.x - messages_width - right_width - 2.0f * kSplitterThickness);
+    const float center_width = std::max(min_center_width, avail.x - messages_width - right_width - 2.0f * kSplitterThickness);
     right_width = avail.x - messages_width - center_width - 2.0f * kSplitterThickness;
     state->cabana.messages_width = messages_width;
     state->cabana.right_width = right_width;
 
-    ImGui::BeginChild("##cabana_messages_panel", ImVec2(messages_width, avail.y), true);
+    const ImVec2 origin = ImGui::GetCursorPos();
+    begin_panel("##cabana_messages_panel", ImVec2(messages_width, avail.y));
     draw_messages_panel(session, state);
-    ImGui::EndChild();
-    ImGui::SameLine(0.0f, 0.0f);
-    draw_vertical_splitter("##cabana_left_splitter", avail.y, kMinMessagesWidth,
-                           std::max(kMinMessagesWidth, avail.x - kMinCenterWidth - right_width - 2.0f * kSplitterThickness),
-                           &state->cabana.messages_width);
-    ImGui::SameLine(0.0f, 0.0f);
+    end_panel();
 
-    const CabanaMessageSummary *message = find_selected_message(*session, *state);
     const float center_height = avail.y;
-    ImGui::BeginChild("##cabana_detail_panel", ImVec2(center_width, center_height), true);
+    ImGui::SetCursorPos(ImVec2(origin.x + messages_width, origin.y));
+    draw_vertical_splitter("##cabana_left_splitter", avail.y, kMinMessagesWidth,
+                           std::max(kMinMessagesWidth, avail.x - min_center_width - right_width - 2.0f * kSplitterThickness),
+                           &state->cabana.messages_width);
+    ImGui::SetCursorPos(ImVec2(origin.x + messages_width + kSplitterThickness, origin.y));
+    begin_panel("##cabana_detail_panel", ImVec2(center_width, center_height));
     if (message == nullptr) {
-      draw_empty_panel("Detail", "Select a decoded CAN message from the left panel.");
+      draw_cabana_welcome_panel();
     } else {
       state->cabana.detail_top_height = std::clamp(state->cabana.detail_top_height, kMinTopHeight,
                                                    std::max(kMinTopHeight, ImGui::GetContentRegionAvail().y - kMinBottomHeight - kSplitterThickness));
       draw_detail_panel(session, state, *message, state->cabana.detail_top_height);
     }
-    ImGui::EndChild();
-    ImGui::SameLine(0.0f, 0.0f);
+    end_panel();
+    ImGui::SetCursorPos(ImVec2(origin.x + messages_width + kSplitterThickness + center_width, origin.y));
     draw_right_splitter("##cabana_right_splitter", avail.y, kMinRightWidth,
                         std::max(kMinRightWidth, avail.x - state->cabana.messages_width - kMinCenterWidth - 2.0f * kSplitterThickness),
                         &state->cabana.right_width);
-    ImGui::SameLine(0.0f, 0.0f);
 
-    ImGui::BeginChild("##cabana_right_panel", ImVec2(0.0f, center_height), true);
+    ImGui::SetCursorPos(ImVec2(origin.x + messages_width + center_width + 2.0f * kSplitterThickness, origin.y));
+    begin_panel("##cabana_right_panel", ImVec2(right_width, center_height));
     const float right_avail_y = ImGui::GetContentRegionAvail().y;
     state->cabana.right_top_height = std::clamp(state->cabana.right_top_height, kMinTopHeight,
                                                 std::max(kMinTopHeight, right_avail_y - kMinBottomHeight - kSplitterThickness));
@@ -1817,9 +2529,11 @@ void draw_cabana_mode(AppSession *session, const UiMetrics &ui, UiState *state) 
                              std::max(kMinTopHeight, ImGui::GetContentRegionAvail().y - kMinBottomHeight),
                              &state->cabana.right_top_height);
     draw_chart_panel(session, state, message);
-    ImGui::EndChild();
+    end_panel();
+    ImGui::SetCursorPos(ImVec2(origin.x, origin.y));
+    ImGui::Dummy(avail);
   }
   ImGui::End();
-  ImGui::PopStyleColor(2);
-  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar(6);
 }

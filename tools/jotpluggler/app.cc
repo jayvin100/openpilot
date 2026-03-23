@@ -356,7 +356,9 @@ UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset, float sidebar
   ui.width = size.x;
   ui.height = size.y;
   ui.top_offset = top_offset;
-  ui.sidebar_width = std::clamp(sidebar_width, SIDEBAR_MIN_WIDTH, std::min(SIDEBAR_MAX_WIDTH, size.x * 0.6f));
+  ui.sidebar_width = sidebar_width <= 0.0f
+    ? 0.0f
+    : std::clamp(sidebar_width, SIDEBAR_MIN_WIDTH, std::min(SIDEBAR_MAX_WIDTH, size.x * 0.6f));
   ui.content_x = ui.sidebar_width;
   ui.content_y = top_offset;
   ui.content_w = std::max(1.0f, size.x - ui.content_x);
@@ -1847,6 +1849,7 @@ int run(const Options &options) {
     .layout = options.layout.empty() ? make_empty_layout() : load_sketch_layout(layout_path),
   };
   UiState ui_state;
+  ui_state.start_cabana = options.start_cabana;
   if (!layout_path.empty() && !session.autosave_path.empty() && fs::exists(session.autosave_path)) {
     session.layout = load_sketch_layout(session.autosave_path);
     ui_state.layout_dirty = true;
