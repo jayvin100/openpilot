@@ -501,6 +501,15 @@ version = "1.92.7"
 source = { git = "https://github.com/commaai/dependencies.git?subdirectory=imgui&rev=release-imgui#c5c108b23a2e0346480d7f4c4981bf6ec7ba9054" }
 
 [[package]]
+name = "importlib-resources"
+version = "6.5.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cf/8c/f834fbf984f691b4f7ff60f50b514cc3de5cc08abfc3295564dd89c5e2e7/importlib_resources-6.5.2.tar.gz", hash = "sha256:185f87adef5bcc288449d98fb4fba07cea78bc036455dd44c5fc4a2fe78fed2c", size = 44693, upload-time = "2025-01-03T18:51:56.698Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/ed/1f1afb2e9e7f38a545d628f864d562a5ae64fe6f7a10e28ffb9b185b4e89/importlib_resources-6.5.2-py3-none-any.whl", hash = "sha256:789cfdc3ed28c78b67a06acb8126751ced69a3d5f79c095a98298cd8a760ccec", size = 37461, upload-time = "2025-01-03T18:51:54.306Z" },
+]
+
+[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -584,6 +593,26 @@ source = { git = "https://github.com/commaai/dependencies.git?subdirectory=libjp
 name = "libusb"
 version = "1.0.29"
 source = { git = "https://github.com/commaai/dependencies.git?subdirectory=libusb&rev=release-libusb#8daf8079f98809ef4674177bca915a0a81eac52f" }
+
+[[package]]
+name = "libusb-package"
+version = "1.0.26.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "importlib-resources" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/f6/83e13936b5799360eae8f0e31b5b298dd092451b91136d7cd13852777954/libusb_package-1.0.26.3-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:c9404298485762a4e73b416e8a3208d33aa3274fb9b870c2a1cacba7e2918f19", size = 62045, upload-time = "2025-04-01T12:59:16.817Z" },
+    { url = "https://files.pythonhosted.org/packages/33/97/86ed73880b6734c9383be5f34061b541e8fe5bd0303580b1f5abe2962d58/libusb_package-1.0.26.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:8126f6711318dad4cb2805ea20cd47b895a847207087d8fdb032e082dd7a2e24", size = 59502, upload-time = "2025-04-01T12:59:17.72Z" },
+    { url = "https://files.pythonhosted.org/packages/95/f7/27b67b8fe63450abf0b0b66aacf75d5d64cdf30317e214409ceb534f34b4/libusb_package-1.0.26.3-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:11c219366e4a2368117b9a9807261f3506b5623531f8b8ce41af5bbaec8156a0", size = 70247, upload-time = "2025-04-01T14:53:14.387Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/11/613543f9c6dab5a82eefd0c78d52d08b5d9eb93a0362151fbedf74b32541/libusb_package-1.0.26.3-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:8809a50d8ab84297344c54e862027090c0d73b14abef843a8b5f783313f49457", size = 74537, upload-time = "2025-04-01T14:53:15.345Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/43/5a2331615693b56221a902869fb2094d9a0b9a764a8706c8ba16e915f77c/libusb_package-1.0.26.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a83067c3dfdbb3856badb4532eaea22e8502b52ce4245f5ab46acf93d7fbd471", size = 70652, upload-time = "2025-04-01T14:53:16.319Z" },
+    { url = "https://files.pythonhosted.org/packages/44/1a/186d4ec86421b69feb45e214edb5301fbcb9e8dc9df963678aeff1a447d5/libusb_package-1.0.26.3-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:b56be087ea9cde8e50fb02740a4f0cefb6f63c61ac2e7812a9244487614a3973", size = 71860, upload-time = "2025-04-01T14:53:17.87Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/3c/8cebdad822d7bfcb683a77d5fd113fbc6f72516cfb7c1c3a274fefafa8e9/libusb_package-1.0.26.3-cp312-cp312-musllinux_1_2_i686.whl", hash = "sha256:ea0f6bf40e54b1671e763e40c9dbed46bf7f596a4cd98b7c827e147f176d8c97", size = 76476, upload-time = "2025-04-01T14:53:19.202Z" },
+    { url = "https://files.pythonhosted.org/packages/49/5f/30c625b6c4ecd14871644c1d16e97d7c971f82a0f87a9cfa81022f85bcfc/libusb_package-1.0.26.3-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:b40f77df991c6db8621de9575504886eca03a00277e521a4d64b66cbef8f6997", size = 71037, upload-time = "2025-04-01T14:53:21.359Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/e9/3aa3ff3242867b7f22ee3ce28d0e93ff88547f170ca1b8a6edc59660d974/libusb_package-1.0.26.3-cp312-cp312-win32.whl", hash = "sha256:6eee99c9fde137443869c8604d0c01b2127a9545ebc59d06a3376cf1d891e786", size = 77642, upload-time = "2025-04-01T12:58:05.471Z" },
+    { url = "https://files.pythonhosted.org/packages/15/0e/913ddb1849f828fc385438874c34541939d9b06c0e5616f48f24cddd24de/libusb_package-1.0.26.3-cp312-cp312-win_amd64.whl", hash = "sha256:5e09c0b6b3cd475841cffe78e46e91df58f0c6c02ea105ea1a4d0755a07c8006", size = 90593, upload-time = "2025-04-01T12:58:06.798Z" },
+]
 
 [[package]]
 name = "libusb1"
@@ -749,6 +778,11 @@ wheels = [
 ]
 
 [[package]]
+name = "nanosvg"
+version = "0.0.1"
+source = { git = "https://github.com/commaai/dependencies.git?subdirectory=nanosvg&rev=release-nanosvg#94e35fcf0e4e53cdef647f4e4c1998a2ebfab3b5" }
+
+[[package]]
 name = "ncurses"
 version = "6.5"
 source = { git = "https://github.com/commaai/dependencies.git?subdirectory=ncurses&rev=release-ncurses#e33e7f648009ad97638b1a0a373a06a05526c040" }
@@ -813,6 +847,7 @@ dependencies = [
     { name = "json-rpc" },
     { name = "libjpeg" },
     { name = "libusb" },
+    { name = "libusb-package" },
     { name = "libusb1" },
     { name = "libyuv" },
     { name = "ncurses" },
@@ -868,6 +903,7 @@ testing = [
 tools = [
     { name = "imgui" },
     { name = "metadrive-simulator", marker = "platform_machine != 'aarch64'" },
+    { name = "nanosvg" },
 ]
 
 [package.metadata]
@@ -895,11 +931,13 @@ requires-dist = [
     { name = "json-rpc" },
     { name = "libjpeg", git = "https://github.com/commaai/dependencies.git?subdirectory=libjpeg&rev=release-libjpeg" },
     { name = "libusb", git = "https://github.com/commaai/dependencies.git?subdirectory=libusb&rev=release-libusb" },
+    { name = "libusb-package" },
     { name = "libusb1" },
     { name = "libyuv", git = "https://github.com/commaai/dependencies.git?subdirectory=libyuv&rev=release-libyuv" },
     { name = "matplotlib", marker = "extra == 'dev'" },
     { name = "metadrive-simulator", marker = "platform_machine != 'aarch64' and extra == 'tools'", git = "https://github.com/commaai/metadrive.git?rev=minimal" },
     { name = "mkdocs", marker = "extra == 'docs'" },
+    { name = "nanosvg", marker = "extra == 'tools'", git = "https://github.com/commaai/dependencies.git?subdirectory=nanosvg&rev=release-nanosvg" },
     { name = "ncurses", git = "https://github.com/commaai/dependencies.git?subdirectory=ncurses&rev=release-ncurses" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "opencv-python-headless", marker = "extra == 'dev'" },
