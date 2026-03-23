@@ -220,7 +220,7 @@ class SelfdriveD:
 
     # Handle calibration status
     cal_status = self.sm['liveCalibration'].calStatus
-    if cal_status != log.LiveCalibrationData.Status.calibrated:
+    if not self.CP.notCar and cal_status != log.LiveCalibrationData.Status.calibrated:
       if cal_status == log.LiveCalibrationData.Status.uncalibrated:
         self.events.add(EventName.calibrationIncomplete)
       elif cal_status == log.LiveCalibrationData.Status.recalibrating:
