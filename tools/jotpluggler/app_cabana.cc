@@ -181,9 +181,6 @@ std::string_view active_signal_path(const UiState &state) {
   if (!state.cabana.selected_signal_path.empty()) {
     return state.cabana.selected_signal_path;
   }
-  if (!state.cabana.chart_signal_paths.empty()) {
-    return state.cabana.chart_signal_paths.front();
-  }
   return {};
 }
 
@@ -306,7 +303,6 @@ bool queue_binary_drag_apply(AppSession *session,
   }
   if (clicked_signal != nullptr) {
     state->cabana.selected_signal_path = clicked_signal->path;
-    state->cabana.chart_signal_paths = {clicked_signal->path};
   }
   set_cabana_selected_bit(state, release_byte, release_bit);
   return true;
@@ -560,7 +556,6 @@ void select_cabana_message(AppSession *session, UiState *state, std::string_view
   }
   state->cabana.signal_filter[0] = '\0';
   state->cabana.selected_signal_path.clear();
-  state->cabana.chart_signal_paths.clear();
   state->cabana.detail_top_auto_fit = true;
   state->cabana.has_bit_selection = false;
   clear_similar_bit_results(state);
@@ -583,7 +578,6 @@ void close_cabana_message_tab(AppSession *session, UiState *state, std::string_v
   if (roots.empty()) {
     state->cabana.selected_message_root.clear();
     state->cabana.selected_signal_path.clear();
-    state->cabana.chart_signal_paths.clear();
     state->cabana.has_bit_selection = false;
     clear_similar_bit_results(state);
     clear_cabana_binary_drag(state);
@@ -649,7 +643,6 @@ void sync_cabana_selection(AppSession *session, UiState *state) {
   if (selected == nullptr) {
     state->cabana.selected_message_root.clear();
     state->cabana.selected_signal_path.clear();
-    state->cabana.chart_signal_paths.clear();
     state->cabana.has_bit_selection = false;
     clear_similar_bit_results(state);
     clear_cabana_binary_drag(state);
@@ -1261,7 +1254,6 @@ void draw_bit_selection_panel(AppSession *session, const CabanaMessageSummary &m
       if (i > 0) ImGui::SameLine(0.0f, 8.0f);
       if (ImGui::SmallButton(overlaps[i]->name.c_str())) {
         state->cabana.selected_signal_path = overlaps[i]->path;
-        state->cabana.chart_signal_paths = {overlaps[i]->path};
       }
     }
   }
@@ -1467,7 +1459,7 @@ void draw_can_frame_view(const CanMessageData &message,
       hover_bit = 7 - col;
     }
   }
-  if (state->cabana.binary_drag_active && hover_byte >= 0 && hover_bit >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+  if (state->cabana.binary_drag_active && hover_byte >= 0 && hover_bit >= 0) {
     if (state->cabana.binary_drag_current_byte != hover_byte || state->cabana.binary_drag_current_bit != hover_bit) {
       state->cabana.binary_drag_moved = true;
     }
@@ -1902,8 +1894,11 @@ void draw_messages_panel(AppSession *session, UiState *state) {
         ImGui::TableSetColumnIndex(6);
         const CanMessageData *message_data = find_message_data(*session, message);
         if (message_data != nullptr && !message_data->samples.empty()) {
-          const CanFrameSample &last = message_data->samples.back();
-          const CanFrameSample *prev = message_data->samples.size() > 1 ? &message_data->samples[message_data->samples.size() - 2] : nullptr;
+          const size_t current_index = state->has_tracker_time
+                                     ? closest_can_sample_index(*message_data, state->tracker_time)
+                                     : (message_data->samples.size() - 1);
+          const CanFrameSample &last = message_data->samples[current_index];
+          const CanFrameSample *prev = current_index > 0 ? &message_data->samples[current_index - 1] : nullptr;
           draw_payload_preview_boxes(("##msg_bytes_" + message.root_path).c_str(),
                                      last.data,
                                      prev == nullptr ? nullptr : &prev->data,

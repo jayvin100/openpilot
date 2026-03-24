@@ -277,7 +277,7 @@ bool apply_route_can_message_decode_update(AppSession *session, UiState *state, 
 
   std::unordered_map<std::string, EnumInfo> message_enum_info;
   std::vector<RouteSeries> message_series = decode_can_messages({*message_it}, active_dbc_name, &message_enum_info);
-  const std::string prefix = signal.message_root + "/";
+  const std::string prefix = "/" + signal.service + "/" + std::to_string(signal.bus) + "/" + signal.message_name + "/";
   const bool paths_changed = signal.creating || signal.original_signal_name != signal.signal_name;
 
   std::vector<RouteSeries> updated_series;

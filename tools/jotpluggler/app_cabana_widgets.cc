@@ -1712,20 +1712,7 @@ void draw_signal_panel(AppSession *session, UiState *state, const CabanaMessageS
         const ImRect spark_rect(ImVec2(std::max(row_rect.Min.x + 180.0f, value_rect.Min.x - 8.0f - spark_w), row_rect.Min.y + 2.0f),
                                 ImVec2(value_rect.Min.x - 8.0f, row_rect.Max.y - 2.0f));
 
-        const ImVec2 triangle_center(row_rect.Min.x + 9.0f, row_rect.Min.y + row_h * 0.5f);
-        if (selected) {
-          draw->AddTriangleFilled(ImVec2(triangle_center.x - 4.0f, triangle_center.y - 2.5f),
-                                  ImVec2(triangle_center.x + 4.0f, triangle_center.y - 2.5f),
-                                  ImVec2(triangle_center.x, triangle_center.y + 3.5f),
-                                  ImGui::GetColorU32(color_rgb(216, 220, 225)));
-        } else {
-          draw->AddTriangleFilled(ImVec2(triangle_center.x - 2.5f, triangle_center.y - 4.0f),
-                                  ImVec2(triangle_center.x - 2.5f, triangle_center.y + 4.0f),
-                                  ImVec2(triangle_center.x + 3.5f, triangle_center.y),
-                                  ImGui::GetColorU32(color_rgb(216, 220, 225)));
-        }
-
-        const float badge_x = row_rect.Min.x + 18.0f;
+        const float badge_x = row_rect.Min.x + 8.0f;
         const ImRect badge_rect(ImVec2(badge_x, row_rect.Min.y + 4.0f), ImVec2(badge_x + 22.0f, row_rect.Max.y - 4.0f));
         const ImU32 badge_fill = ImGui::GetColorU32(color_rgb(kCabanaSignalPalette[visible_index % kCabanaSignalPalette.size()]));
         draw->AddRectFilled(badge_rect.Min, badge_rect.Max, badge_fill, 3.0f);

@@ -126,7 +126,6 @@ bool open_find_signal_result(AppSession *session, UiState *state, const std::str
       state->view_mode = AppViewMode::Cabana;
       state->cabana.selected_message_root = message.root_path;
       state->cabana.selected_signal_path = path;
-      state->cabana.chart_signal_paths = {path};
       state->cabana.has_bit_selection = false;
       state->cabana.similar_bit_matches.clear();
       state->status_text = "Opened signal in Cabana";
@@ -690,9 +689,7 @@ bool apply_cabana_signal_edit_impl(AppSession *session, UiState *state) {
         }
       }
     }
-    if (signal.creating) {
-      state->cabana.chart_signal_paths = {new_path};
-    } else if (!replaced_chart) {
+    if (!signal.creating && !replaced_chart) {
       state->cabana.chart_signal_paths.erase(
         std::remove(state->cabana.chart_signal_paths.begin(), state->cabana.chart_signal_paths.end(), new_path),
         state->cabana.chart_signal_paths.end());
