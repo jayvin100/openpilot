@@ -29,8 +29,12 @@ void apply_route_data(AppSession *session, UiState *state, RouteData route_data)
   }
   session->route_data = std::move(route_data);
   rebuild_route_index(session);
-  rebuild_browser_nodes(session, state);
-  state->browser_nodes_dirty = false;
+  if (state->view_mode == AppViewMode::Cabana) {
+    state->browser_nodes_dirty = true;
+  } else {
+    rebuild_browser_nodes(session, state);
+    state->browser_nodes_dirty = false;
+  }
   rebuild_cabana_messages(session);
   refresh_all_custom_curves(session, state);
   sync_camera_feeds(session);

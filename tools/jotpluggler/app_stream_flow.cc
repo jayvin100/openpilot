@@ -163,7 +163,12 @@ void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch 
                        session->route_data.series.end(), series_cmp);
     session->route_data.roots = collect_route_roots_for_paths(session->route_data.paths);
     rebuild_route_index(session);
-    rebuild_browser_nodes(session, state);
+    if (state->view_mode == AppViewMode::Cabana) {
+      state->browser_nodes_dirty = true;
+    } else {
+      rebuild_browser_nodes(session, state);
+      state->browser_nodes_dirty = false;
+    }
   } else {
     for (const std::string &path : touched_paths) {
       auto series_it = session->series_by_path.find(path);

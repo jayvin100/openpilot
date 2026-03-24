@@ -123,6 +123,8 @@ ImU32 mix_color(ImU32 a, ImU32 b, float t);
 void draw_empty_panel(const char *title, const char *message);
 void draw_cabana_toolbar_button(const char *label, bool enabled, const std::function<void()> &on_click);
 void draw_cabana_warning_banner(const std::vector<std::string> &warnings);
+void draw_chart_panel(AppSession *session, UiState *state, const CabanaMessageSummary *message);
+void draw_signal_panel(AppSession *session, UiState *state, const CabanaMessageSummary &message);
 
 UiMetrics compute_ui_metrics(const ImVec2 &size, float top_offset, float sidebar_width);
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed);

@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <tuple>
@@ -35,37 +36,6 @@ constexpr std::array<std::array<uint8_t, 3>, 8> kSignalHighlightColors = {{
   {134, 172, 79},
   {150, 112, 63},
 }};
-
-bool parse_can_message_path(std::string_view path,
-                            std::string_view *service,
-                            int *bus,
-                            std::string_view *message,
-                            std::string_view *signal) {
-  if (path.empty() || path.front() != '/') {
-    return false;
-  }
-  size_t a = path.find('/', 1);
-  if (a == std::string_view::npos) return false;
-  size_t b = path.find('/', a + 1);
-  if (b == std::string_view::npos) return false;
-  size_t c = path.find('/', b + 1);
-  if (c == std::string_view::npos) return false;
-  size_t d = path.find('/', c + 1);
-  if (d != std::string_view::npos) return false;
-
-  *service = path.substr(1, a - 1);
-  if (*service != "can" && *service != "sendcan") {
-    return false;
-  }
-  try {
-    *bus = std::stoi(std::string(path.substr(a + 1, b - a - 1)));
-  } catch (...) {
-    return false;
-  }
-  *message = path.substr(b + 1, c - b - 1);
-  *signal = path.substr(c + 1);
-  return !message->empty() && !signal->empty();
-}
 
 std::optional<CanServiceKind> parse_can_service_kind(std::string_view service) {
   if (service == "can") return CanServiceKind::Can;
@@ -164,10 +134,6 @@ std::optional<dbc::Database> load_active_dbc(const AppSession &session) {
   return load_dbc_by_name(dbc_name);
 }
 
-struct DbcNameLookup {
-  std::unordered_map<std::string, uint32_t> unique_name_to_address;
-};
-
 struct BitBehaviorStats {
   double ones_ratio = 0.0;
   double flip_ratio = 0.0;
@@ -209,6 +175,16 @@ void clear_cabana_binary_drag(UiState *state) {
   state->cabana.binary_drag_current_byte = -1;
   state->cabana.binary_drag_current_bit = -1;
   state->cabana.binary_drag_signal_path.clear();
+}
+
+std::string_view active_signal_path(const UiState &state) {
+  if (!state.cabana.selected_signal_path.empty()) {
+    return state.cabana.selected_signal_path;
+  }
+  if (!state.cabana.chart_signal_paths.empty()) {
+    return state.cabana.chart_signal_paths.front();
+  }
+  return {};
 }
 
 void set_cabana_selected_bit(UiState *state, int byte_index, int bit_index) {
@@ -329,29 +305,11 @@ bool queue_binary_drag_apply(AppSession *session,
     return queued_apply;
   }
   if (clicked_signal != nullptr) {
+    state->cabana.selected_signal_path = clicked_signal->path;
     state->cabana.chart_signal_paths = {clicked_signal->path};
   }
   set_cabana_selected_bit(state, release_byte, release_bit);
   return true;
-}
-
-DbcNameLookup build_dbc_name_lookup(const std::optional<dbc::Database> &db) {
-  DbcNameLookup out;
-  if (!db.has_value()) {
-    return out;
-  }
-  std::unordered_set<std::string> duplicates;
-  for (const auto &[address, message] : db->messages()) {
-    auto [it, inserted] = out.unique_name_to_address.emplace(message.name, address);
-    if (!inserted) {
-      duplicates.insert(message.name);
-      out.unique_name_to_address.erase(it);
-    }
-  }
-  for (const std::string &name : duplicates) {
-    out.unique_name_to_address.erase(name);
-  }
-  return out;
 }
 
 bool contains_case_insensitive(std::string_view haystack, std::string_view needle) {
@@ -468,6 +426,7 @@ bool prepare_cabana_signal_editor(const AppSession &session,
   editor.message_root = message.root_path;
   editor.message_name = message.name;
   editor.service = message.service;
+  editor.signal_path = signal.path;
   editor.bus = message.bus;
   editor.message_address = message.address;
   editor.original_signal_name = it->name;
@@ -485,15 +444,6 @@ bool prepare_cabana_signal_editor(const AppSession &session,
   editor.receiver_name = it->receiver_name;
   editor.unit = it->unit;
   return true;
-}
-
-void open_cabana_signal_editor(const AppSession &session,
-                               UiState *state,
-                               const CabanaMessageSummary &message,
-                               const CabanaSignalSummary &signal) {
-  if (prepare_cabana_signal_editor(session, state, message, signal)) {
-    state->cabana_signal_editor.open = true;
-  }
 }
 
 bool prepare_cabana_new_signal_editor(const AppSession &session,
@@ -530,6 +480,7 @@ bool prepare_cabana_new_signal_editor(const AppSession &session,
   editor.message_root = message.root_path;
   editor.message_name = message.name;
   editor.service = message.service;
+  editor.signal_path.clear();
   editor.bus = message.bus;
   editor.message_address = message.address;
   editor.original_signal_name.clear();
@@ -580,6 +531,7 @@ void select_cabana_message(AppSession *session, UiState *state, std::string_view
     state->cabana.open_message_roots.emplace_back(root_path);
   }
   state->cabana.signal_filter[0] = '\0';
+  state->cabana.selected_signal_path.clear();
   state->cabana.chart_signal_paths.clear();
   state->cabana.detail_top_auto_fit = true;
   state->cabana.has_bit_selection = false;
@@ -602,6 +554,7 @@ void close_cabana_message_tab(AppSession *session, UiState *state, std::string_v
   }
   if (roots.empty()) {
     state->cabana.selected_message_root.clear();
+    state->cabana.selected_signal_path.clear();
     state->cabana.chart_signal_paths.clear();
     state->cabana.has_bit_selection = false;
     clear_similar_bit_results(state);
@@ -656,6 +609,7 @@ void sync_cabana_selection(AppSession *session, UiState *state) {
                    open_roots.end());
   if (session->cabana_messages.empty()) {
     state->cabana.selected_message_root.clear();
+    state->cabana.selected_signal_path.clear();
     state->cabana.open_message_roots.clear();
     state->cabana.chart_signal_paths.clear();
     state->cabana.has_bit_selection = false;
@@ -666,6 +620,7 @@ void sync_cabana_selection(AppSession *session, UiState *state) {
   const CabanaMessageSummary *selected = find_selected_message(*session, *state);
   if (selected == nullptr) {
     state->cabana.selected_message_root.clear();
+    state->cabana.selected_signal_path.clear();
     state->cabana.chart_signal_paths.clear();
     state->cabana.has_bit_selection = false;
     clear_similar_bit_results(state);
@@ -674,14 +629,20 @@ void sync_cabana_selection(AppSession *session, UiState *state) {
   }
 
   std::unordered_set<std::string> allowed;
+  allowed.reserve(selected->signals.size());
   for (const CabanaSignalSummary &signal : selected->signals) {
     allowed.insert(signal.path);
   }
   state->cabana.chart_signal_paths.erase(
     std::remove_if(state->cabana.chart_signal_paths.begin(), state->cabana.chart_signal_paths.end(),
-                   [&](const std::string &path) { return !allowed.count(path); }),
+                   [&](const std::string &path) { return session->series_by_path.find(path) == session->series_by_path.end(); }),
     state->cabana.chart_signal_paths.end());
-
+  if (!state->cabana.selected_signal_path.empty() && !allowed.count(state->cabana.selected_signal_path)) {
+    state->cabana.selected_signal_path.clear();
+  }
+  if (state->cabana.selected_signal_path.empty() && !state->cabana.chart_signal_paths.empty()) {
+    state->cabana.selected_signal_path = state->cabana.chart_signal_paths.front();
+  }
 }
 
 std::string format_cabana_time(double seconds) {
@@ -750,26 +711,6 @@ void draw_cabana_message_tabs(AppSession *session, UiState *state) {
   ImGui::EndChild();
   ImGui::PopStyleVar();
   ImGui::PopStyleColor();
-}
-
-std::optional<double> cabana_message_value_at_time(const AppSession &session, std::string_view path, double tracker_time) {
-  const RouteSeries *series = app_find_route_series(session, std::string(path));
-  if (series == nullptr || series->times.empty() || series->values.empty()) {
-    return std::nullopt;
-  }
-  return app_sample_xy_value_at_time(series->times, series->values, false, tracker_time);
-}
-
-std::string cabana_value_label(const AppSession &session, std::string_view path, double tracker_time) {
-  const auto value = cabana_message_value_at_time(session, path, tracker_time);
-  const auto format_it = session.route_data.series_formats.find(std::string(path));
-  const auto enum_it = session.route_data.enum_info.find(std::string(path));
-  if (!value.has_value() || format_it == session.route_data.series_formats.end()) {
-    return "--";
-  }
-  return format_display_value(*value,
-                              format_it->second,
-                              enum_it == session.route_data.enum_info.end() ? nullptr : &enum_it->second);
 }
 
 bool export_raw_can_csv(const AppSession &session,
@@ -1293,6 +1234,7 @@ void draw_bit_selection_panel(AppSession *session, const CabanaMessageSummary &m
     for (size_t i = 0; i < overlaps.size(); ++i) {
       if (i > 0) ImGui::SameLine(0.0f, 8.0f);
       if (ImGui::SmallButton(overlaps[i]->name.c_str())) {
+        state->cabana.selected_signal_path = overlaps[i]->path;
         state->cabana.chart_signal_paths = {overlaps[i]->path};
       }
     }
@@ -1936,110 +1878,6 @@ void draw_messages_panel(AppSession *session, UiState *state) {
   ImGui::PopStyleVar();
 }
 
-void draw_signal_toolbar(AppSession *session, UiState *state, const CabanaMessageSummary &message) {
-  const size_t charted = state->cabana.chart_signal_paths.size();
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_panel_alt_bg());
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
-  ImGui::BeginChild("##cabana_signals_header", ImVec2(0.0f, 56.0f), false, ImGuiWindowFlags_NoScrollbar);
-  app_push_bold_font();
-  ImGui::Text("Signals: %zu", message.signals.size());
-  app_pop_bold_font();
-  if (charted > 0) {
-    ImGui::SameLine(0.0f, 10.0f);
-    ImGui::TextDisabled("%zu charted", charted);
-  }
-  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.0f);
-  ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputTextWithHint("##cabana_signal_filter", "Filter Signal", state->cabana.signal_filter.data(),
-                           state->cabana.signal_filter.size());
-  ImGui::EndChild();
-  ImGui::PopStyleVar();
-  ImGui::PopStyleColor();
-  ImGui::Spacing();
-}
-
-void draw_signal_selection_table(AppSession *session, UiState *state, const CabanaMessageSummary &message) {
-  draw_signal_toolbar(session, state, message);
-  if (message.signals.empty()) {
-    ImGui::TextDisabled("No decoded signals for this message.");
-    return;
-  }
-  const std::string filter = trim_copy(state->cabana.signal_filter.data());
-  size_t visible_count = 0;
-  for (const CabanaSignalSummary &signal : message.signals) {
-    if (filter.empty() || contains_case_insensitive(signal.name, filter)) {
-      ++visible_count;
-    }
-  }
-  if (visible_count == 0) {
-    ImGui::TextDisabled("No signals match this filter.");
-    return;
-  }
-
-  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 3.0f));
-  if (ImGui::BeginTable("##cabana_signals", 6,
-                        ImGuiTableFlags_RowBg |
-                          ImGuiTableFlags_SizingStretchProp |
-                          ImGuiTableFlags_BordersInnerV |
-                          ImGuiTableFlags_ScrollY,
-                        ImGui::GetContentRegionAvail())) {
-    ImGui::TableSetupColumn("Chart", ImGuiTableColumnFlags_WidthFixed, 42.0f);
-    ImGui::TableSetupColumn("Signal", ImGuiTableColumnFlags_WidthStretch, 1.9f);
-    ImGui::TableSetupColumn("Bits", ImGuiTableColumnFlags_WidthFixed, 66.0f);
-    ImGui::TableSetupColumn("Trend", ImGuiTableColumnFlags_WidthFixed, 152.0f);
-    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-    ImGui::TableSetupColumn("Edit", ImGuiTableColumnFlags_WidthFixed, 54.0f);
-    ImGui::TableHeadersRow();
-    for (const CabanaSignalSummary &signal : message.signals) {
-      if (!filter.empty() && !contains_case_insensitive(signal.name, filter)) {
-        continue;
-      }
-      const bool selected = std::find(state->cabana.chart_signal_paths.begin(), state->cabana.chart_signal_paths.end(), signal.path)
-                         != state->cabana.chart_signal_paths.end();
-      ImGui::TableNextRow();
-      ImGui::TableNextColumn();
-      bool checked = selected;
-      const std::string checkbox_id = "##chart_" + signal.path;
-      if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
-        if (checked) {
-          state->cabana.chart_signal_paths.push_back(signal.path);
-        } else {
-          state->cabana.chart_signal_paths.erase(
-            std::remove(state->cabana.chart_signal_paths.begin(), state->cabana.chart_signal_paths.end(), signal.path),
-            state->cabana.chart_signal_paths.end());
-        }
-      }
-      ImGui::TableNextColumn();
-      ImGui::PushID(signal.path.c_str());
-      ImGui::ColorButton("##sig_color",
-                         ImGui::ColorConvertU32ToFloat4(signal_fill_color(std::hash<std::string>{}(signal.path), 0.55f, selected)),
-                         ImGuiColorEditFlags_NoTooltip,
-                         ImVec2(10.0f, 10.0f));
-      ImGui::SameLine(0.0f, 6.0f);
-      if (ImGui::Selectable((signal.name + "##name").c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
-        state->cabana.chart_signal_paths = {signal.path};
-      }
-      ImGui::PopID();
-      ImGui::TableNextColumn();
-      if (signal.has_bit_range) {
-        ImGui::TextDisabled("%d|%d", signal.start_bit, signal.size);
-      } else {
-        ImGui::TextDisabled("--");
-      }
-      ImGui::TableNextColumn();
-      draw_signal_sparkline(*session, *state, signal.path, selected);
-      ImGui::TableNextColumn();
-      ImGui::TextUnformatted(cabana_value_label(*session, signal.path, state->tracker_time).c_str());
-      ImGui::TableNextColumn();
-      if (ImGui::SmallButton(("Edit##" + signal.path).c_str())) {
-        open_cabana_signal_editor(*session, state, message, signal);
-      }
-    }
-    ImGui::EndTable();
-  }
-  ImGui::PopStyleVar();
-}
-
 void draw_logs_toolbar(const AppSession &session,
                        UiState *state,
                        const CabanaMessageSummary &message,
@@ -2062,7 +1900,7 @@ void draw_logs_toolbar(const AppSession &session,
     state->cabana.logs_hex_mode = true;
   }
 
-  const std::string signal_path = !state->cabana.chart_signal_paths.empty() ? state->cabana.chart_signal_paths.front() : std::string();
+  const std::string signal_path(active_signal_path(*state));
   if (can_show_signal_mode) {
     const size_t slash = signal_path.find_last_of('/');
     const std::string signal_name = slash == std::string::npos ? signal_path : signal_path.substr(slash + 1);
@@ -2106,9 +1944,7 @@ void draw_message_history(const AppSession &session, UiState *state, const Caban
     return;
   }
 
-  const std::string signal_path = !state->cabana.chart_signal_paths.empty()
-    ? state->cabana.chart_signal_paths.front()
-    : std::string();
+  const std::string signal_path(active_signal_path(*state));
   const RouteSeries *series = signal_path.empty() ? nullptr : app_find_route_series(session, signal_path);
   const auto format_it = signal_path.empty() ? session.route_data.series_formats.end() : session.route_data.series_formats.find(signal_path);
   const auto enum_it = signal_path.empty() ? session.route_data.enum_info.end() : session.route_data.enum_info.find(signal_path);
@@ -2283,7 +2119,7 @@ void draw_detail_panel(AppSession *session, UiState *state, const CabanaMessageS
                                                         std::max(min_top_frac, 1.0f - min_bottom_frac));
     }
     ImGui::BeginChild("##cabana_signals_bottom", ImVec2(0.0f, 0.0f), false);
-    draw_signal_selection_table(session, state, message);
+    draw_signal_panel(session, state, message);
     ImGui::EndChild();
   } else {
     if (message_data != nullptr) {
@@ -2452,95 +2288,17 @@ void draw_video_panel(AppSession *session, UiState *state, float height) {
   ImGui::PopStyleColor(2);
 }
 
-void draw_chart_panel(AppSession *session, UiState *state, const CabanaMessageSummary *message) {
-  const size_t chart_count = state->cabana.chart_signal_paths.size();
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_panel_alt_bg());
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
-  ImGui::BeginChild("##cabana_charts_header", ImVec2(0.0f, 30.0f), false, ImGuiWindowFlags_NoScrollbar);
-  app_push_bold_font();
-  ImGui::Text("Charts: %zu", chart_count);
-  app_pop_bold_font();
-  if (chart_count > 0) {
-    ImGui::SameLine(0.0f, 10.0f);
-    ImGui::TextDisabled("%s", chart_count == 1 ? "1 selected signal" : "selected signals");
-    const float clear_w = 44.0f;
-    ImGui::SameLine(std::max(0.0f, ImGui::GetWindowContentRegionMax().x - clear_w));
-    if (ImGui::SmallButton("Clear")) {
-      state->cabana.chart_signal_paths.clear();
-    }
-  }
-  ImGui::EndChild();
-  ImGui::PopStyleVar();
-  ImGui::PopStyleColor();
-
-  if (message == nullptr || state->cabana.chart_signal_paths.empty()) {
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_window_bg());
-    ImGui::BeginChild("##cabana_chart_empty", ImVec2(0.0f, 0.0f), false);
-    ImGui::TextDisabled("Select one or more signals to chart.");
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-    return;
-  }
-
-  Pane pane;
-  pane.kind = PaneKind::Plot;
-  pane.title = message->name;
-  for (const std::string &path : state->cabana.chart_signal_paths) {
-    Curve curve;
-    curve.name = path;
-    curve.color = app_next_curve_color(pane);
-    pane.curves.push_back(std::move(curve));
-  }
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_window_bg());
-  ImGui::BeginChild("##cabana_chart_plot", ImVec2(0.0f, 0.0f), false);
-  ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(6.0f, 4.0f));
-  ImPlot::PushStyleVar(ImPlotStyleVar_LabelPadding, ImVec2(4.0f, 2.0f));
-  ImPlot::PushStyleVar(ImPlotStyleVar_LegendPadding, ImVec2(4.0f, 4.0f));
-  ImPlot::PushStyleVar(ImPlotStyleVar_LegendInnerPadding, ImVec2(4.0f, 2.0f));
-  ImPlot::PushStyleVar(ImPlotStyleVar_LegendSpacing, ImVec2(4.0f, 1.0f));
-  draw_plot(*session, &pane, state);
-  ImPlot::PopStyleVar(5);
-  ImGui::EndChild();
-  ImGui::PopStyleColor();
-}
-
 }  // namespace
 
 void rebuild_cabana_messages(AppSession *session) {
   std::vector<CabanaMessageSummary> messages;
   const std::optional<dbc::Database> db = load_active_dbc(*session);
-  const DbcNameLookup dbc_lookup = build_dbc_name_lookup(db);
-  std::unordered_map<std::string, std::vector<std::string>> signal_paths_by_key;
-
-  for (const std::string &path : session->route_data.paths) {
-    std::string_view service_text;
-    std::string_view message_name;
-    std::string_view signal_name;
-    int bus = -1;
-    if (!parse_can_message_path(path, &service_text, &bus, &message_name, &signal_name)) {
-      continue;
-    }
-    const std::optional<CanServiceKind> service = parse_can_service_kind(service_text);
-    if (!service.has_value()) {
-      continue;
-    }
-    auto addr_it = dbc_lookup.unique_name_to_address.find(std::string(message_name));
-    if (addr_it == dbc_lookup.unique_name_to_address.end()) {
-      continue;
-    }
-    signal_paths_by_key[can_message_key(*service, static_cast<uint8_t>(bus), addr_it->second)].push_back(path);
-  }
-  for (auto &[_, paths] : signal_paths_by_key) {
-    std::sort(paths.begin(), paths.end());
-    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
-  }
 
   messages.reserve(session->route_data.can_messages.size());
   for (const CanMessageData &message_data : session->route_data.can_messages) {
     const dbc::Message *dbc_message = db.has_value() ? db->message(message_data.id.address) : nullptr;
-    const std::string key = can_message_key(message_data.id.service, message_data.id.bus, message_data.id.address);
     CabanaMessageSummary message{
-      .root_path = key,
+      .root_path = can_message_key(message_data.id.service, message_data.id.bus, message_data.id.address),
       .service = can_service_name(message_data.id.service),
       .name = dbc_message != nullptr ? dbc_message->name : format_can_address(message_data.id.address),
       .node = dbc_message != nullptr ? dbc_message->transmitter : std::string(),
@@ -2550,36 +2308,35 @@ void rebuild_cabana_messages(AppSession *session) {
       .has_address = true,
       .sample_count = message_data.samples.size(),
     };
-    auto signal_it = signal_paths_by_key.find(key);
-    if (signal_it != signal_paths_by_key.end()) {
-      std::unordered_map<std::string, const dbc::Signal *> signals_by_name;
-      if (dbc_message != nullptr) {
-        for (const dbc::Signal &signal : dbc_message->signals) {
-          signals_by_name.emplace(signal.name, &signal);
-        }
-      }
-      message.signals.reserve(signal_it->second.size());
-      std::unordered_set<std::string> seen_paths;
-      for (std::string &path : signal_it->second) {
-        if (!seen_paths.insert(path).second) {
+    if (dbc_message != nullptr) {
+      const std::string base_path = "/" + message.service + "/" + std::to_string(message.bus) + "/" + dbc_message->name + "/";
+      message.signals.reserve(dbc_message->signals.size());
+      for (const dbc::Signal &dbc_signal : dbc_message->signals) {
+        const std::string path = base_path + dbc_signal.name;
+        if (session->series_by_path.find(path) == session->series_by_path.end()) {
           continue;
         }
-        const size_t slash = path.find_last_of('/');
-        const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
-        CabanaSignalSummary signal_summary{
-          .path = std::move(path),
-          .name = name,
-        };
-        auto dbc_signal = signals_by_name.find(name);
-        if (dbc_signal != signals_by_name.end()) {
-          signal_summary.start_bit = dbc_signal->second->start_bit;
-          signal_summary.msb = dbc_signal->second->msb;
-          signal_summary.lsb = dbc_signal->second->lsb;
-          signal_summary.size = dbc_signal->second->size;
-          signal_summary.is_little_endian = dbc_signal->second->is_little_endian;
-          signal_summary.has_bit_range = true;
-        }
-        message.signals.push_back(std::move(signal_summary));
+        message.signals.push_back(CabanaSignalSummary{
+          .path = path,
+          .name = dbc_signal.name,
+          .unit = dbc_signal.unit,
+          .receiver_name = dbc_signal.receiver_name,
+          .comment = dbc_signal.comment,
+          .start_bit = dbc_signal.start_bit,
+          .msb = dbc_signal.msb,
+          .lsb = dbc_signal.lsb,
+          .size = dbc_signal.size,
+          .factor = dbc_signal.factor,
+          .offset = dbc_signal.offset,
+          .min = dbc_signal.min,
+          .max = dbc_signal.max,
+          .type = static_cast<int>(dbc_signal.type),
+          .multiplex_value = dbc_signal.multiplex_value,
+          .value_description_count = static_cast<int>(dbc_signal.value_descriptions.size()),
+          .is_signed = dbc_signal.is_signed,
+          .is_little_endian = dbc_signal.is_little_endian,
+          .has_bit_range = true,
+        });
       }
     }
     if (message_data.samples.size() > 1

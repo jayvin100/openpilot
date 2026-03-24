@@ -495,10 +495,21 @@ struct BrowserNode {
 struct CabanaSignalSummary {
   std::string path;
   std::string name;
+  std::string unit;
+  std::string receiver_name;
+  std::string comment;
   int start_bit = 0;
   int msb = 0;
   int lsb = 0;
   int size = 0;
+  double factor = 1.0;
+  double offset = 0.0;
+  double min = 0.0;
+  double max = 0.0;
+  int type = 0;
+  int multiplex_value = 0;
+  int value_description_count = 0;
+  bool is_signed = false;
   bool is_little_endian = false;
   bool has_bit_range = false;
 };
@@ -527,6 +538,18 @@ struct CabanaSimilarBitMatch {
   double score = 0.0;
   double ones_ratio = 0.0;
   double flip_ratio = 0.0;
+};
+
+struct CabanaChartState {
+  int id = 0;
+  int series_type = 0;
+  std::vector<std::string> signal_paths;
+  std::vector<bool> hidden;
+};
+
+struct CabanaChartTabState {
+  int id = 0;
+  std::vector<CabanaChartState> charts;
 };
 
 struct AppSession {
@@ -616,6 +639,7 @@ struct CabanaUiState {
   float layout_left_frac = 0.30f;
   float layout_center_frac = 0.32f;
   float layout_center_top_frac = 0.58f;
+  float layout_signal_list_frac = 0.56f;
   float layout_right_top_frac = 0.52f;
   bool detail_top_auto_fit = true;
   std::array<char, 128> message_filter = {};
@@ -625,6 +649,7 @@ struct CabanaUiState {
   std::array<char, 96> signal_filter = {};
   bool suppress_defined_signals = false;
   std::string selected_message_root;
+  std::string selected_signal_path;
   std::vector<std::string> open_message_roots;
   std::vector<std::string> chart_signal_paths;
   int detail_tab = 0;
@@ -654,6 +679,29 @@ struct CabanaUiState {
   bool similar_bits_loading = false;
   std::vector<CabanaSimilarBitMatch> similar_bit_matches;
   std::future<std::vector<CabanaSimilarBitMatch>> similar_bit_future;
+  std::vector<CabanaChartTabState> chart_tabs;
+  std::vector<std::optional<std::pair<double, double>>> chart_zoom_history;
+  std::vector<std::optional<std::pair<double, double>>> chart_zoom_redo;
+  int next_chart_tab_id = 1;
+  int next_chart_id = 1;
+  int active_chart_tab = 0;
+  int active_chart_index = 0;
+  int chart_columns = 1;
+  bool chart_scrub_was_playing = false;
+  bool chart_zoom_drag_active = false;
+  int chart_zoom_drag_chart_id = -1;
+  float chart_zoom_drag_plot_min_x = 0.0f;
+  float chart_zoom_drag_plot_min_y = 0.0f;
+  float chart_zoom_drag_plot_max_x = 0.0f;
+  float chart_zoom_drag_plot_max_y = 0.0f;
+  float chart_zoom_drag_start_x = 0.0f;
+  bool chart_timeline_zoom_drag_active = false;
+  float chart_timeline_zoom_start_x = 0.0f;
+  float chart_timeline_zoom_min_x = 0.0f;
+  float chart_timeline_zoom_max_x = 0.0f;
+  double chart_timeline_zoom_range_min = 0.0;
+  double chart_timeline_zoom_range_max = 0.0;
+  double chart_hover_sec = -1.0;
 };
 
 struct AxisLimitsEditorState {
@@ -683,6 +731,7 @@ struct CabanaSignalEditorState {
   std::string message_root;
   std::string message_name;
   std::string service;
+  std::string signal_path;
   int bus = -1;
   uint32_t message_address = 0;
   std::string original_signal_name;

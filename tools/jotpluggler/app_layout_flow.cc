@@ -125,6 +125,7 @@ bool open_find_signal_result(AppSession *session, UiState *state, const std::str
     if (signal_it != message.signals.end()) {
       state->view_mode = AppViewMode::Cabana;
       state->cabana.selected_message_root = message.root_path;
+      state->cabana.selected_signal_path = path;
       state->cabana.chart_signal_paths = {path};
       state->cabana.has_bit_selection = false;
       state->cabana.similar_bit_matches.clear();
@@ -641,10 +642,30 @@ bool apply_cabana_signal_edit_impl(AppSession *session, UiState *state) {
     }
   }
   if (save_dbc_editor_contents(session, state)) {
+    const std::string old_path = signal.creating
+      ? std::string()
+      : "/" + signal.service + "/" + std::to_string(signal.bus) + "/" + signal.message_name + "/" + signal.original_signal_name;
+    const std::string new_path = "/" + signal.service + "/" + std::to_string(signal.bus) + "/" + signal.message_name + "/" + signal.signal_name;
     state->cabana_signal_editor.open = false;
     state->cabana_signal_editor.loaded = false;
     state->cabana.selected_message_root = signal.message_root;
-    state->cabana.chart_signal_paths = {"/" + signal.service + "/" + std::to_string(signal.bus) + "/" + signal.message_name + "/" + signal.signal_name};
+    state->cabana.selected_signal_path = new_path;
+    bool replaced_chart = false;
+    if (!old_path.empty()) {
+      for (std::string &path : state->cabana.chart_signal_paths) {
+        if (path == old_path) {
+          path = new_path;
+          replaced_chart = true;
+        }
+      }
+    }
+    if (signal.creating) {
+      state->cabana.chart_signal_paths = {new_path};
+    } else if (!replaced_chart) {
+      state->cabana.chart_signal_paths.erase(
+        std::remove(state->cabana.chart_signal_paths.begin(), state->cabana.chart_signal_paths.end(), new_path),
+        state->cabana.chart_signal_paths.end());
+    }
     state->status_text = std::string(signal.creating ? "Created signal " : "Updated signal ") + signal.signal_name;
     return true;
   }
