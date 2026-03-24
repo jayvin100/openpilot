@@ -97,6 +97,8 @@ def report(platform, route, _description, CP, ID, maneuvers):
         else:
           builder.append(', <strong>not crossed</strong>')
         builder.append('</h3>')
+        if maneuver_valid:
+          target_cross_times.setdefault(description, [])
       else:
         action_targets = [(0, lat_accel(lateralPlan[0].desiredCurvature, v_ego[0]) - baseline_accel)]
         for i in range(1, min(len(lateralPlan), len(v_ego))):
@@ -126,6 +128,8 @@ def report(platform, route, _description, CP, ID, maneuvers):
           else:
             builder.append(', <strong>not crossed</strong>')
           builder.append('</h3>')
+          if maneuver_valid:
+            target_cross_times.setdefault(f"{description} ({act_target:+.1f})", [])
 
       plt.rcParams['font.size'] = 40
       fig = plt.figure(figsize=(30, 30))
