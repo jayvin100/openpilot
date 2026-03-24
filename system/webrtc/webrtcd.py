@@ -163,7 +163,7 @@ class StreamSession:
     builder = WebRTCAnswerBuilder(sdp)
 
     # Use the camera the encoder is currently active on, so reconnects don't get a blank stream
-    active_camera = (Params().get("LivestreamCamera") or b"driver").decode()
+    active_camera = Params().get("LivestreamCamera") or "driver"
     if active_camera not in ("driver", "wideRoad"):
       active_camera = "driver"
     self.video_track = LiveStreamVideoStreamTrack(active_camera) if not debug_mode else VideoStreamTrack()
