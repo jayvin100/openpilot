@@ -162,10 +162,12 @@ class StreamSession:
     config = parse_info_from_offer(sdp)
     builder = WebRTCAnswerBuilder(sdp)
 
-    assert config.n_expected_camera_tracks == 1, "Incoming stream must have exactly 1 video track"
-    default_camera = cameras[0] if cameras else "driver"
-    self.video_track = LiveStreamVideoStreamTrack(default_camera) if not debug_mode else VideoStreamTrack()
-    builder.add_video_stream(default_camera, self.video_track)
+    # Use the camera the encoder is currently active on, so reconnects don't get a blank stream
+    active_camera = (Params().get("LivestreamCamera") or b"driver").decode()
+    if active_camera not in ("driver", "wideRoad"):
+      active_camera = "driver"
+    self.video_track = LiveStreamVideoStreamTrack(active_camera) if not debug_mode else VideoStreamTrack()
+    builder.add_video_stream(active_camera, self.video_track)
 
     self.outgoing_audio_track: BodyMicAudioTrack | None = None
     if config.expected_audio_track:
@@ -231,7 +233,10 @@ class StreamSession:
       return
     camera = data.get("camera")
     if camera in ("driver", "wideRoad"):
-      Params().put("LivestreamCamera", camera)
+      try:
+        Params().put("LivestreamCamera", camera)
+      except Exception:
+        self.logger.warning("Failed to write LivestreamCamera param")
       if hasattr(self, 'video_track') and hasattr(self.video_track, 'switch_camera'):
         self.video_track.switch_camera(camera)
       self.logger.info("Switched livestream camera to %s", camera)
@@ -267,6 +272,13 @@ class StreamSession:
           channel = self.stream.get_messaging_channel()
           self.outgoing_bridge_runner.proxy.add_channel(channel)
           self.outgoing_bridge_runner.start()
+      # Tell the client which camera is currently active
+      if self.stream.has_messaging_channel():
+        try:
+          active = getattr(self.video_track, '_camera_type', 'driver')
+          self.stream.get_messaging_channel().send(json.dumps({"type": "activeCamera", "data": {"camera": active}}))
+        except Exception:
+          pass
       self.logger.info("Stream session (%s) connected", self.identifier)
 
       await self.stream.wait_for_disconnection()
@@ -380,7 +392,8 @@ async def get_stream(request: 'web.Request'):
 
     stream_dict[session.identifier] = session
 
-    response = web.json_response({"sdp": answer.sdp, "type": answer.type})
+    active_camera = getattr(session.video_track, '_camera_type', 'driver')
+    response = web.json_response({"sdp": answer.sdp, "type": answer.type, "activeCamera": active_camera})
     _add_cors_headers(request, response)
     return response
   except web.HTTPException:

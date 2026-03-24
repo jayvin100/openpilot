@@ -105,8 +105,9 @@ class BodyLayout(Widget):
       return
 
     steer = sm['testJoystick'].axes[1] if len(sm['testJoystick'].axes) > 1 else 0
-    self._turning_left = steer <= -0.05
-    self._turning_right = steer >= 0.05
+    is_v2 = sm['carParams'].carFingerprint == "COMMA_BODY_V2"
+    self._turning_left = steer <= -0.05 * (1 if is_v2 else -1)
+    self._turning_right = steer >= 0.05 * (1 if is_v2 else -1)
 
   def _handle_mouse_release(self, mouse_pos):
     # Check pair button (only on big UI; on MICI it's on the home screen)

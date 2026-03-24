@@ -169,7 +169,7 @@ void stream_encoderd_thread() {
   }
 
   std::string active_camera = params.get("LivestreamCamera");
-  if (active_camera.empty()) active_camera = "wideRoad";
+  if (active_camera.empty()) active_camera = "driver";
 
   while (!do_exit) {
     const LogCameraInfo *cam_info = find_stream_camera(active_camera);
