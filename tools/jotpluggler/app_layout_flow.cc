@@ -566,6 +566,37 @@ bool insert_signal_line(std::string *text,
   return inserted;
 }
 
+bool remove_signal_line(std::string *text,
+                        uint32_t address,
+                        const std::string &signal_name) {
+  std::istringstream in(*text);
+  std::string line;
+  std::string out;
+  bool in_message = false;
+  bool removed = false;
+  while (std::getline(in, line)) {
+    const std::string trimmed = trim_copy(line);
+    if (trimmed.rfind("BO_ ", 0) == 0) {
+      char *end = nullptr;
+      const long parsed = std::strtol(trimmed.c_str() + 4, &end, 10);
+      in_message = end != nullptr && parsed == static_cast<long>(address);
+    } else if (in_message && trimmed.rfind("SG_ ", 0) == 0) {
+      const size_t name_start = 4;
+      const size_t name_end = trimmed.find(' ', name_start);
+      const std::string current_name = name_end == std::string::npos ? trimmed.substr(name_start) : trimmed.substr(name_start, name_end - name_start);
+      if (current_name == signal_name) {
+        removed = true;
+        continue;
+      }
+    }
+    out += line + "\n";
+  }
+  if (removed) {
+    *text = std::move(out);
+  }
+  return removed;
+}
+
 bool save_dbc_editor_contents(AppSession *session, UiState *state) {
   DbcEditorState &editor = state->dbc_editor;
   editor.save_name = trim_copy(editor.save_name);
@@ -667,6 +698,38 @@ bool apply_cabana_signal_edit_impl(AppSession *session, UiState *state) {
         state->cabana.chart_signal_paths.end());
     }
     state->status_text = std::string(signal.creating ? "Created signal " : "Updated signal ") + signal.signal_name;
+    return true;
+  }
+  return false;
+}
+
+bool apply_cabana_signal_delete_impl(AppSession *session, UiState *state) {
+  if (!ensure_dbc_editor_loaded(*session, state)) {
+    return false;
+  }
+  CabanaSignalEditorState &signal = state->cabana_signal_editor;
+  if (signal.creating || trim_copy(signal.original_signal_name).empty()) {
+    state->error_text = "No existing signal selected for deletion";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (!remove_signal_line(&state->dbc_editor.text, signal.message_address, signal.original_signal_name)) {
+    state->error_text = "Failed to locate signal in DBC text";
+    state->open_error_popup = true;
+    return false;
+  }
+  if (save_dbc_editor_contents(session, state)) {
+    const std::string old_path = "/" + signal.service + "/" + std::to_string(signal.bus) + "/" + signal.message_name + "/" + signal.original_signal_name;
+    state->cabana_signal_editor.open = false;
+    state->cabana_signal_editor.loaded = false;
+    state->cabana.selected_message_root = signal.message_root;
+    if (state->cabana.selected_signal_path == old_path) {
+      state->cabana.selected_signal_path.clear();
+    }
+    state->cabana.chart_signal_paths.erase(
+      std::remove(state->cabana.chart_signal_paths.begin(), state->cabana.chart_signal_paths.end(), old_path),
+      state->cabana.chart_signal_paths.end());
+    state->status_text = "Deleted signal " + signal.original_signal_name;
     return true;
   }
   return false;
@@ -831,6 +894,10 @@ void draw_error_popup(UiState *state) {
 
 bool apply_cabana_signal_edit(AppSession *session, UiState *state) {
   return apply_cabana_signal_edit_impl(session, state);
+}
+
+bool apply_cabana_signal_delete(AppSession *session, UiState *state) {
+  return apply_cabana_signal_delete_impl(session, state);
 }
 
 bool reset_layout(AppSession *session, UiState *state) {

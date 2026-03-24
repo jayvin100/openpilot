@@ -371,11 +371,38 @@ bool cabana_message_matches_filters(const CabanaMessageSummary &message,
                                     std::string_view name_filter,
                                     std::string_view bus_filter,
                                     std::string_view addr_filter,
-                                    std::string_view node_filter) {
-  return contains_case_insensitive(message.name, name_filter)
+                                    std::string_view node_filter,
+                                    std::string_view freq_filter,
+                                    std::string_view count_filter,
+                                    std::string_view bytes_filter,
+                                    const CanMessageData *message_data) {
+  const bool name_matches = [&] {
+    if (name_filter.empty()) {
+      return true;
+    }
+    if (contains_case_insensitive(message.name, name_filter)) {
+      return true;
+    }
+    return std::any_of(message.signals.begin(), message.signals.end(), [&](const CabanaSignalSummary &signal) {
+      return contains_case_insensitive(signal.name, name_filter);
+    });
+  }();
+  const bool bytes_matches = [&] {
+    if (bytes_filter.empty()) {
+      return true;
+    }
+    if (message_data == nullptr || message_data->samples.empty()) {
+      return false;
+    }
+    return contains_case_insensitive(payload_hex(message_data->samples.back().data), trim_copy(bytes_filter));
+  }();
+  return name_matches
       && cabana_match_numeric_filter(bus_filter, message.bus)
       && cabana_match_address_filter(addr_filter, message.address)
-      && contains_case_insensitive(message.node, node_filter);
+      && contains_case_insensitive(message.node, node_filter)
+      && cabana_match_numeric_filter(freq_filter, message.frequency_hz)
+      && cabana_match_numeric_filter(count_filter, static_cast<double>(message.sample_count))
+      && bytes_matches;
 }
 
 const CanMessageData *find_message_data(const AppSession &session, const CabanaMessageSummary &message) {
@@ -526,6 +553,7 @@ const CabanaMessageSummary *find_message_by_root(const AppSession &session, std:
 
 void select_cabana_message(AppSession *session, UiState *state, std::string_view root_path) {
   state->cabana.selected_message_root.assign(root_path);
+  state->cabana.sync_message_tabs = true;
   if (std::find(state->cabana.open_message_roots.begin(), state->cabana.open_message_roots.end(), root_path)
       == state->cabana.open_message_roots.end()) {
     state->cabana.open_message_roots.emplace_back(root_path);
@@ -640,9 +668,6 @@ void sync_cabana_selection(AppSession *session, UiState *state) {
   if (!state->cabana.selected_signal_path.empty() && !allowed.count(state->cabana.selected_signal_path)) {
     state->cabana.selected_signal_path.clear();
   }
-  if (state->cabana.selected_signal_path.empty() && !state->cabana.chart_signal_paths.empty()) {
-    state->cabana.selected_signal_path = state->cabana.chart_signal_paths.front();
-  }
 }
 
 std::string format_cabana_time(double seconds) {
@@ -657,57 +682,58 @@ std::string format_cabana_time(double seconds) {
 
 void draw_cabana_message_tabs(AppSession *session, UiState *state) {
   auto &roots = state->cabana.open_message_roots;
-  if (roots.empty()) {
+  if (roots.size() <= 1) {
     return;
   }
   ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_panel_alt_bg());
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
-  ImGui::BeginChild("##cabana_message_tabs", ImVec2(0.0f, 32.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f, 0.0f));
+  ImGui::BeginChild("##cabana_message_tabs", ImVec2(0.0f, 28.0f), false, ImGuiWindowFlags_NoScrollbar);
+  int close_index = -1;
+  int close_others_index = -1;
+  if (ImGui::BeginTabBar("##cabana_message_tabbar",
+                         ImGuiTabBarFlags_FittingPolicyResizeDown |
+                           ImGuiTabBarFlags_Reorderable |
+                           ImGuiTabBarFlags_NoTooltip)) {
   for (size_t i = 0; i < roots.size(); ++i) {
     const CabanaMessageSummary *message = find_message_by_root(*session, roots[i]);
     if (message == nullptr) {
       continue;
     }
-    if (i > 0) ImGui::SameLine(0.0f, 4.0f);
-    const bool active = state->cabana.selected_message_root == roots[i];
-    ImGui::BeginGroup();
     const std::string message_id = cabana_message_id_label(*message);
-    const float label_w = std::min(112.0f, ImGui::CalcTextSize(message_id.c_str()).x + 16.0f);
     const std::string label = message_id + "###cabana_tab_" + roots[i];
-    ImGui::PushStyleColor(ImGuiCol_Button, active ? cabana_window_bg() : cabana_panel_bg());
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? cabana_window_bg() : color_rgb(67, 70, 73));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, cabana_window_bg());
-    if (ImGui::Button(label.c_str(), ImVec2(label_w, 24.0f))) {
-      select_cabana_message(session, state, roots[i]);
+    bool open = true;
+    const ImGuiTabItemFlags flags = (state->cabana.sync_message_tabs && state->cabana.selected_message_root == roots[i])
+                                  ? ImGuiTabItemFlags_SetSelected
+                                  : 0;
+    if (ImGui::BeginTabItem(label.c_str(), &open, flags)) {
+      if (!state->cabana.sync_message_tabs && state->cabana.selected_message_root != roots[i]) {
+        select_cabana_message(session, state, roots[i]);
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", message->name.c_str());
+      }
+      if (ImGui::BeginPopupContextItem(("##cabana_tab_ctx_" + roots[i]).c_str())) {
+        if (ImGui::MenuItem("Close Other Tabs", nullptr, false, roots.size() > 1)) {
+          close_others_index = static_cast<int>(i);
+        }
+        ImGui::EndPopup();
+      }
+      ImGui::EndTabItem();
     }
-    ImGui::PopStyleColor(3);
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", message->name.c_str());
+    if (!open) {
+      close_index = static_cast<int>(i);
     }
-    const ImRect label_rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::PushStyleColor(ImGuiCol_Button, active ? cabana_window_bg() : cabana_panel_bg());
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? cabana_window_bg() : color_rgb(67, 70, 73));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, cabana_window_bg());
-    const std::string close_id = "x##cabana_tab_close_" + roots[i];
-    if (ImGui::SmallButton(close_id.c_str())) {
-      close_cabana_message_tab(session, state, roots[i]);
-      ImGui::PopStyleColor(3);
-      ImGui::EndGroup();
-      --i;
-      continue;
-    }
-    ImGui::PopStyleColor(3);
-    const ImRect close_rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    const ImRect tab_rect(label_rect.Min, ImVec2(close_rect.Max.x, std::max(label_rect.Max.y, close_rect.Max.y)));
-    ImDrawList *draw = ImGui::GetWindowDrawList();
-    draw->AddRect(tab_rect.Min, tab_rect.Max, ImGui::GetColorU32(active ? cabana_border_color() : color_rgb(92, 96, 101)));
-    if (active) {
-      draw->AddLine(ImVec2(tab_rect.Min.x + 1.0f, tab_rect.Max.y), ImVec2(tab_rect.Max.x - 1.0f, tab_rect.Max.y),
-                    ImGui::GetColorU32(cabana_accent()), 2.0f);
-    }
-    ImGui::EndGroup();
   }
+    ImGui::EndTabBar();
+  }
+  if (close_others_index >= 0) {
+    const std::string keep = roots[static_cast<size_t>(close_others_index)];
+    roots.assign(1, keep);
+    select_cabana_message(session, state, keep);
+  } else if (close_index >= 0) {
+    close_cabana_message_tab(session, state, roots[static_cast<size_t>(close_index)]);
+  }
+  state->cabana.sync_message_tabs = false;
   ImGui::EndChild();
   ImGui::PopStyleVar();
   ImGui::PopStyleColor();
@@ -1728,6 +1754,9 @@ void draw_messages_panel(AppSession *session, UiState *state) {
   const std::string bus_filter = trim_copy(state->cabana.message_bus_filter.data());
   const std::string addr_filter = trim_copy(state->cabana.message_addr_filter.data());
   const std::string node_filter = trim_copy(state->cabana.message_node_filter.data());
+  const std::string freq_filter = trim_copy(state->cabana.message_freq_filter.data());
+  const std::string count_filter = trim_copy(state->cabana.message_count_filter.data());
+  const std::string bytes_filter = trim_copy(state->cabana.message_bytes_filter.data());
 
   std::vector<int> filtered_indices;
   filtered_indices.reserve(session->cabana_messages.size());
@@ -1735,10 +1764,12 @@ void draw_messages_panel(AppSession *session, UiState *state) {
   size_t filtered_dbc_count = 0;
   for (int i = 0; i < static_cast<int>(session->cabana_messages.size()); ++i) {
     const CabanaMessageSummary &message = session->cabana_messages[static_cast<size_t>(i)];
+    const CanMessageData *message_data = find_message_data(*session, message);
     if (state->cabana.suppress_defined_signals && !message.signals.empty()) {
       continue;
     }
-    if (!cabana_message_matches_filters(message, name_filter, bus_filter, addr_filter, node_filter)) {
+    if (!cabana_message_matches_filters(message, name_filter, bus_filter, addr_filter, node_filter,
+                                        freq_filter, count_filter, bytes_filter, message_data)) {
       continue;
     }
     filtered_indices.push_back(i);
@@ -1765,6 +1796,9 @@ void draw_messages_panel(AppSession *session, UiState *state) {
     state->cabana.message_bus_filter[0] = '\0';
     state->cabana.message_addr_filter[0] = '\0';
     state->cabana.message_node_filter[0] = '\0';
+    state->cabana.message_freq_filter[0] = '\0';
+    state->cabana.message_count_filter[0] = '\0';
+    state->cabana.message_bytes_filter[0] = '\0';
   }
   ImGui::SameLine(0.0f, 8.0f);
   ImGui::Checkbox("Suppress Signals", &state->cabana.suppress_defined_signals);
@@ -1819,11 +1853,17 @@ void draw_messages_panel(AppSession *session, UiState *state) {
     ImGui::InputTextWithHint("##cabana_filter_node", "Node", state->cabana.message_node_filter.data(),
                              state->cabana.message_node_filter.size());
     ImGui::TableSetColumnIndex(4);
-    ImGui::TextDisabled(" ");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##cabana_filter_freq", "Hz", state->cabana.message_freq_filter.data(),
+                             state->cabana.message_freq_filter.size());
     ImGui::TableSetColumnIndex(5);
-    ImGui::TextDisabled(" ");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##cabana_filter_count", "Count", state->cabana.message_count_filter.data(),
+                             state->cabana.message_count_filter.size());
     ImGui::TableSetColumnIndex(6);
-    ImGui::TextDisabled(" ");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##cabana_filter_bytes", "Bytes", state->cabana.message_bytes_filter.data(),
+                             state->cabana.message_bytes_filter.size());
 
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(filtered_indices.size()));
@@ -2464,5 +2504,9 @@ void draw_cabana_mode(AppSession *session, const UiMetrics &ui, UiState *state) 
   if (state->cabana.pending_apply_signal_edit) {
     state->cabana.pending_apply_signal_edit = false;
     apply_cabana_signal_edit(session, state);
+  }
+  if (state->cabana.pending_delete_signal) {
+    state->cabana.pending_delete_signal = false;
+    apply_cabana_signal_delete(session, state);
   }
 }

@@ -646,8 +646,13 @@ struct CabanaUiState {
   std::array<char, 32> message_bus_filter = {};
   std::array<char, 48> message_addr_filter = {};
   std::array<char, 64> message_node_filter = {};
+  std::array<char, 32> message_freq_filter = {};
+  std::array<char, 32> message_count_filter = {};
+  std::array<char, 64> message_bytes_filter = {};
   std::array<char, 96> signal_filter = {};
+  int sparkline_range_sec = 15;
   bool suppress_defined_signals = false;
+  bool sync_message_tabs = true;
   std::string selected_message_root;
   std::string selected_signal_path;
   std::vector<std::string> open_message_roots;
@@ -666,6 +671,7 @@ struct CabanaUiState {
   bool binary_drag_moved = false;
   bool binary_drag_signal_is_little_endian = true;
   bool pending_apply_signal_edit = false;
+  bool pending_delete_signal = false;
   int binary_drag_press_byte = -1;
   int binary_drag_press_bit = -1;
   int binary_drag_anchor_byte = -1;

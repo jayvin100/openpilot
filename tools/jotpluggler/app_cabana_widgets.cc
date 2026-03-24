@@ -356,10 +356,15 @@ void draw_cabana_warning_banner(const std::vector<std::string> &warnings) {
 void draw_signal_sparkline(const AppSession &session,
                            const UiState &state,
                            std::string_view signal_path,
-                           bool selected) {
+                           bool selected,
+                           ImVec2 size) {
   const RouteSeries *series = app_find_route_series(session, std::string(signal_path));
-  const float width = std::max(96.0f, ImGui::GetColumnWidth() - 12.0f);
-  const ImVec2 size(width, 24.0f);
+  if (size.x <= 0.0f) {
+    size.x = std::max(96.0f, ImGui::GetContentRegionAvail().x);
+  }
+  if (size.y <= 0.0f) {
+    size.y = 24.0f;
+  }
   if (series == nullptr || series->times.size() < 2 || series->times.size() != series->values.size()) {
     ImGui::Dummy(size);
     return;
@@ -376,15 +381,14 @@ void draw_signal_sparkline(const AppSession &session,
   draw->AddRectFilled(rect.Min, rect.Max, bg, 4.0f);
   draw->AddRect(rect.Min, rect.Max, border, 4.0f);
 
-  double x_min = series->times.front();
-  double x_max = series->times.back();
-  if (state.has_shared_range) {
-    const double overlap_min = std::max(x_min, state.x_view_min);
-    const double overlap_max = std::min(x_max, state.x_view_max);
-    if (overlap_max > overlap_min) {
-      x_min = overlap_min;
-      x_max = overlap_max;
-    }
+  const double anchor = state.has_tracker_time
+                      ? std::clamp(state.tracker_time, series->times.front(), series->times.back())
+                      : series->times.back();
+  double x_max = anchor;
+  double x_min = std::max(series->times.front(), anchor - std::max(1, state.cabana.sparkline_range_sec));
+  if (x_max <= x_min) {
+    x_min = series->times.front();
+    x_max = series->times.back();
   }
   if (x_max <= x_min) {
     return;
@@ -1083,16 +1087,16 @@ void draw_chart_panel(AppSession *session, UiState *state, const CabanaMessageSu
     ImPlot::PushStyleColor(ImPlotCol_InlayText, color_rgb(214, 219, 225));
     ImPlot::PushStyleColor(ImPlotCol_AxisGrid, color_rgb(86, 90, 96));
     ImPlot::PushStyleColor(ImPlotCol_AxisText, color_rgb(182, 188, 196));
-    ImPlot::PushStyleColor(ImPlotCol_AxisBg, color_rgb(52, 54, 57));
-    ImPlot::PushStyleColor(ImPlotCol_AxisBgHovered, color_rgb(78, 82, 88, 0.38f));
-    ImPlot::PushStyleColor(ImPlotCol_AxisBgActive, color_rgb(92, 98, 106, 0.48f));
+    ImPlot::PushStyleColor(ImPlotCol_AxisBg, color_rgb(47, 49, 52));
+    ImPlot::PushStyleColor(ImPlotCol_AxisBgHovered, color_rgb(52, 54, 57, 0.96f));
+    ImPlot::PushStyleColor(ImPlotCol_AxisBgActive, color_rgb(58, 61, 65, 0.98f));
     ImPlot::PushStyleColor(ImPlotCol_Selection, color_rgb(117, 161, 242, 0.22f));
     ImPlot::PushStyleColor(ImPlotCol_Crosshairs, color_rgb(214, 219, 225, 0.70f));
 
     if (ImPlot::BeginPlot("##cabana_signal_plot", plot_size, ImPlotFlags_NoMenus | ImPlotFlags_NoBoxSelect | ImPlotFlags_NoMouseText | ImPlotFlags_NoLegend)) {
       ImPlotAxisFlags x_flags = rows > 1 && ci < chart_count - eff_columns ? ImPlotAxisFlags_NoTickLabels : ImPlotAxisFlags_None;
       ImPlot::SetupAxes(ci >= chart_count - eff_columns ? "Time (s)" : nullptr, nullptr,
-                        x_flags | ImPlotAxisFlags_NoMenus,
+                        x_flags | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight,
                         ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_NoHighlight);
       ImPlot::SetupAxisLinks(ImAxis_X1, &state->x_view_min, &state->x_view_max);
       if (state->route_x_max > state->route_x_min) {
@@ -1354,7 +1358,20 @@ const CabanaSignalSummary *find_message_signal(const CabanaMessageSummary &messa
   return it == message.signals.end() ? nullptr : &*it;
 }
 
-void toggle_cabana_signal_chart(UiState *state, std::string_view path, bool enabled) {
+void toggle_cabana_signal_chart(UiState *state, std::string_view path, bool enabled, bool new_chart_on_enable = false) {
+  if (enabled && new_chart_on_enable) {
+    ensure_chart_tabs(state);
+    CabanaChartTabState *tab = active_chart_tab(state);
+    if (tab != nullptr) {
+      CabanaChartState chart{.id = state->cabana.next_chart_id++};
+      chart.signal_paths.push_back(std::string(path));
+      chart.hidden.push_back(false);
+      tab->charts.push_back(std::move(chart));
+      state->cabana.active_chart_index = static_cast<int>(tab->charts.size()) - 1;
+      sync_chart_signal_aggregate(state);
+    }
+    return;
+  }
   auto &paths = state->cabana.chart_signal_paths;
   auto it = std::find(paths.begin(), paths.end(), path);
   if (enabled) {
@@ -1453,34 +1470,48 @@ void draw_signal_list_header(UiState *state, const CabanaMessageSummary &message
   const size_t charted = state->cabana.chart_signal_paths.size();
   ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_panel_alt_bg());
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
-  ImGui::BeginChild("##cabana_signals_header", ImVec2(0.0f, 58.0f), false, ImGuiWindowFlags_NoScrollbar);
-  app_push_bold_font();
-  ImGui::Text("Signals: %zu", message.signals.size());
-  app_pop_bold_font();
-  if (charted > 0) {
-    ImGui::SameLine(0.0f, 10.0f);
-    ImGui::TextDisabled("%zu charted", charted);
+  ImGui::BeginChild("##cabana_signals_header", ImVec2(0.0f, 34.0f), false, ImGuiWindowFlags_NoScrollbar);
+  if (ImGui::BeginTable("##cabana_signal_header_layout", 3,
+                        ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX | ImGuiTableFlags_NoPadInnerX)) {
+    ImGui::TableSetupColumn("##left", ImGuiTableColumnFlags_WidthFixed, 132.0f);
+    ImGui::TableSetupColumn("##filter", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthFixed, 182.0f);
+    ImGui::TableNextRow();
+
+    ImGui::TableSetColumnIndex(0);
+    app_push_bold_font();
+    ImGui::Text("Signals: %zu", message.signals.size());
+    app_pop_bold_font();
+    if (charted > 0) {
+      ImGui::SameLine(0.0f, 8.0f);
+      ImGui::TextDisabled("%zu charted", charted);
+    }
+
+    ImGui::TableSetColumnIndex(1);
+    const bool show_clear = state->cabana.signal_filter[0] != '\0';
+    ImGui::SetNextItemWidth(show_clear ? -24.0f : -FLT_MIN);
+    ImGui::InputTextWithHint("##cabana_signal_filter", "Filter signal / unit / receiver", state->cabana.signal_filter.data(),
+                             state->cabana.signal_filter.size());
+    if (show_clear) {
+      ImGui::SameLine(0.0f, 4.0f);
+      if (ImGui::SmallButton("x##clear_signal_filter")) {
+        state->cabana.signal_filter[0] = '\0';
+      }
+    }
+
+    ImGui::TableSetColumnIndex(2);
+    ImGui::TextDisabled("%ds", state->cabana.sparkline_range_sec);
+    ImGui::SameLine(0.0f, 4.0f);
+    ImGui::SetNextItemWidth(76.0f);
+    ImGui::SliderInt("##cabana_sparkline_range", &state->cabana.sparkline_range_sec, 1, 30, "");
+    ImGui::SameLine(0.0f, 6.0f);
+    if (ImGui::SmallButton("Collapse")) {
+      state->cabana.selected_signal_path.clear();
+      state->cabana_signal_editor.loaded = false;
+      state->cabana_signal_editor.creating = false;
+    }
+    ImGui::EndTable();
   }
-  const bool can_add_from_bit = state->cabana.has_bit_selection;
-  const char *add_label = can_add_from_bit ? "Add From Bit" : "Add Signal";
-  const float add_w = 96.0f;
-  const float clear_w = 46.0f;
-  ImGui::SameLine(std::max(0.0f, ImGui::GetWindowContentRegionMax().x - add_w - clear_w - 10.0f));
-  if (ImGui::SmallButton(add_label)) {
-    const int start_bit = can_add_from_bit
-      ? state->cabana.selected_bit_byte * 8 + state->cabana.selected_bit_index
-      : 0;
-    start_inline_signal_create(state, message, start_bit, 1, true);
-    state->cabana.selected_signal_path.clear();
-  }
-  ImGui::SameLine(0.0f, 6.0f);
-  if (ImGui::SmallButton("Clear")) {
-    state->cabana.signal_filter[0] = '\0';
-  }
-  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.0f);
-  ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputTextWithHint("##cabana_signal_filter", "Filter signal / unit / receiver", state->cabana.signal_filter.data(),
-                           state->cabana.signal_filter.size());
   ImGui::EndChild();
   ImGui::PopStyleVar();
   ImGui::PopStyleColor();
@@ -1490,11 +1521,14 @@ void draw_signal_list_header(UiState *state, const CabanaMessageSummary &message
 void draw_signal_inspector(AppSession *session,
                            UiState *state,
                            const CabanaMessageSummary &message,
-                           const CabanaSignalSummary *selected_signal) {
+                           const CabanaSignalSummary *selected_signal,
+                           bool inline_mode = false) {
   CabanaSignalEditorState &editor = state->cabana_signal_editor;
   const bool showing_create = editor.loaded && editor.creating && editor.message_root == message.root_path;
   if (selected_signal == nullptr && !showing_create) {
-    draw_empty_panel("Signal Inspector", "Select a decoded signal to inspect and edit it.");
+    if (!inline_mode) {
+      draw_empty_panel("Signal Inspector", "Select a decoded signal to inspect and edit it.");
+    }
     return;
   }
   if (selected_signal != nullptr
@@ -1503,14 +1537,16 @@ void draw_signal_inspector(AppSession *session,
   }
 
   const bool charted = !editor.creating && !editor.signal_path.empty() && cabana_signal_charted(*state, editor.signal_path);
-  draw_cabana_panel_title(showing_create ? "New Signal" : "Signal Inspector",
-                          showing_create ? "Create and save directly into the active DBC" : std::string_view{});
+  if (!inline_mode) {
+    draw_cabana_panel_title(showing_create ? "New Signal" : "Signal Inspector",
+                            showing_create ? "Create and save directly into the active DBC" : std::string_view{});
+  }
   ImGui::PushStyleColor(ImGuiCol_ChildBg, cabana_panel_alt_bg());
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
-  ImGui::BeginChild("##cabana_signal_editor", ImVec2(0.0f, 0.0f), true);
+  ImGui::BeginChild(inline_mode ? "##cabana_signal_editor_inline" : "##cabana_signal_editor", ImVec2(0.0f, 0.0f), true);
 
   app_push_bold_font();
-  ImGui::TextUnformatted(editor.signal_name.c_str());
+  ImGui::TextUnformatted(showing_create ? "New Signal" : editor.signal_name.c_str());
   app_pop_bold_font();
   if (!editor.unit.empty()) {
     ImGui::SameLine(0.0f, 8.0f);
@@ -1527,7 +1563,7 @@ void draw_signal_inspector(AppSession *session,
     ImGui::SameLine(0.0f, 12.0f);
     bool plot = charted;
     if (ImGui::Checkbox("Plot", &plot)) {
-      toggle_cabana_signal_chart(state, editor.signal_path, plot);
+      toggle_cabana_signal_chart(state, editor.signal_path, plot, plot && !charted);
     }
   }
 
@@ -1629,100 +1665,173 @@ void draw_signal_panel(AppSession *session, UiState *state, const CabanaMessageS
   }
 
   const CabanaSignalSummary *selected_signal = find_message_signal(message, state->cabana.selected_signal_path);
-  const bool show_editor = selected_signal != nullptr
-                        || (state->cabana_signal_editor.loaded
-                            && state->cabana_signal_editor.creating
-                            && state->cabana_signal_editor.message_root == message.root_path);
+  const bool show_create_editor = state->cabana_signal_editor.loaded
+                               && state->cabana_signal_editor.creating
+                               && state->cabana_signal_editor.message_root == message.root_path;
 
-  float list_height = ImGui::GetContentRegionAvail().y;
-  if (show_editor) {
-    const float split_span = std::max(1.0f, list_height - 4.0f);
-    const float min_list_frac = 110.0f / split_span;
-    const float min_editor_frac = 170.0f / split_span;
-    state->cabana.layout_signal_list_frac = std::clamp(state->cabana.layout_signal_list_frac,
-                                                       min_list_frac,
-                                                       std::max(min_list_frac, 1.0f - min_editor_frac));
-    list_height = std::clamp(std::floor(split_span * state->cabana.layout_signal_list_frac),
-                             110.0f,
-                             std::max(110.0f, ImGui::GetContentRegionAvail().y - 170.0f - 4.0f));
+  ImGui::BeginChild("##cabana_signal_list", ImVec2(0.0f, 0.0f), false);
+  if (show_create_editor && selected_signal == nullptr) {
+    ImGui::BeginChild("##cabana_signal_create_inline", ImVec2(0.0f, 228.0f), false);
+    draw_signal_inspector(session, state, message, nullptr, true);
+    ImGui::EndChild();
+    ImGui::Dummy(ImVec2(0.0f, 6.0f));
   }
-
-  ImGui::BeginChild("##cabana_signal_list", ImVec2(0.0f, show_editor ? list_height : 0.0f), false);
   if (visible_indices.empty()) {
     ImGui::TextDisabled("No signals match this filter.");
   } else {
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 3.0f));
-    if (ImGui::BeginTable("##cabana_signals", 6,
-                          ImGuiTableFlags_RowBg |
-                            ImGuiTableFlags_SizingStretchProp |
-                            ImGuiTableFlags_BordersInnerV |
-                            ImGuiTableFlags_ScrollY,
-                          ImGui::GetContentRegionAvail())) {
-      ImGui::TableSetupColumn("Plot", ImGuiTableColumnFlags_WidthFixed, 38.0f);
-      ImGui::TableSetupColumn("Signal", ImGuiTableColumnFlags_WidthStretch, 1.8f);
-      ImGui::TableSetupColumn("Bits", ImGuiTableColumnFlags_WidthFixed, 86.0f);
-      ImGui::TableSetupColumn("Unit", ImGuiTableColumnFlags_WidthFixed, 84.0f);
-      ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 112.0f);
-      ImGui::TableSetupColumn("Trend", ImGuiTableColumnFlags_WidthFixed, 156.0f);
-      ImGui::TableHeadersRow();
-      for (size_t visible_index : visible_indices) {
+    for (size_t row = 0; row < visible_indices.size(); ++row) {
+        const size_t visible_index = visible_indices[row];
         const CabanaSignalSummary &signal = message.signals[visible_index];
         const bool charted = cabana_signal_charted(*state, signal.path);
         const bool selected = state->cabana.selected_signal_path == signal.path;
+
         ImGui::PushID(signal.path.c_str());
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        bool plot = charted;
-        if (ImGui::Checkbox("##plot", &plot)) {
-          toggle_cabana_signal_chart(state, signal.path, plot);
+        const ImVec2 row_pos = ImGui::GetCursorScreenPos();
+        const float row_w = ImGui::GetContentRegionAvail().x;
+        const float row_h = 28.0f;
+        ImGui::Dummy(ImVec2(row_w, row_h));
+        const ImRect row_rect(row_pos, ImVec2(row_pos.x + row_w, row_pos.y + row_h));
+        const bool row_hovered = ImGui::IsMouseHoveringRect(row_rect.Min, row_rect.Max);
+        ImDrawList *draw = ImGui::GetWindowDrawList();
+        const ImU32 row_bg = ImGui::GetColorU32(selected ? color_rgb(66, 84, 117) : (row_hovered ? color_rgb(66, 68, 72) : color_rgb(58, 61, 64)));
+        const ImU32 row_border = ImGui::GetColorU32(selected ? color_rgb(108, 145, 214) : color_rgb(86, 90, 96));
+        draw->AddRectFilled(row_rect.Min, row_rect.Max, row_bg, 3.0f);
+        draw->AddRect(row_rect.Min, row_rect.Max, row_border, 3.0f);
+
+        const float button_w = 22.0f;
+        const float value_w = 82.0f;
+        const float spark_w = std::clamp(row_w * 0.28f, 110.0f, 180.0f);
+        const ImRect delete_rect(ImVec2(row_rect.Max.x - 6.0f - button_w, row_rect.Min.y + 3.0f),
+                                 ImVec2(row_rect.Max.x - 6.0f, row_rect.Max.y - 3.0f));
+        const ImRect edit_rect(ImVec2(delete_rect.Min.x - 4.0f - button_w, row_rect.Min.y + 3.0f),
+                               ImVec2(delete_rect.Min.x - 4.0f, row_rect.Max.y - 3.0f));
+        const ImRect plot_rect(ImVec2(edit_rect.Min.x - 4.0f - button_w, row_rect.Min.y + 3.0f),
+                               ImVec2(edit_rect.Min.x - 4.0f, row_rect.Max.y - 3.0f));
+        const ImRect value_rect(ImVec2(plot_rect.Min.x - 8.0f - value_w, row_rect.Min.y),
+                                ImVec2(plot_rect.Min.x - 8.0f, row_rect.Max.y));
+        const ImRect spark_rect(ImVec2(std::max(row_rect.Min.x + 180.0f, value_rect.Min.x - 8.0f - spark_w), row_rect.Min.y + 2.0f),
+                                ImVec2(value_rect.Min.x - 8.0f, row_rect.Max.y - 2.0f));
+
+        const ImVec2 triangle_center(row_rect.Min.x + 9.0f, row_rect.Min.y + row_h * 0.5f);
+        if (selected) {
+          draw->AddTriangleFilled(ImVec2(triangle_center.x - 4.0f, triangle_center.y - 2.5f),
+                                  ImVec2(triangle_center.x + 4.0f, triangle_center.y - 2.5f),
+                                  ImVec2(triangle_center.x, triangle_center.y + 3.5f),
+                                  ImGui::GetColorU32(color_rgb(216, 220, 225)));
+        } else {
+          draw->AddTriangleFilled(ImVec2(triangle_center.x - 2.5f, triangle_center.y - 4.0f),
+                                  ImVec2(triangle_center.x - 2.5f, triangle_center.y + 4.0f),
+                                  ImVec2(triangle_center.x + 3.5f, triangle_center.y),
+                                  ImGui::GetColorU32(color_rgb(216, 220, 225)));
         }
 
-        ImGui::TableNextColumn();
-        ImGui::ColorButton("##sig_color",
-                           color_rgb(kCabanaSignalPalette[visible_index % kCabanaSignalPalette.size()]),
-                           ImGuiColorEditFlags_NoTooltip,
-                           ImVec2(10.0f, 10.0f));
-        ImGui::SameLine(0.0f, 6.0f);
-        if (ImGui::Selectable(signal.name.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
-          state->cabana.selected_signal_path = signal.path;
-        }
-        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-          toggle_cabana_signal_chart(state, signal.path, !charted);
+        const float badge_x = row_rect.Min.x + 18.0f;
+        const ImRect badge_rect(ImVec2(badge_x, row_rect.Min.y + 4.0f), ImVec2(badge_x + 22.0f, row_rect.Max.y - 4.0f));
+        const ImU32 badge_fill = ImGui::GetColorU32(color_rgb(kCabanaSignalPalette[visible_index % kCabanaSignalPalette.size()]));
+        draw->AddRectFilled(badge_rect.Min, badge_rect.Max, badge_fill, 3.0f);
+        const std::string ordinal = std::to_string(static_cast<int>(row) + 1);
+        const ImVec2 ordinal_size = ImGui::CalcTextSize(ordinal.c_str());
+        draw->AddText(ImVec2(badge_rect.Min.x + (badge_rect.GetWidth() - ordinal_size.x) * 0.5f,
+                             badge_rect.Min.y + (badge_rect.GetHeight() - ordinal_size.y) * 0.5f - 1.0f),
+                      ImGui::GetColorU32(IM_COL32_BLACK), ordinal.c_str());
+
+        float text_x = badge_rect.Max.x + 8.0f;
+        if (signal.type != 0) {
+          const std::string mux = signal.type == static_cast<int>(dbc::Signal::Type::Multiplexor)
+                                ? "M"
+                                : ("m" + std::to_string(signal.multiplex_value));
+          const ImVec2 mux_size = ImGui::CalcTextSize(mux.c_str());
+          const ImRect mux_rect(ImVec2(text_x, row_rect.Min.y + 5.0f),
+                                ImVec2(text_x + mux_size.x + 10.0f, row_rect.Max.y - 5.0f));
+          draw->AddRectFilled(mux_rect.Min, mux_rect.Max, ImGui::GetColorU32(color_rgb(118, 122, 128)), 3.0f);
+          draw->AddText(ImVec2(mux_rect.Min.x + 5.0f, mux_rect.Min.y + (mux_rect.GetHeight() - mux_size.y) * 0.5f - 1.0f),
+                        ImGui::GetColorU32(color_rgb(238, 240, 242)),
+                        mux.c_str());
+          text_x = mux_rect.Max.x + 8.0f;
         }
 
-        ImGui::TableNextColumn();
-        ImGui::TextDisabled("%d|%d %s%s",
-                            signal.start_bit,
-                            signal.size,
-                            signal.is_little_endian ? "LE" : "BE",
-                            signal.is_signed ? " S" : " U");
-        ImGui::TableNextColumn();
-        if (signal.unit.empty()) ImGui::TextDisabled("-");
-        else ImGui::TextUnformatted(signal.unit.c_str());
-        ImGui::TableNextColumn();
-        ImGui::TextUnformatted(cabana_chart_value_label(*session, signal.path, state->tracker_time).c_str());
-        ImGui::TableNextColumn();
-        draw_signal_sparkline(*session, *state, signal.path, selected || charted);
+        const ImRect name_rect(ImVec2(text_x, row_rect.Min.y), ImVec2(std::max(text_x, spark_rect.Min.x - 10.0f), row_rect.Max.y));
+        const std::string name = signal.name;
+        const ImVec2 name_size = ImGui::CalcTextSize(name.c_str());
+        const float name_max_w = std::max(0.0f, name_rect.GetWidth());
+        std::string name_text = name;
+        if (name_size.x > name_max_w) {
+          name_text = name.substr(0, std::min(name.size(), static_cast<size_t>(std::max(1.0f, name_max_w / 7.0f)))) + "...";
+        }
+        draw->AddText(ImVec2(name_rect.Min.x, row_rect.Min.y + 6.0f),
+                      ImGui::GetColorU32(color_rgb(225, 229, 233)),
+                      name_text.c_str());
+
+        ImGui::SetCursorScreenPos(spark_rect.Min);
+        draw_signal_sparkline(*session, *state, signal.path, selected || charted, spark_rect.GetSize());
+        draw->AddText(ImVec2(value_rect.Min.x, row_rect.Min.y + 6.0f),
+                      ImGui::GetColorU32(color_rgb(207, 212, 218)),
+                      cabana_chart_value_label(*session, signal.path, state->tracker_time).c_str());
+
+        auto draw_row_button = [&](const char *id, const ImRect &rect, const char *glyph, bool active, const char *tooltip) {
+          ImGui::SetCursorScreenPos(rect.Min);
+          ImGui::InvisibleButton(id, rect.GetSize());
+          const bool hovered = ImGui::IsItemHovered();
+          draw->AddRectFilled(rect.Min, rect.Max,
+                              ImGui::GetColorU32(active ? cabana_accent() : (hovered ? color_rgb(82, 86, 91) : color_rgb(67, 70, 74))),
+                              3.0f);
+          draw->AddRect(rect.Min, rect.Max, ImGui::GetColorU32(color_rgb(96, 101, 108)), 3.0f);
+          ImVec2 text_size = ImGui::CalcTextSize(glyph);
+          draw->AddText(ImVec2(rect.Min.x + (rect.GetWidth() - text_size.x) * 0.5f,
+                               rect.Min.y + (rect.GetHeight() - text_size.y) * 0.5f - 1.0f),
+                        ImGui::GetColorU32(color_rgb(236, 239, 242)),
+                        glyph);
+          if (hovered && tooltip != nullptr) {
+            ImGui::SetTooltip("%s", tooltip);
+          }
+          return ImGui::IsItemClicked(ImGuiMouseButton_Left);
+        };
+
+        const bool plot_clicked = draw_row_button("##plot", plot_rect, icon::BAR_CHART, charted,
+                                                  charted ? "Close Plot" : "Show Plot");
+        const bool edit_clicked = draw_row_button("##edit", edit_rect, icon::SLIDERS, false, "Inspect / Edit Signal");
+        const bool delete_clicked = draw_row_button("##delete", delete_rect, "x", false, "Delete Signal");
+
+        if (plot_clicked) {
+          toggle_cabana_signal_chart(state, signal.path, !charted, !charted);
+        }
+        if (edit_clicked) {
+          if (selected) {
+            state->cabana.selected_signal_path.clear();
+            state->cabana_signal_editor.loaded = false;
+          } else {
+            state->cabana.selected_signal_path = signal.path;
+          }
+        }
+        if (delete_clicked) {
+          load_inline_signal_editor(state, message, signal);
+          state->cabana.pending_delete_signal = true;
+        }
+
+        const bool row_clickable = row_hovered
+                                && !ImGui::IsMouseHoveringRect(plot_rect.Min, plot_rect.Max)
+                                && !ImGui::IsMouseHoveringRect(edit_rect.Min, edit_rect.Max)
+                                && !ImGui::IsMouseHoveringRect(delete_rect.Min, delete_rect.Max);
+        if (row_clickable && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+          if (selected) {
+            state->cabana.selected_signal_path.clear();
+            state->cabana_signal_editor.loaded = false;
+          } else {
+            state->cabana.selected_signal_path = signal.path;
+          }
+        }
+        if (row_clickable && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+          toggle_cabana_signal_chart(state, signal.path, !charted, !charted);
+        }
+        if (selected) {
+          ImGui::Dummy(ImVec2(0.0f, 4.0f));
+          ImGui::BeginChild("##cabana_signal_inline_editor", ImVec2(0.0f, 228.0f), false);
+          draw_signal_inspector(session, state, message, &signal, true);
+          ImGui::EndChild();
+          ImGui::Dummy(ImVec2(0.0f, 6.0f));
+        }
         ImGui::PopID();
-      }
-      ImGui::EndTable();
     }
-    ImGui::PopStyleVar();
   }
-  ImGui::EndChild();
-
-  if (!show_editor) {
-    return;
-  }
-  if (draw_horizontal_splitter("##cabana_signal_editor_splitter",
-                               ImGui::GetContentRegionAvail().x,
-                               110.0f,
-                               std::max(110.0f, ImGui::GetContentRegionAvail().y - 170.0f),
-                               &list_height)) {
-    const float split_span = std::max(1.0f, list_height + ImGui::GetContentRegionAvail().y);
-    state->cabana.layout_signal_list_frac = std::clamp(list_height / split_span, 0.2f, 0.8f);
-  }
-  ImGui::BeginChild("##cabana_signal_inspector", ImVec2(0.0f, 0.0f), false);
-  draw_signal_inspector(session, state, message, selected_signal);
   ImGui::EndChild();
 }

@@ -88,6 +88,7 @@ void clear_layout_autosave(const AppSession &session);
 bool autosave_layout(AppSession *session, UiState *state);
 bool apply_axis_limits_editor(AppSession *session, UiState *state);
 bool apply_cabana_signal_edit(AppSession *session, UiState *state);
+bool apply_cabana_signal_delete(AppSession *session, UiState *state);
 void open_axis_limits_editor(const AppSession &session, UiState *state, int pane_index);
 void persist_shared_range_to_tab(WorkspaceTab *tab, const UiState &state);
 void clear_pane_vertical_limits(Pane *pane);
@@ -117,7 +118,11 @@ void draw_right_splitter(const char *id, float height, float min_right, float ma
 bool draw_horizontal_splitter(const char *id, float width, float min_top, float max_top, float *top_height);
 void draw_payload_bytes(std::string_view data, const std::string *prev_data = nullptr);
 void draw_payload_preview_boxes(const char *id, std::string_view data, const std::string *prev_data, float max_width);
-void draw_signal_sparkline(const AppSession &session, const UiState &state, std::string_view signal_path, bool selected);
+void draw_signal_sparkline(const AppSession &session,
+                           const UiState &state,
+                           std::string_view signal_path,
+                           bool selected,
+                           ImVec2 size = ImVec2(0.0f, 24.0f));
 void draw_signal_overlay_legend(const std::vector<std::pair<const CabanaSignalSummary *, ImU32>> &highlighted);
 ImU32 mix_color(ImU32 a, ImU32 b, float t);
 void draw_empty_panel(const char *title, const char *message);
