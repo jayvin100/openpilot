@@ -162,9 +162,10 @@ class StreamSession:
     config = parse_info_from_offer(sdp)
     builder = WebRTCAnswerBuilder(sdp)
 
-    assert len(cameras) == config.n_expected_camera_tracks, "Incoming stream has misconfigured number of video tracks"
-    for cam in cameras:
-      builder.add_video_stream(cam, LiveStreamVideoStreamTrack(cam) if not debug_mode else VideoStreamTrack())
+    assert config.n_expected_camera_tracks == 1, "Incoming stream must have exactly 1 video track"
+    default_camera = cameras[0] if cameras else "driver"
+    self.video_track = LiveStreamVideoStreamTrack(default_camera) if not debug_mode else VideoStreamTrack()
+    builder.add_video_stream(default_camera, self.video_track)
 
     self.outgoing_audio_track: BodyMicAudioTrack | None = None
     if config.expected_audio_track:
@@ -224,8 +225,23 @@ class StreamSession:
   async def get_answer(self):
     return await self.stream.start()
 
+  def _handle_switch_camera(self, payload: dict):
+    data = payload.get("data")
+    if not isinstance(data, dict):
+      return
+    camera = data.get("camera")
+    if camera in ("driver", "wideRoad"):
+      Params().put("LivestreamCamera", camera)
+      if hasattr(self, 'video_track') and hasattr(self.video_track, 'switch_camera'):
+        self.video_track.switch_camera(camera)
+      self.logger.info("Switched livestream camera to %s", camera)
+
   async def message_handler(self, message: bytes):
     try:
+      payload = json.loads(message) if isinstance(message, (bytes, str)) else None
+      if isinstance(payload, dict) and payload.get("type") == "switchCamera":
+        self._handle_switch_camera(payload)
+        return
       sound_name = parse_body_sound_request(message)
       if sound_name is not None:
         if self.audio_output is not None:

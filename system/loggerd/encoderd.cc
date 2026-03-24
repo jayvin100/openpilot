@@ -151,6 +151,76 @@ void encoderd_thread(const LogCameraInfo (&cameras)[N]) {
   }
 }
 
+// Map param value to stream camera config
+const LogCameraInfo *find_stream_camera(const std::string &name) {
+  if (name == "driver") return &stream_driver_camera_info;
+  return &stream_wide_road_camera_info;  // default
+}
+
+void stream_encoderd_thread() {
+  Params params;
+
+  // Wait for cameras to be available
+  std::set<VisionStreamType> available_streams;
+  while (!do_exit) {
+    available_streams = VisionIpcClient::getAvailableStreams("camerad", false);
+    if (!available_streams.empty()) break;
+    util::sleep_for(100);
+  }
+
+  std::string active_camera = params.get("LivestreamCamera");
+  if (active_camera.empty()) active_camera = "wideRoad";
+
+  while (!do_exit) {
+    const LogCameraInfo *cam_info = find_stream_camera(active_camera);
+
+    // Check that the requested camera stream is available
+    if (available_streams.find(cam_info->stream_type) == available_streams.end()) {
+      LOGE("stream encoder: camera %s not available, falling back", active_camera.c_str());
+      active_camera = "wideRoad";
+      cam_info = find_stream_camera(active_camera);
+    }
+
+    VisionIpcClient vipc_client("camerad", cam_info->stream_type, false);
+    if (!vipc_client.connect(false)) {
+      util::sleep_for(5);
+      continue;
+    }
+
+    const VisionBuf &buf_info = vipc_client.buffers[0];
+    LOGW("stream encoder init %s %zux%zu", active_camera.c_str(), buf_info.width, buf_info.height);
+    assert(buf_info.width > 0 && buf_info.height > 0);
+
+    const auto &encoder_info = cam_info->encoder_infos[0];
+    auto encoder = std::make_unique<Encoder>(encoder_info, buf_info.width, buf_info.height);
+    encoder->encoder_open();
+
+    while (!do_exit) {
+      // Check for camera switch request
+      std::string requested = params.get("LivestreamCamera");
+      if (!requested.empty() && requested != active_camera) {
+        LOGW("stream encoder switching from %s to %s", active_camera.c_str(), requested.c_str());
+        active_camera = requested;
+        break;  // break to reinit encoder with new camera
+      }
+
+      VisionIpcBufExtra extra;
+      VisionBuf *buf = vipc_client.recv(&extra);
+      if (buf == nullptr) continue;
+
+      // detect loop around and drop the frames
+      if (buf->get_frame_id() != extra.frame_id) continue;
+
+      int out_id = encoder->encode_frame(buf, &extra);
+      if (out_id == -1) {
+        LOGE("stream encoder: failed to encode frame. frame_id: %d", extra.frame_id);
+      }
+    }
+
+    encoder->encoder_close();
+  }
+}
+
 int main(int argc, char* argv[]) {
   if (!Hardware::PC()) {
     int ret;
@@ -162,7 +232,7 @@ int main(int argc, char* argv[]) {
   if (argc > 1) {
     std::string arg1(argv[1]);
     if (arg1 == "--stream") {
-      encoderd_thread(stream_cameras_logged);
+      stream_encoderd_thread();
     } else {
       LOGE("Argument '%s' is not supported", arg1.c_str());
     }
