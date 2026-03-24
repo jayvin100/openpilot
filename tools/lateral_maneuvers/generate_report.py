@@ -5,7 +5,6 @@ import io
 import math
 import numpy as np
 import os
-import pprint
 import webbrowser
 from collections import defaultdict
 from pathlib import Path
@@ -18,10 +17,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import LP_FILTER_CUTOFF_
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.system.hardware.hw import Paths
 from openpilot.common.constants import CV
-
-
-def format_car_params(CP):
-  return pprint.pformat({k: v for k, v in CP.to_dict().items() if not k.endswith('DEPRECATED')}, indent=2)
+from openpilot.tools.longitudinal_maneuvers.generate_report import format_car_params
 
 
 def lat_accel(curvature, v):

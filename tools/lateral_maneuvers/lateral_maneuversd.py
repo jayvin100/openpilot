@@ -8,6 +8,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.lib.drive_helpers import MIN_SPEED
+from openpilot.tools.longitudinal_maneuvers.maneuversd import Action, Maneuver as _Maneuver
 
 # thresholds for starting maneuvers
 MAX_SPEED_DEV = 0.7 # deviation in m/s
@@ -16,28 +17,7 @@ MAX_ROLL = 0.08 # 4.56°
 TIMER = 1.5 # sec stable conditions before starting maneuver
 
 @dataclass
-class Action:
-  accel_bp: list[float]  # m/s^2
-  time_bp: list[float]   # seconds
-
-  def __post_init__(self):
-    assert len(self.accel_bp) == len(self.time_bp)
-
-
-@dataclass
-class Maneuver:
-  description: str
-  actions: list[Action]
-  repeat: int = 0
-  initial_speed: float = 0.  # m/s
-
-  _active: bool = False
-  _finished: bool = False
-  _run_completed: bool = False
-  _action_index: int = 0
-  _action_frames: int = 0
-  _ready_cnt: int = 0
-  _repeated: int = 0
+class Maneuver(_Maneuver):
   _baseline_curvature: float = 0.0
 
   def get_accel(self, v_ego: float, lat_active: bool, curvature: float, roll: float) -> float:
@@ -54,41 +34,10 @@ class Maneuver:
     if not self._active:
       return 0.0
 
-    action = self.actions[self._action_index]
-    action_accel = np.interp(self._action_frames * DT_MDL, action.time_bp, action.accel_bp)
-
-    self._action_frames += 1
-
-    # reached duration of action
-    if self._action_frames > (action.time_bp[-1] / DT_MDL):
-      # next action
-      if self._action_index < len(self.actions) - 1:
-        self._action_index += 1
-        self._action_frames = 0
-      # repeat maneuver
-      elif self._repeated < self.repeat:
-        self._repeated += 1
-        self._run_completed = True
-        self.reset()
-      # finish maneuver
-      else:
-        self._run_completed = True
-        self._finished = True
-
-    return float(action_accel)
-
-  @property
-  def finished(self):
-    return self._finished
-
-  @property
-  def active(self):
-    return self._active
+    return self._step()
 
   def reset(self):
-    self._active = False
-    self._action_frames = 0
-    self._action_index = 0
+    super().reset()
     self._ready_cnt = 0
 
 
@@ -162,7 +111,7 @@ def main():
 
     accel = 0
     v_ego = max(sm['carState'].vEgo, 0)
-    curvature = sm['controlsState'].curvature
+    curvature = sm['controlsState'].desiredCurvature
 
     if maneuver is not None:
       # reset maneuver on steering override or out of range speed
