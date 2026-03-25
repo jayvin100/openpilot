@@ -1,5 +1,7 @@
+import json
 import math
 import numpy as np
+import os
 import time
 import wave
 
@@ -30,6 +32,13 @@ if HARDWARE.get_device_type() == "tizi":
   VOLUME_BASE = 10
 
 AudibleAlert = car.CarControl.HUDControl.AudibleAlert
+
+SYNTH_WAVE_SINE = 0
+SYNTH_WAVE_SQUARE = 1
+SYNTH_WAVE_SAW = 2
+SYNTH_WAVE_TRIANGLE = 3
+
+SYNTH_STATE_PATH = "/tmp/sound_playground_state.json"
 
 
 sound_list: dict[int, tuple[str, int | None, float]] = {
@@ -73,6 +82,16 @@ class Soundd:
 
     self.spl_filter_weighted = FirstOrderFilter(0, 2.5, FILTER_DT, initialized=False)
 
+    # Real-time synth for speaker tuning UI
+    self.synth_phase = 0.0
+    self.synth_freq_hz = 440.0
+    self.synth_gain = 0.25
+    self.synth_volume = 1.0
+    self.synth_waveform = SYNTH_WAVE_SINE
+    self.synth_play = False
+    self.synth_envelope = 0.0
+    self.synth_state_mtime: float | None = None
+
   def load_sounds(self):
     self.loaded_sounds: dict[int, np.ndarray] = {}
 
@@ -89,10 +108,8 @@ class Soundd:
         self.loaded_sounds[sound] = np.frombuffer(wavefile.readframes(length), dtype=np.int16).astype(np.float32) / (2**16/2)
 
   def get_sound_data(self, frames): # get "frames" worth of data from the current alert sound, looping when required
-
-    ret = np.zeros(frames, dtype=np.float32)
-
     if self.current_alert != AudibleAlert.none:
+      ret = np.zeros(frames, dtype=np.float32)
       num_loops = sound_list[self.current_alert][1]
       sound_data = self.loaded_sounds[self.current_alert]
       written_frames = 0
@@ -107,7 +124,60 @@ class Soundd:
         written_frames += frames_to_write
         self.current_sound_frame += frames_to_write
 
-    return ret * self.current_volume
+      return ret * self.current_volume
+
+    return self.get_synth_data(frames)
+
+  def get_synth_data(self, frames):
+    target_gain = self.synth_gain if self.synth_play else 0.0
+    if (target_gain <= 0.0 or self.synth_volume <= 0.0) and self.synth_envelope <= 1e-4:
+      self.synth_envelope = 0.0
+      return np.zeros(frames, dtype=np.float32)
+
+    phase_inc = 2.0 * math.pi * self.synth_freq_hz / SAMPLE_RATE
+    phases = self.synth_phase + phase_inc * np.arange(frames, dtype=np.float32)
+    self.synth_phase = float((phases[-1] + phase_inc) % (2.0 * math.pi))
+
+    if self.synth_waveform == SYNTH_WAVE_SQUARE:
+      wave = np.where(np.sin(phases) >= 0.0, 1.0, -1.0).astype(np.float32)
+    elif self.synth_waveform == SYNTH_WAVE_SAW:
+      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
+      wave = (2.0 * phase_unit - 1.0).astype(np.float32)
+    elif self.synth_waveform == SYNTH_WAVE_TRIANGLE:
+      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
+      wave = (1.0 - 4.0 * np.abs(phase_unit - 0.5)).astype(np.float32)
+    else:
+      wave = np.sin(phases).astype(np.float32)
+
+    ramp = np.linspace(self.synth_envelope, target_gain, frames, dtype=np.float32)
+    self.synth_envelope = float(target_gain)
+    return wave * ramp * self.synth_volume
+
+  def update_synth_params(self):
+    try:
+      mtime = os.path.getmtime(SYNTH_STATE_PATH)
+    except OSError:
+      self.synth_play = False
+      self.synth_state_mtime = None
+      return
+
+    if self.synth_state_mtime is not None and mtime == self.synth_state_mtime:
+      return
+
+    try:
+      with open(SYNTH_STATE_PATH) as f:
+        state = json.load(f)
+      if not isinstance(state, dict):
+        return
+    except (OSError, ValueError, TypeError):
+      return
+
+    self.synth_state_mtime = mtime
+    self.synth_freq_hz = float(np.clip(float(state.get("frequency_hz", self.synth_freq_hz)), 20.0, 12000.0))
+    self.synth_gain = float(np.clip(float(state.get("gain", self.synth_gain)), 0.0, 1.0))
+    self.synth_volume = float(np.clip(float(state.get("volume", self.synth_volume)), 0.0, 1.0))
+    self.synth_waveform = int(np.clip(int(state.get("waveform", self.synth_waveform)), SYNTH_WAVE_SINE, SYNTH_WAVE_TRIANGLE))
+    self.synth_play = bool(state.get("play", False))
 
   def callback(self, data_out: np.ndarray, frames: int, time, status) -> None:
     if status:
@@ -154,6 +224,7 @@ class Soundd:
       cloudlog.info(f"soundd stream started: {stream.samplerate=} {stream.channels=} {stream.dtype=} {stream.device=}, {stream.blocksize=}")
       while True:
         sm.update(0)
+        self.update_synth_params()
 
         if sm.updated['soundPressure'] and self.current_alert == AudibleAlert.none: # only update volume filter when not playing alert
           self.spl_filter_weighted.update(sm["soundPressure"].soundPressureWeightedDb)
