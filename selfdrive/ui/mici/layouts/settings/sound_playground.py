@@ -106,6 +106,11 @@ class Slider(Widget):
 
   def _handle_mouse_event(self, mouse_event: MouseEvent):
     super()._handle_mouse_event(mouse_event)
+    # Always end drag on release, even if release happens outside this slider's hit rect.
+    if mouse_event.left_released:
+      self._dragging = False
+      return
+
     if self._dragging and mouse_event.left_down:
       self._set_from_mouse(mouse_event.pos.x)
 
