@@ -689,8 +689,8 @@ void draw_editor_source_panel(UiState *state, CustomSeriesEditorState &editor) {
         }
       }
     }
-    ImGui::EndChild();
   }
+  ImGui::EndChild();
   if (ImGui::Button("Use Selected Example")) {
     const auto &sel = selected_custom_series_template(editor);
     editor.globals_code = sel.globals_code;

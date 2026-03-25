@@ -868,6 +868,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
   ImPlot::PushStyleColor(ImPlotCol_AxisBgActive, cabana_mode ? color_rgb(92, 98, 106, 0.48f) : color_rgb(199, 209, 222, 0.55f));
   ImPlot::PushStyleColor(ImPlotCol_Selection, cabana_mode ? color_rgb(117, 161, 242, 0.22f) : color_rgb(252, 211, 77, 0.28f));
   ImPlot::PushStyleColor(ImPlotCol_Crosshairs, cabana_mode ? color_rgb(214, 219, 225, 0.70f) : color_rgb(120, 128, 138, 0.70f));
+  ImPlot::PushStyleVar(ImPlotStyleVar_LegendPadding, cabana_mode ? ImVec2(10.0f, 10.0f) : ImVec2(56.0f, 10.0f));
 
   ImPlotFlags plot_flags = ImPlotFlags_NoTitle | ImPlotFlags_NoMenus;
   if (state_block_mode) {
@@ -965,6 +966,7 @@ void draw_plot(const AppSession &session, Pane *pane, UiState *state) {
       }
     }
   }
+  ImPlot::PopStyleVar();
   ImPlot::PopStyleColor(12);
 }
 
