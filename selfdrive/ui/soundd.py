@@ -184,8 +184,7 @@ class Soundd:
   def _drain_webrtc_audio(self, webrtc_sock):
     """Drain all pending webrtcAudioData messages from the raw socket.
     SubMaster only reads one message per socket per update(), which drops
-    ~60% of audio frames at the 20 Hz loop rate. Using a raw socket lets
-    us read every queued message."""
+    ~60% of audio frames at the 20 Hz loop rate."""
     while True:
       raw = webrtc_sock.receive(non_blocking=True)
       if raw is None:

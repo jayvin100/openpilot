@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import ipaddress
 import json
 import logging
 import os
@@ -11,7 +10,6 @@ import subprocess
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
-from urllib.parse import urlparse
 
 # aiortc and its dependencies have lots of internal warnings :(
 import warnings
@@ -220,7 +218,7 @@ class StreamSession:
       "data": {
         "action": "pong",
         "browserSendTime": data.get("browserSendTime"),
-        "deviceTime": _time.time() * 1000,
+        "deviceTime": _time.time() * 1000,  # noqa: TID251
       }
     })
     try:
@@ -495,7 +493,7 @@ def create_ssl_cert():
   logger = logging.getLogger("webrtcd")
   try:
     proc = subprocess.run(
-      f'openssl req -x509 -newkey rsa:4096 -nodes -out {CERT_PATH} -keyout {KEY_PATH} '
+      f'openssl req -x509 -newkey rsa:4096 -nodes -out {CERT_PATH} -keyout {KEY_PATH} '  # noqa: ISC002
       f'-days 365 -subj "/C=US/ST=California/O=commaai/OU=comma body"',
       capture_output=True, shell=True,
     )

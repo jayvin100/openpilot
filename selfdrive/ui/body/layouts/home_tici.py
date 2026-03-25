@@ -24,7 +24,8 @@ PAIR_BTN_MARGIN = 30
 class BodyLayout(Widget):
   def __init__(self):
     super().__init__()
-    self._setup_widget = type('', (), {'set_open_settings_callback': lambda self, cb: None})()
+    self._setup_widget = type('', (), {})()
+    self._setup_widget.set_open_settings_callback = lambda cb: None
     self._animator = FaceAnimator(ASLEEP)
     self._turning_left = False
     self._turning_right = False
@@ -38,7 +39,7 @@ class BodyLayout(Widget):
   def is_swiping_left(self) -> bool:
     return False
 
-  def draw_dot_grid(self, rect: rl.Rectangle, dots: list[tuple[int, int]], color: rl.Color = None):
+  def draw_dot_grid(self, rect: rl.Rectangle, dots: list[tuple[int, int]], color: rl.Color | None = None):
     if color is None:
       color = rl.WHITE
 

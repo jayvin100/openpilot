@@ -77,7 +77,7 @@ class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
       capture_ms = (evta.idx.timestampEof - evta.idx.timestampSof) / 1e6
       encode_ms = (msg.logMonoTime - evta.idx.timestampEof) / 1e6
       send_delay_ms = (time.monotonic_ns() - msg.logMonoTime) / 1e6
-      send_wall_ms = time.time() * 1000
+      send_wall_ms = time.time() * 1000  # noqa: TID251
       sei_nal = create_timing_sei(capture_ms, encode_ms, send_delay_ms, send_wall_ms)
       frame_data = evta.header + sei_nal + evta.data
 

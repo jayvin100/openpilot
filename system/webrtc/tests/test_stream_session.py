@@ -9,7 +9,6 @@ warnings.filterwarnings("ignore", category=RuntimeWarning) # TODO: remove this w
 from aiortc import RTCDataChannel
 from aiortc.mediastreams import VIDEO_CLOCK_RATE, VIDEO_TIME_BASE
 import capnp
-import pytest
 from cereal import messaging, log
 
 from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy

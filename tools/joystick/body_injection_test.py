@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Comma Body injection test via joystick commands.
 

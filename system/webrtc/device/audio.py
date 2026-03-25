@@ -108,10 +108,10 @@ class BodyMicAudioTrack(AudioStreamTrack):
 
     if hasattr(self, "_timestamp"):
       self._timestamp += self._samples_per_frame
-      wait = self._start + (self._timestamp / self._sample_rate) - time.time()
+      wait = self._start + (self._timestamp / self._sample_rate) - time.monotonic()
       await asyncio.sleep(wait)
     else:
-      self._start = time.time()
+      self._start = time.monotonic()
       self._timestamp = 0
 
     frame = AudioFrame(format="s16", layout="mono", samples=self._samples_per_frame)
