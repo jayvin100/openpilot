@@ -129,23 +129,6 @@ def validate_body_sound_name(sound_name: Any) -> str:
   return sound_name
 
 
-def parse_body_sound_request(message: bytes | str) -> str | None:
-  try:
-    payload = json.loads(message)
-  except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
-    return None
-  if not isinstance(payload, dict):
-    return None
-
-  if payload.get("type") != "bodySound":
-    return None
-
-  data = payload.get("data")
-  if not isinstance(data, dict):
-    raise ValueError("bodySound messages must include an object data field")
-
-  return validate_body_sound_name(data.get("sound"))
-
 
 class StreamSession:
   shared_pub_master = DynamicPubMaster([])
@@ -275,15 +258,8 @@ class StreamSession:
           self.video_track.timing_sei_enabled = enabled
           self.logger.info("Timing SEI %s", "enabled" if enabled else "disabled")
         return
-      sound_name = parse_body_sound_request(message)
-      if sound_name is not None:
-        if self.audio_output is not None:
-          self.audio_output.play_sound(sound_name)
-        return
       if self.incoming_bridge is not None:
         self.incoming_bridge.send(message)
-    except ValueError as err:
-      self.logger.warning("Invalid body sound request: %s", err)
     except Exception:
       self.logger.exception("Cereal incoming proxy failure")
 
