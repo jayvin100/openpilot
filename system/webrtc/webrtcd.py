@@ -227,6 +227,25 @@ class StreamSession:
   async def get_answer(self):
     return await self.stream.start()
 
+  def _handle_clock_sync(self, payload: dict):
+    import time as _time
+    data = payload.get("data", {})
+    if data.get("action") != "ping":
+      return
+    pong = json.dumps({
+      "type": "clockSync",
+      "data": {
+        "action": "pong",
+        "browserSendTime": data.get("browserSendTime"),
+        "deviceTime": _time.time() * 1000,
+      }
+    })
+    try:
+      if self.stream.has_messaging_channel():
+        self.stream.get_messaging_channel().send(pong)
+    except Exception:
+      self.logger.warning("Failed to send clockSync pong")
+
   def _handle_switch_camera(self, payload: dict):
     data = payload.get("data")
     if not isinstance(data, dict):
@@ -247,6 +266,15 @@ class StreamSession:
       if isinstance(payload, dict) and payload.get("type") == "switchCamera":
         self._handle_switch_camera(payload)
         return
+      if isinstance(payload, dict) and payload.get("type") == "clockSync":
+        self._handle_clock_sync(payload)
+        return
+      if isinstance(payload, dict) and payload.get("type") == "enableTimingSei":
+        enabled = bool(payload.get("data", {}).get("enabled"))
+        if hasattr(self.video_track, 'timing_sei_enabled'):
+          self.video_track.timing_sei_enabled = enabled
+          self.logger.info("Timing SEI %s", "enabled" if enabled else "disabled")
+        return
       sound_name = parse_body_sound_request(message)
       if sound_name is not None:
         if self.audio_output is not None:
@@ -265,9 +293,9 @@ class StreamSession:
       if self.audio_output is not None and self.stream.has_incoming_audio_track():
         self.audio_output.start_track(self.stream.get_incoming_audio_track())
       if self.stream.has_messaging_channel():
-        if self.incoming_bridge is not None or self.audio_output is not None:
+        if self.incoming_bridge is not None:
           await self.shared_pub_master.add_services_if_needed(self.incoming_bridge_services)
-          self.stream.set_message_handler(self.message_handler)
+        self.stream.set_message_handler(self.message_handler)
         if self.outgoing_bridge_runner is not None:
           channel = self.stream.get_messaging_channel()
           self.outgoing_bridge_runner.proxy.add_channel(channel)
