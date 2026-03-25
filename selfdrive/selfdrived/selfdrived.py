@@ -76,8 +76,7 @@ class SelfdriveD:
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug']
     if self.CP.notCar:
-      ignore += ['liveCalibration', 'driverMonitoringState', 'longitudinalPlan', 'liveDelay',
-                  'liveParameters', 'radarState', 'liveTorqueParameters', 'driverAssistance']
+      ignore += ['driverMonitoringState']
     if SIMULATION:
       ignore += ['driverCameraState', 'managerState']
     if REPLAY:
