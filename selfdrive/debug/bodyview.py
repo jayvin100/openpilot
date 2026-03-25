@@ -9,15 +9,8 @@ import threading
 import pyray as rl
 from cereal import car, log, messaging
 from openpilot.common.params import Params
-from openpilot.system.ui.lib.application import gui_app
 
-# Pin window to monitor 0 after init
-_orig_init_window = gui_app.init_window
-def _init_window_on_monitor0(*args, **kwargs):
-  _orig_init_window(*args, **kwargs)
-  pos = rl.get_monitor_position(1)
-  rl.set_window_position(int(pos.x), int(pos.y))
-gui_app.init_window = _init_window_on_monitor0
+
 
 
 def send_messages():
@@ -54,10 +47,22 @@ def main():
   parser = argparse.ArgumentParser(description="Launch body view UI")
   parser.add_argument("--big", action="store_true", help="Launch in big UI mode (comma 3X)")
   parser.add_argument("--joystick", action="store_true", help="Wait for joystick_control before going onroad")
+  parser.add_argument("--monitor", type=int, default=None, help="Pin window to specified monitor index (e.g. 0, 1)")
   args = parser.parse_args()
 
   if args.big:
     os.environ["BIG"] = "1"
+  from openpilot.system.ui.lib.application import gui_app
+
+  if args.monitor is not None:
+    # Pin window to specified monitor after init
+    monitor_index = args.monitor
+    _orig_init_window = gui_app.init_window
+    def _init_window_on_monitor(*a, **kw):
+      _orig_init_window(*a, **kw)
+      pos = rl.get_monitor_position(monitor_index)
+      rl.set_window_position(int(pos.x), int(pos.y))
+    gui_app.init_window = _init_window_on_monitor
 
   # Set CarParamsPersistent so ui_state.CP.notCar is True on startup
   params = Params()
