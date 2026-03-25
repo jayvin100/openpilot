@@ -5,7 +5,6 @@ import os
 import time
 import threading
 
-os.environ["BIG"] = "1"
 
 import pyray as rl
 from cereal import car, log, messaging
@@ -53,8 +52,12 @@ def send_messages():
 
 def main():
   parser = argparse.ArgumentParser(description="Launch body view UI")
+  parser.add_argument("--big", action="store_true", help="Launch in big UI mode (comma 3X)")
   parser.add_argument("--joystick", action="store_true", help="Wait for joystick_control before going onroad")
   args = parser.parse_args()
+
+  if args.big:
+    os.environ["BIG"] = "1"
 
   # Set CarParamsPersistent so ui_state.CP.notCar is True on startup
   params = Params()

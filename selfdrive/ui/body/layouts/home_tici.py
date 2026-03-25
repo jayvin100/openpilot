@@ -73,8 +73,8 @@ class BodyLayout(Widget):
   def _get_pair_btn_rect(self, rect: rl.Rectangle) -> rl.Rectangle:
     text = tr(tr_noop("CONNECT"))
     text_size = measure_text_cached(self._font_bold, text, PAIR_BTN_FONT_SIZE)
-    btn_w = int(text_size.x + 60)
-    btn_h = 80
+    btn_w = int(text_size.x + 200)
+    btn_h = 200
     btn_x = int(rect.x + rect.width - btn_w - PAIR_BTN_MARGIN)
     btn_y = int(rect.y + rect.height - btn_h - PAIR_BTN_MARGIN)
     return rl.Rectangle(btn_x, btn_y, btn_w, btn_h)
