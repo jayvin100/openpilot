@@ -11,8 +11,6 @@ from cereal import car, log, messaging
 from openpilot.common.params import Params
 
 
-
-
 def send_messages():
   pm = messaging.PubMaster(['deviceState', 'pandaStates', 'carParams', 'carState', 'selfdriveState'])
 
