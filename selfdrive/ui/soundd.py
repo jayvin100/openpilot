@@ -1,12 +1,9 @@
 import math
 import numpy as np
-import threading
 import time
 import wave
-from collections import deque
 
-
-from cereal import car, log, messaging
+from cereal import car, messaging
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import Ratekeeper

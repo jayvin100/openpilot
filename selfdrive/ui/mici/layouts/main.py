@@ -6,8 +6,8 @@ from openpilot.selfdrive.ui.mici.layouts.offroad_alerts import MiciOffroadAlerts
 from openpilot.selfdrive.ui.mici.onroad.augmented_road_view import AugmentedRoadView
 from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.selfdrive.ui.mici.layouts.onboarding import OnboardingWindow
-from openpilot.selfdrive.ui.body.layouts import BodyLayout
-from openpilot.selfdrive.ui.body.layouts import MiciBodyHomeLayout
+from openpilot.selfdrive.ui.body.layouts.onroad import BodyLayout
+from openpilot.selfdrive.ui.body.layouts.home_mici import MiciBodyHomeLayout
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.scroller import Scroller
 from openpilot.system.ui.lib.application import gui_app
@@ -50,6 +50,7 @@ class MiciMainLayout(Scroller):
     ])
     self._scroller.set_reset_scroll_at_show(False)
 
+    # Disable scrolling when onroad is interacting with bookmark
     self._scroller.set_scrolling_enabled(lambda: not self._onroad_layout.is_swiping_left())
 
     # Set callbacks

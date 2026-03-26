@@ -26,6 +26,7 @@ def _mirror(dots: list[tuple[int, int]]) -> list[tuple[int, int]]:
   """Mirror a component from the left side of the face to the right"""
   return [(r, 15 - c) for r, c in dots]
 
+
 def _mirror_no_flip(dots: list[tuple[int, int]]) -> list[tuple[int, int]]:
   """Move a component to the mirrored position on the right half without flipping its shape."""
   min_c = min(c for _, c in dots)
