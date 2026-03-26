@@ -72,6 +72,9 @@ class DRIVER_MONITOR_SETTINGS:
     self._WHEELPOS_DATA_VAR = 3*5.5e-5
     self._WHEELPOS_MAX_COUNT = -1
 
+    self._SEATBELT_THRESH = 0.5
+    self._SEATBELT_VALID_MIN_COUNT = int(2 / self._DT_DMON)
+
     self._RECOVERY_FACTOR_MAX = 5.  # relative to minus step change
     self._RECOVERY_FACTOR_MIN = 1.25  # relative to minus step change
 
@@ -149,6 +152,10 @@ class DriverMonitoring:
     self.pose = DriverPose(settings=self.settings)
     self.blink = DriverBlink()
     self.phone_prob = 0.
+
+    self.seatbelt_unlatched = False
+    self.seatbelt_unlatched_last = None
+    self.seatbelt_cnt = 0
 
     self.always_on = always_on
     self.distracted_types = []
@@ -274,6 +281,12 @@ class DriverMonitoring:
     if not all(len(x) > 0 for x in (driver_data.faceOrientation, driver_data.facePosition,
                                     driver_data.faceOrientationStd, driver_data.facePositionStd)):
       return
+
+    self.seatbelt_unlatched = driver_state.seatbeltUnlatchedProb > self.settings._SEATBELT_THRESH
+    if self.seatbelt_unlatched_last is not None and self.seatbelt_unlatched != self.seatbelt_unlatched_last:
+      self.seatbelt_cnt = 0
+    self.seatbelt_unlatched_last = self.seatbelt_unlatched
+    self.seatbelt_cnt += 1
 
     self.face_detected = driver_data.faceProb > self.settings._FACE_THRESHOLD
     self.pose.roll, self.pose.pitch, self.pose.yaw = face_orientation_from_net(driver_data.faceOrientation, driver_data.facePosition, cal_rpy)
@@ -418,6 +431,8 @@ class DriverMonitoring:
       "isActiveMode": self.active_monitoring_mode,
       "isRHD": self.wheel_on_right,
       "uncertainCount": self.dcam_uncertain_cnt,
+      "seatbeltUnlatched": self.seatbelt_unlatched,
+      "seatbeltUnlatchedValid": self.seatbelt_cnt > self.settings._SEATBELT_VALID_MIN_COUNT,
     }
     return dat
 

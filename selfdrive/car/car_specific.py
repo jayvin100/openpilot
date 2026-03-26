@@ -21,11 +21,11 @@ class CarSpecificEvents:
     self.no_steer_warning = False
     self.silent_steer_warning = True
 
-  def update(self, CS: car.CarState, CS_prev: car.CarState, CC: car.CarControl):
+  def update(self, CS: car.CarState, CS_prev: car.CarState, CC: car.CarControl, DMS: log.DriverMonitoringState):
     if self.CP.brand in ('body', 'mock'):
       return Events()
 
-    events = self.create_common_events(CS, CS_prev)
+    events = self.create_common_events(CS, CS_prev, DMS)
 
     if self.CP.brand == 'chrysler':
       # Low speed steer alert hysteresis logic
@@ -92,7 +92,7 @@ class CarSpecificEvents:
 
     return events
 
-  def create_common_events(self, CS: structs.CarState, CS_prev: car.CarState):
+  def create_common_events(self, CS: structs.CarState, CS_prev: car.CarState, DMS: log.DriverMonitoringState):
     events = Events()
 
     CI = interfaces[self.CP.carFingerprint]
@@ -104,7 +104,7 @@ class CarSpecificEvents:
 
     if CS.doorOpen:
       events.add(EventName.doorOpen)
-    if CS.seatbeltUnlatched:
+    if DMS.seatbeltUnlatchedValid and DMS.seatbeltUnlatched:
       events.add(EventName.seatbeltNotLatched)
     if CS.gearShifter != GearShifter.drive and CS.gearShifter not in CI.DRIVABLE_GEARS:
       events.add(EventName.wrongGear)
