@@ -118,14 +118,14 @@ def report(platform, route, _description, CP, ID, maneuvers):
               builder.append(f', <strong>crossed in {cross_time:.3f}s</strong>')
               cross_markers.append((t, act_target + baseline_accel))
               if maneuver_valid:
-                target_cross_times[f"{description} ({act_target:+.1f})"].append(cross_time)
+                target_cross_times[description].append(cross_time)
               break
             prev_crossed = crossed
           else:
             builder.append(', <strong>not crossed</strong>')
           builder.append('</h3>')
           if maneuver_valid:
-            target_cross_times.setdefault(f"{description} ({act_target:+.1f})", [])
+            target_cross_times.setdefault(description, [])
 
       plt.rcParams['font.size'] = 40
       fig = plt.figure(figsize=(30, 30))
