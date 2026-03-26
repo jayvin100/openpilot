@@ -14,7 +14,7 @@ from openpilot.tools.longitudinal_maneuvers.maneuversd import Action, Maneuver a
 MAX_SPEED_DEV = 0.7 # deviation in m/s
 MAX_CURV = 0.002 # 500 m radius
 MAX_ROLL = 0.08 # 4.56°
-TIMER = 1.5 # sec stable conditions before starting maneuver
+TIMER = 2.0 # sec stable conditions before starting maneuver
 
 @dataclass
 class Maneuver(_Maneuver):
@@ -24,7 +24,7 @@ class Maneuver(_Maneuver):
     self._run_completed = False
     # only start maneuver on straight, flat roads
     ready = abs(v_ego - self.initial_speed) < MAX_SPEED_DEV and lat_active and abs(curvature) < MAX_CURV and abs(roll) < MAX_ROLL
-    self._ready_cnt = (self._ready_cnt + 1) if ready else 0
+    self._ready_cnt = (self._ready_cnt + 1) if ready else max(self._ready_cnt - 1, 0)
 
     if self._ready_cnt > (TIMER / DT_MDL):
       if not self._active:
@@ -97,6 +97,7 @@ def main():
 
   maneuvers = iter(MANEUVERS)
   maneuver = None
+  complete_cnt = 0
 
   while True:
     sm.update()
@@ -113,7 +114,11 @@ def main():
     v_ego = max(sm['carState'].vEgo, 0)
     curvature = sm['controlsState'].desiredCurvature
 
-    if maneuver is not None:
+    if complete_cnt > 0:
+      complete_cnt -= 1
+      alert_msg.alertDebug.alertText1 = 'Completed'
+      alert_msg.alertDebug.alertText2 = maneuver.description
+    elif maneuver is not None:
       # reset maneuver on steering override or out of range speed
       if sm['carState'].steeringPressed or (maneuver.active and abs(v_ego - maneuver.initial_speed) > MAX_SPEED_DEV):
         maneuver.reset()
@@ -122,6 +127,7 @@ def main():
       accel = maneuver.get_accel(v_ego, sm['carControl'].latActive, curvature, roll)
 
       if maneuver._run_completed:
+        complete_cnt = int(1.0 / DT_MDL)
         alert_msg.alertDebug.alertText1 = 'Complete'
         alert_msg.alertDebug.alertText2 = maneuver.description
       elif maneuver.active:
@@ -134,28 +140,26 @@ def main():
         alert_msg.alertDebug.alertText2 = maneuver.description
       elif not (abs(v_ego - maneuver.initial_speed) < MAX_SPEED_DEV and sm['carControl'].latActive):
         alert_msg.alertDebug.alertText1 = f'Set speed to {maneuver.initial_speed * CV.MS_TO_MPH:0.0f} mph'
-      else:
+      elif maneuver._ready_cnt > 0:
         ready_time = max(TIMER - maneuver._ready_cnt * DT_MDL, 0)
+        alert_msg.alertDebug.alertText1 = f'Starting: {int(ready_time) + 1}'
+        alert_msg.alertDebug.alertText2 = maneuver.description
+      else:
         curv_ok = abs(curvature) < MAX_CURV
-        roll_ok = abs(roll) < MAX_ROLL
-        if curv_ok and roll_ok:
-          alert_msg.alertDebug.alertText1 = f'Starting: {ready_time:.0f}s'
-          alert_msg.alertDebug.alertText2 = maneuver.description
-        else:
-          reason = 'road not straight' if not curv_ok else 'road not flat'
-          alert_msg.alertDebug.alertText1 = f'Waiting: {reason}'
-          alert_msg.alertDebug.alertText2 = maneuver.description
+        reason = 'road not straight' if not curv_ok else 'road not flat'
+        alert_msg.alertDebug.alertText1 = f'Waiting: {reason}'
+        alert_msg.alertDebug.alertText2 = maneuver.description
     else:
       alert_msg.alertDebug.alertText1 = 'Maneuvers Finished'
 
     pm.send('alertDebug', alert_msg)
 
-    plan_send.valid = maneuver is not None and maneuver.active
+    plan_send.valid = maneuver is not None and maneuver.active and complete_cnt == 0
     if plan_send.valid:
       plan_send.lateralManeuverPlan.desiredCurvature = maneuver._baseline_curvature + accel / max(v_ego, MIN_SPEED) ** 2
     pm.send('lateralManeuverPlan', plan_send)
 
-    if maneuver is not None and maneuver.finished:
+    if maneuver is not None and maneuver.finished and complete_cnt == 0:
       maneuver = None
 
 
