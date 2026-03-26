@@ -282,7 +282,7 @@ class DriverMonitoring:
                                     driver_data.faceOrientationStd, driver_data.facePositionStd)):
       return
 
-    self.seatbelt_unlatched = driver_state.seatbeltUnlatchedProb > self.settings._SEATBELT_THRESH
+    self.seatbelt_unlatched = driver_data.seatbeltUnlatchedProb > self.settings._SEATBELT_THRESH
     if self.seatbelt_unlatched_last is not None and self.seatbelt_unlatched != self.seatbelt_unlatched_last:
       self.seatbelt_cnt = 0
     self.seatbelt_unlatched_last = self.seatbelt_unlatched
