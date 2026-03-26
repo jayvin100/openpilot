@@ -87,6 +87,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     laneChange @50;
     lowMemory @51;
     stockAeb @52;
+    stockLkas @98;
     ldw @53;
     carUnrecognized @54;
     invalidLkasSetting @55;
@@ -498,7 +499,8 @@ struct DeviceState @0xa4d8b5af2aa492eb {
   pmicTempC @39 :List(Float32);
   intakeTempC @46 :Float32;
   exhaustTempC @47 :Float32;
-  caseTempC @48 :Float32;
+  gnssTempC @48 :Float32;
+  bottomSocTempC @50 :Float32;
   maxTempC @44 :Float32;  # max of other temps, used to control fan
   thermalZones @38 :List(ThermalZone);
   thermalStatus @14 :ThermalStatus;
@@ -591,6 +593,7 @@ struct PandaState @0xa7649e2575e4591e {
   harnessStatus @21 :HarnessStatus;
   sbu1Voltage @35 :Float32;
   sbu2Voltage @36 :Float32;
+  soundOutputLevel @37 :UInt16;
 
   # can health
   canState0 @29 :PandaCanState;
@@ -1423,6 +1426,8 @@ struct LivePose {
   posenetOK @5 :Bool = false;
   sensorsOK @6 :Bool = false;
 
+  timestamp @8 :UInt64;
+
   debugFilterState @7 :FilterState;
 
   struct XYZMeasurement {
@@ -1477,6 +1482,11 @@ struct ProcLog {
 
     cmdline @15 :List(Text);
     exe @16 :Text;
+
+    # from /proc/<pid>/smaps_rollup (proportional/private memory)
+    memPss @17 :UInt64;        # Pss — shared pages split by mapper count
+    memPssAnon @18 :UInt64;    # Pss_Anon — private anonymous (heap, stack)
+    memPssShmem @19 :UInt64;   # Pss_Shmem — proportional MSGQ/tmpfs share
   }
 
   struct CPUTimes {
@@ -2227,6 +2237,8 @@ struct DriverMonitoringState @0xb83cda094a1da284 {
   isRHD @4 :Bool;
   uncertainCount @19 :UInt32;
 
+  phoneProbOffsetDEPRECATED @20 :Float32;
+  phoneProbValidCountDEPRECATED @21 :UInt32;
   isPreviewDEPRECATED @15 :Bool;
   rhdCheckedDEPRECATED @5 :Bool;
   eventsDEPRECATED @0 :List(Car.OnroadEventDEPRECATED);
@@ -2522,13 +2534,10 @@ struct Event {
     controlsState @7 :ControlsState;
     selfdriveState @130 :SelfdriveState;
     gyroscope @99 :SensorEventData;
-    gyroscope2 @100 :SensorEventData;
     accelerometer @98 :SensorEventData;
-    accelerometer2 @101 :SensorEventData;
     magnetometer @95 :SensorEventData;
     lightSensor @96 :SensorEventData;
     temperatureSensor @97 :SensorEventData;
-    temperatureSensor2 @123 :SensorEventData;
     pandaStates @81 :List(PandaState);
     peripheralState @80 :PeripheralState;
     radarState @13 :RadarState;
@@ -2691,5 +2700,8 @@ struct Event {
     liveLocationKalmanDEPRECATED @72 :LiveLocationKalman;
     liveTracksDEPRECATED @16 :List(LiveTracksDEPRECATED);
     onroadEventsDEPRECATED @68: List(Car.OnroadEventDEPRECATED);
+    gyroscope2DEPRECATED @100 :SensorEventData;
+    accelerometer2DEPRECATED @101 :SensorEventData;
+    temperatureSensor2DEPRECATED @123 :SensorEventData;
   }
 }

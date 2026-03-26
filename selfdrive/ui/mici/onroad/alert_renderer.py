@@ -89,10 +89,6 @@ ALERT_CRITICAL_REBOOT = Alert(
 class AlertRenderer(Widget):
   def __init__(self):
     super().__init__()
-    self.font_regular: rl.Font = gui_app.font(FontWeight.MEDIUM)
-    self.font_roman: rl.Font = gui_app.font(FontWeight.ROMAN)
-    self.font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
-    self.font_display: rl.Font = gui_app.font(FontWeight.DISPLAY)
 
     self._alert_text1_label = UnifiedLabel(text="", font_size=ALERT_FONT_BIG, font_weight=FontWeight.DISPLAY, line_height=0.86,
                                            letter_spacing=-0.02)
@@ -115,10 +111,10 @@ class AlertRenderer(Widget):
     self._load_icons()
 
   def _load_icons(self):
-    self._txt_turn_signal_left = gui_app.texture('icons_mici/onroad/turn_signal_left.png', 100, 91)
-    self._txt_turn_signal_right = gui_app.texture('icons_mici/onroad/turn_signal_right.png', 100, 91)
-    self._txt_blind_spot_left = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 108, 128)
-    self._txt_blind_spot_right = gui_app.texture('icons_mici/onroad/blind_spot_right.png', 108, 128)
+    self._txt_turn_signal_left = gui_app.texture('icons_mici/onroad/turn_signal_left.png', 104, 96)
+    self._txt_turn_signal_right = gui_app.texture('icons_mici/onroad/turn_signal_left.png', 104, 96, flip_x=True)
+    self._txt_blind_spot_left = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 134, 150)
+    self._txt_blind_spot_right = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 134, 150, flip_x=True)
 
   def get_alert(self, sm: messaging.SubMaster) -> Alert | None:
     """Generate the current alert based on selfdrive state."""
@@ -204,11 +200,11 @@ class AlertRenderer(Widget):
     text_x = self._rect.x + ALERT_MARGIN
     text_width = self._rect.width - ALERT_MARGIN
     if icon_side == 'left':
-      text_x = self._rect.x + self._txt_turn_signal_right.width + 20 * 2
-      text_width = self._rect.width - ALERT_MARGIN - self._txt_turn_signal_right.width - 20 * 2
+      text_x = self._rect.x + self._txt_turn_signal_right.width
+      text_width = self._rect.width - ALERT_MARGIN - self._txt_turn_signal_right.width
     elif icon_side == 'right':
       text_x = self._rect.x + ALERT_MARGIN
-      text_width = self._rect.width - ALERT_MARGIN - self._txt_turn_signal_right.width - 20 * 2
+      text_width = self._rect.width - ALERT_MARGIN - self._txt_turn_signal_right.width
 
     text_rect = rl.Rectangle(
       text_x,
@@ -262,8 +258,8 @@ class AlertRenderer(Widget):
     else:
       icon_alpha = int(min(self._turn_signal_alpha_filter.x, 255))
 
-    rl.draw_texture(alert_layout.icon.texture, pos_x, int(self._rect.y + alert_layout.icon.margin_y),
-                    rl.Color(255, 255, 255, int(icon_alpha * self._alpha_filter.x)))
+    rl.draw_texture_ex(alert_layout.icon.texture, rl.Vector2(pos_x, self._rect.y + alert_layout.icon.margin_y), 0.0, 1.0,
+                       rl.Color(255, 255, 255, int(icon_alpha * self._alpha_filter.x)))
 
   def _draw_background(self, alert: Alert) -> None:
     # draw top gradient for alert text at top

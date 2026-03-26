@@ -130,6 +130,9 @@ def arc_bar_pts(cx: float, cy: float,
 
   pts = np.vstack((outer, cap_end, inner, cap_start, outer[:1])).astype(np.float32)
 
+  # Rotate to start from middle of cap for proper triangulation
+  pts = np.roll(pts, cap_segs, axis=0)
+
   if DEBUG:
     n = len(pts)
     idx = int(time.monotonic() * 12) % max(1, n)  # speed: 12 pts/sec
@@ -140,6 +143,9 @@ def arc_bar_pts(cx: float, cy: float,
       rl.draw_circle(int(x), int(y), 2, color)
 
   return pts
+
+
+DEFAULT_MAX_LAT_ACCEL = 3.0  # m/s^2
 
 
 class TorqueBar(Widget):
@@ -162,16 +168,23 @@ class TorqueBar(Widget):
       controls_state = ui_state.sm['controlsState']
       car_state = ui_state.sm['carState']
       live_parameters = ui_state.sm['liveParameters']
-      lateral_acceleration = controls_state.curvature * car_state.vEgo ** 2 - live_parameters.roll * ACCELERATION_DUE_TO_GRAVITY
-      # TODO: pull from carparams
-      max_lateral_acceleration = 3
+      car_control = ui_state.sm['carControl']
 
-      # from selfdrived
+      # Include lateral accel error in estimated torque utilization
       actual_lateral_accel = controls_state.curvature * car_state.vEgo ** 2
       desired_lateral_accel = controls_state.desiredCurvature * car_state.vEgo ** 2
       accel_diff = (desired_lateral_accel - actual_lateral_accel)
 
-      self._torque_filter.update(min(max(lateral_acceleration / max_lateral_acceleration + accel_diff, -1), 1))
+      # Include road roll in estimated torque utilization
+      # Roll is less accurate near standstill, so reduce its effect at low speed
+      roll_compensation = live_parameters.roll * ACCELERATION_DUE_TO_GRAVITY * np.interp(car_state.vEgo, [5, 15], [0.0, 1.0])
+      lateral_acceleration = actual_lateral_accel - roll_compensation
+      max_lateral_acceleration = ui_state.CP.maxLateralAccel if ui_state.CP else DEFAULT_MAX_LAT_ACCEL
+
+      if not car_control.latActive:
+        self._torque_filter.update(0.0)
+      else:
+        self._torque_filter.update(np.clip((lateral_acceleration + accel_diff) / max_lateral_acceleration, -1, 1))
     else:
       self._torque_filter.update(-ui_state.sm['carOutput'].actuatorsOutput.torque)
 

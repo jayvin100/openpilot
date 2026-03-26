@@ -1,21 +1,17 @@
-import pyray as rl
-from collections.abc import Callable
 from cereal import log
 
-from openpilot.system.ui.widgets.scroller import Scroller
+from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigParamControl, BigMultiParamToggle
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.system.ui.widgets import NavWidget
 from openpilot.selfdrive.ui.layouts.settings.common import restart_needed_callback
 from openpilot.selfdrive.ui.ui_state import ui_state
 
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
 
 
-class TogglesLayoutMici(NavWidget):
-  def __init__(self, back_callback: Callable):
+class TogglesLayoutMici(NavScroller):
+  def __init__(self):
     super().__init__()
-    self.set_back_callback(back_callback)
 
     self._personality_toggle = BigMultiParamToggle("driving personality", "LongitudinalPersonality", ["aggressive", "standard", "relaxed"])
     self._experimental_btn = BigParamControl("experimental mode", "ExperimentalMode")
@@ -26,7 +22,7 @@ class TogglesLayoutMici(NavWidget):
     record_mic = BigParamControl("record & upload mic audio", "RecordAudio", toggle_callback=restart_needed_callback)
     enable_openpilot = BigParamControl("enable openpilot", "OpenpilotEnabledToggle", toggle_callback=restart_needed_callback)
 
-    self._scroller = Scroller([
+    self._scroller.add_widgets([
       self._personality_toggle,
       self._experimental_btn,
       is_metric_toggle,
@@ -35,7 +31,7 @@ class TogglesLayoutMici(NavWidget):
       record_front,
       record_mic,
       enable_openpilot,
-    ], snap_items=False)
+    ])
 
     # Toggle lists
     self._refresh_toggles = (
@@ -69,7 +65,6 @@ class TogglesLayoutMici(NavWidget):
 
   def show_event(self):
     super().show_event()
-    self._scroller.show_event()
     self._update_toggles()
 
   def _update_toggles(self):
@@ -78,18 +73,15 @@ class TogglesLayoutMici(NavWidget):
     # CP gating for experimental mode
     if ui_state.CP is not None:
       if ui_state.has_longitudinal_control:
-        self._experimental_btn.set_enabled(True)
-        self._personality_toggle.set_enabled(True)
+        self._experimental_btn.set_visible(True)
+        self._personality_toggle.set_visible(True)
       else:
         # no long for now
-        self._experimental_btn.set_enabled(False)
+        self._experimental_btn.set_visible(False)
         self._experimental_btn.set_checked(False)
-        self._personality_toggle.set_enabled(False)
+        self._personality_toggle.set_visible(False)
         ui_state.params.remove("ExperimentalMode")
 
     # Refresh toggles from params to mirror external changes
     for key, item in self._refresh_toggles:
       item.set_checked(ui_state.params.get_bool(key))
-
-  def _render(self, rect: rl.Rectangle):
-    self._scroller.render(rect)

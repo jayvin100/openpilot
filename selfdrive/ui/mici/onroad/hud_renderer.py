@@ -30,20 +30,8 @@ class FontSizes:
 
 @dataclass(frozen=True)
 class Colors:
-  white: rl.Color = rl.WHITE
-  disengaged: rl.Color = rl.Color(145, 155, 149, 255)
-  override: rl.Color = rl.Color(145, 155, 149, 255)  # Added
-  engaged: rl.Color = rl.Color(128, 216, 166, 255)
-  disengaged_bg: rl.Color = rl.Color(0, 0, 0, 153)
-  override_bg: rl.Color = rl.Color(145, 155, 149, 204)
-  engaged_bg: rl.Color = rl.Color(128, 216, 166, 204)
-  grey: rl.Color = rl.Color(166, 166, 166, 255)
-  dark_grey: rl.Color = rl.Color(114, 114, 114, 255)
-  black_translucent: rl.Color = rl.Color(0, 0, 0, 166)
-  white_translucent: rl.Color = rl.Color(255, 255, 255, 200)
-  border_translucent: rl.Color = rl.Color(255, 255, 255, 75)
-  header_gradient_start: rl.Color = rl.Color(0, 0, 0, 114)
-  header_gradient_end: rl.Color = rl.BLANK
+  WHITE = rl.WHITE
+  WHITE_TRANSLUCENT = rl.Color(255, 255, 255, 200)
 
 
 FONT_SIZES = FontSizes()
@@ -61,8 +49,8 @@ class TurnIntent(Widget):
     self._turn_intent_alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
     self._turn_intent_rotation_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
 
-    self._txt_turn_intent_left: rl.Texture = gui_app.texture('icons_mici/turn_intent_left.png', 50, 19)
-    self._txt_turn_intent_right: rl.Texture = gui_app.texture('icons_mici/turn_intent_right.png', 50, 19)
+    self._txt_turn_intent_left: rl.Texture = gui_app.texture('icons_mici/turn_intent_left.png', 50, 20)
+    self._txt_turn_intent_right: rl.Texture = gui_app.texture('icons_mici/turn_intent_left.png', 50, 20, flip_x=True)
 
   def _render(self, _):
     if self._turn_intent_alpha_filter.x > 1e-2:
@@ -184,8 +172,7 @@ class HudRenderer(Widget):
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
 
-    if ui_state.sm['controlsState'].lateralControlState.which() != 'angleState':
-      self._torque_bar.render(rect)
+    self._torque_bar.render(rect)
 
     if self.is_cruise_set:
       self._draw_set_speed(rect)
@@ -232,20 +219,22 @@ class HudRenderer(Widget):
       EXCLAMATION_POINT_SPACING = 10
       exclamation_pos_x = pos_x - self._txt_exclamation_point.width / 2 + wheel_txt.width / 2 + EXCLAMATION_POINT_SPACING
       exclamation_pos_y = pos_y - self._txt_exclamation_point.height / 2
-      rl.draw_texture(self._txt_exclamation_point, int(exclamation_pos_x), int(exclamation_pos_y), rl.WHITE)
+      rl.draw_texture_ex(self._txt_exclamation_point, rl.Vector2(exclamation_pos_x, exclamation_pos_y), 0.0, 1.0, rl.WHITE)
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     """Draw the MAX speed indicator box."""
-    x = rect.x
-    y = rect.y
-
     alpha = self._set_speed_alpha_filter.update(0 < rl.get_time() - self._set_speed_changed_time < SET_SPEED_PERSISTENCE and
                                                 self._can_draw_top_icons and self._engaged)
+    if alpha < 1e-2:
+      return
+
+    x = rect.x
+    y = rect.y
 
     # draw drop shadow
     circle_radius = 162 // 2
     rl.draw_circle_gradient(int(x + circle_radius), int(y + circle_radius), circle_radius,
-                            rl.Color(0, 0, 0, int(255 / 2 * alpha)), rl.Color(0, 0, 0, 0))
+                            rl.Color(0, 0, 0, int(255 / 2 * alpha)), rl.BLANK)
 
     set_speed_color = rl.Color(255, 255, 255, int(255 * 0.9 * alpha))
     max_color = rl.Color(255, 255, 255, int(255 * 0.9 * alpha))
@@ -279,9 +268,9 @@ class HudRenderer(Widget):
     speed_text = str(round(self.speed))
     speed_text_size = measure_text_cached(self._font_bold, speed_text, FONT_SIZES.current_speed)
     speed_pos = rl.Vector2(rect.x + rect.width / 2 - speed_text_size.x / 2, 180 - speed_text_size.y / 2)
-    rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed, 0, COLORS.white)
+    rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed, 0, COLORS.WHITE)
 
     unit_text = tr("km/h") if ui_state.is_metric else tr("mph")
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
     unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
-    rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.white_translucent)
+    rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
