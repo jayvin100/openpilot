@@ -22,7 +22,7 @@ class MiciMainLayout(Scroller):
 
     self._pm = messaging.PubMaster(['bookmarkButton'])
 
-    self._is_body = ui_state.is_body
+    self._is_body = ui_state.is_body()
     self._prev_onroad = False
     self._prev_standstill = False
     self._prev_joystick_debug_mode = False
@@ -107,8 +107,7 @@ class MiciMainLayout(Scroller):
     # When car leaves standstill, pop nav stack and scroll to onroad
     CS = ui_state.sm["carState"]
     if not CS.standstill and self._prev_standstill:
-      if not self._is_body or ui_state.joystick_debug_mode:
-        gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
+      gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
     self._prev_standstill = CS.standstill
 
     # On body, react to joystick debug mode changes while onroad:

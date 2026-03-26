@@ -295,8 +295,6 @@ void process_peripheral_state(Panda *panda, PubMaster *pm, bool no_fan_control) 
   static int prev_ir_pwr = 999;
   static uint32_t prev_frame_id = UINT32_MAX;
   static bool driver_view = false;
-  static bool not_car = false;
-  static uint64_t last_not_car_check = 0;
 
   // TODO: can we merge these?
   static FirstOrderFilter integ_lines_filter(0, 30.0, 0.05);
@@ -304,18 +302,6 @@ void process_peripheral_state(Panda *panda, PubMaster *pm, bool no_fan_control) 
 
   {
     sm.update(0);
-
-    // Check notCar periodically to disable IR on body
-    if (sm.frame % 100 == 0 || last_not_car_check == 0) {
-      std::string cp_bytes = params.get("CarParamsPersistent");
-      if (cp_bytes.size() > 0) {
-        AlignedBuffer aligned_buf;
-        capnp::FlatArrayMessageReader cmsg(aligned_buf.align(cp_bytes.data(), cp_bytes.size()));
-        cereal::CarParams::Reader CP = cmsg.getRoot<cereal::CarParams>();
-        not_car = CP.getNotCar();
-      }
-      last_not_car_check = sm.frame;
-    }
 
     if (sm.updated("deviceState") && !no_fan_control) {
       // Fan speed
@@ -350,15 +336,25 @@ void process_peripheral_state(Panda *panda, PubMaster *pm, bool no_fan_control) 
       }
     }
 
-    // Disable IR on body or on input timeout
-    if (not_car || nanos_since_boot() - last_driver_camera_t > 1e9) {
+    // Disable IR on input timeout
+    if (nanos_since_boot() - last_driver_camera_t > 1e9) {
       ir_pwr = 0;
     }
 
     if (ir_pwr != prev_ir_pwr || sm.frame % 100 == 0) {
-      int16_t ir_panda = util::map_val(ir_pwr, 0, 100, 0, MAX_IR_PANDA_VAL); 
+      std::string cp_bytes = params.get("CarParams");
+      if (cp_bytes.size() > 0) {
+        AlignedBuffer aligned_buf;
+        capnp::FlatArrayMessageReader cmsg(aligned_buf.align(cp_bytes.data(), cp_bytes.size()));
+        cereal::CarParams::Reader CP = cmsg.getRoot<cereal::CarParams>();
+        if (CP.getNotCar()) {
+          ir_pwr = 0;
+        }
+      }
+
+      int16_t ir_panda = util::map_val(ir_pwr, 0, 100, 0, MAX_IR_PANDA_VAL);
       panda->set_ir_pwr(ir_panda);
-      Hardware::set_ir_power(ir_pwr); 
+      Hardware::set_ir_power(ir_pwr);
       prev_ir_pwr = ir_pwr;
     }
   }

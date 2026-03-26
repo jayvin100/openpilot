@@ -24,7 +24,7 @@ class MainLayout(Widget):
 
     self._pm = messaging.PubMaster(['bookmarkButton'])
 
-    self._is_body = ui_state.is_body
+    self._is_body = ui_state.is_body()
     self._sidebar = BodySidebar() if self._is_body else Sidebar()
     self._current_mode = MainState.HOME
     self._prev_onroad = False
@@ -117,12 +117,9 @@ class MainLayout(Widget):
 
   def _render_main_content(self):
     if self._is_body: # overlay sidebar but recompute boundaries for proper click events
-      if self._sidebar.is_visible:
-        self._layouts[self._current_mode].set_parent_rect(
-          rl.Rectangle(self._rect.x, self._rect.y + BODY_SIDEBAR_HEIGHT,
-                       self._rect.width, self._rect.height - BODY_SIDEBAR_HEIGHT))
-      else:
-        self._layouts[self._current_mode].set_parent_rect(None)
+      parent_rect = rl.Rectangle(self._rect.x, self._rect.y + BODY_SIDEBAR_HEIGHT,
+                                 self._rect.width, self._rect.height - BODY_SIDEBAR_HEIGHT) if self._sidebar.is_visible else None
+      self._layouts[self._current_mode].set_parent_rect(parent_rect)
       self._layouts[self._current_mode].render(self._rect)
       if self._sidebar.is_visible:
         self._sidebar.render(self._sidebar_rect)
