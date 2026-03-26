@@ -46,7 +46,6 @@ void draw_timeline_bar_contents(const AppSession &session, UiState *state, float
 
   ImGui::InvisibleButton("##timeline_button", size);
   const bool hovered = ImGui::IsItemHovered();
-  const bool active = ImGui::IsItemActive();
   const bool double_clicked = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
 
@@ -85,6 +84,8 @@ void draw_timeline_bar_contents(const AppSession &session, UiState *state, float
   const float edge_grab = 4.0f;
   const float mouse_x = ImGui::GetIO().MousePos.x;
   const double mouse_time = timeline_x_to_time(mouse_x, route_min, route_max, bar_min.x, bar_max.x);
+  const bool left_down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+  const bool right_down = ImGui::IsMouseDown(ImGuiMouseButton_Right);
   if (double_clicked) {
     reset_timeline_view(state, session);
   } else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -95,28 +96,34 @@ void draw_timeline_bar_contents(const AppSession &session, UiState *state, float
       state->timeline_drag_mode = TimelineDragMode::ResizeLeft;
     } else if (std::abs(mouse_x - vp_right) <= edge_grab) {
       state->timeline_drag_mode = TimelineDragMode::ResizeRight;
-    } else if (mouse_x >= vp_left && mouse_x <= vp_right) {
-      state->timeline_drag_mode = TimelineDragMode::PanViewport;
     } else {
       state->timeline_drag_mode = TimelineDragMode::ScrubCursor;
-      state->tracker_time = std::clamp(mouse_time, route_min, route_max);
-      state->has_tracker_time = true;
+      seek_tracker(state, session, mouse_time);
     }
+  } else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mouse_x >= vp_left && mouse_x <= vp_right) {
+    state->timeline_drag_anchor_time = mouse_time;
+    state->timeline_drag_anchor_x_min = state->x_view_min;
+    state->timeline_drag_anchor_x_max = state->x_view_max;
+    state->timeline_drag_mode = TimelineDragMode::PanViewport;
   }
 
-  if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+  if (!left_down && !right_down) {
     state->timeline_drag_mode = TimelineDragMode::None;
-  } else if (active || state->timeline_drag_mode != TimelineDragMode::None) {
+  } else if (state->timeline_drag_mode != TimelineDragMode::None) {
     switch (state->timeline_drag_mode) {
       case TimelineDragMode::ScrubCursor:
-        state->tracker_time = std::clamp(mouse_time, route_min, route_max);
-        state->has_tracker_time = true;
+        if (left_down) {
+          seek_tracker(state, session, mouse_time);
+        }
         break;
       case TimelineDragMode::PanViewport: {
-        const double delta = mouse_time - state->timeline_drag_anchor_time;
-        state->x_view_min = state->timeline_drag_anchor_x_min + delta;
-        state->x_view_max = state->timeline_drag_anchor_x_max + delta;
-        clamp_shared_range(state, session);
+        if (right_down) {
+          const double delta = mouse_time - state->timeline_drag_anchor_time;
+          state->x_view_min = state->timeline_drag_anchor_x_min + delta;
+          state->x_view_max = state->timeline_drag_anchor_x_max + delta;
+          state->follow_latest = false;
+          clamp_shared_range(state, session);
+        }
         break;
       }
       case TimelineDragMode::ResizeLeft:

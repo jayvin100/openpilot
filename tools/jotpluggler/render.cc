@@ -59,11 +59,15 @@ void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
   if (!ImGui::GetIO().WantTextInput && ctrl && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
     state->open_find_signal = true;
   }
-  if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
-    step_tracker(state, -1.0);
-  }
-  if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
-    step_tracker(state, 1.0);
+  if (!ImGui::GetIO().WantTextInput) {
+    const int left_steps = ImGui::GetKeyPressedAmount(ImGuiKey_LeftArrow, 0.18f, 0.03f);
+    const int right_steps = ImGui::GetKeyPressedAmount(ImGuiKey_RightArrow, 0.18f, 0.03f);
+    for (int i = 0; i < left_steps; ++i) {
+      step_tracker(state, *session, -1.0);
+    }
+    for (int i = 0; i < right_steps; ++i) {
+      step_tracker(state, *session, 1.0);
+    }
   }
   if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
     state->playback_playing = !state->playback_playing;

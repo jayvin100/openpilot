@@ -265,12 +265,30 @@ void advance_playback(UiState *state, const AppSession &session) {
   }
 }
 
-void step_tracker(UiState *state, double direction) {
+void seek_tracker(UiState *state, const AppSession &session, double time_value) {
+  if (!state->has_shared_range || !session.route_data.has_time_range) {
+    return;
+  }
+
+  state->has_tracker_time = true;
+  state->follow_latest = false;
+  state->tracker_time = time_value;
+  state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
+
+  if (state->tracker_time < state->x_view_min || state->tracker_time > state->x_view_max) {
+    const double view_span = std::max(MIN_HORIZONTAL_ZOOM_SECONDS, state->x_view_max - state->x_view_min);
+    state->x_view_min = state->tracker_time - view_span * 0.5;
+    state->x_view_max = state->x_view_min + view_span;
+    clamp_shared_range(state, session);
+  }
+}
+
+void step_tracker(UiState *state, const AppSession &session, double direction) {
   if (!state->has_shared_range) {
     return;
   }
-  state->tracker_time += direction * std::max(0.001, state->playback_step);
-  state->tracker_time = std::clamp(state->tracker_time, state->route_x_min, state->route_x_max);
+  const double delta = direction * std::max(0.001, state->playback_step);
+  seek_tracker(state, session, state->tracker_time + delta);
 }
 
 const char *log_selector_name(LogSelector selector) {
