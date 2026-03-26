@@ -24,7 +24,7 @@ class MainLayout(Widget):
 
     self._pm = messaging.PubMaster(['bookmarkButton'])
 
-    self._is_body = ui_state.is_body()
+    self._is_body = ui_state.is_body
     self._sidebar = BodySidebar() if self._is_body else Sidebar()
     self._current_mode = MainState.HOME
     self._prev_onroad = False
