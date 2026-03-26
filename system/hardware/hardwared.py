@@ -22,7 +22,7 @@ from openpilot.system.loggerd.config import get_available_percent
 from openpilot.system.statsd import statlog
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware.power_monitoring import PowerMonitoring
-from openpilot.system.hardware.fan_controller import FanController
+from openpilot.system.hardware.fan_controller import FanController, THERMAL_MODELS
 from openpilot.system.version import terms_version, training_version
 from openpilot.system.athena.registration import UNREGISTERED_DONGLE_ID
 
@@ -48,8 +48,7 @@ THERMAL_BANDS = OrderedDict({
   ThermalStatus.danger: ThermalBand(94.0, None),
 })
 
-# Override to highest thermal band when offroad and above this temp
-OFFROAD_DANGER_TEMP = 75
+P_ONROAD_EXPECTED = 6.0  # W, typical onroad power draw
 
 prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
 
@@ -193,7 +192,6 @@ def hardware_thread(end_event, hw_queue) -> None:
   )
 
   all_temp_filter = FirstOrderFilter(0., TEMP_TAU, DT_HW, initialized=False)
-  offroad_temp_filter = FirstOrderFilter(0., TEMP_TAU, DT_HW, initialized=False)
   should_start_prev = False
   in_car = False
   engaged_prev = False
@@ -210,7 +208,8 @@ def hardware_thread(end_event, hw_queue) -> None:
   HARDWARE.initialize_hardware()
   thermal_config = HARDWARE.get_thermal_config()
 
-  fan_controller = FanController(int(1./DT_HW))
+  thermal_model = THERMAL_MODELS.get(HARDWARE.get_device_type())
+  fan_controller = FanController(int(1./DT_HW), thermal_model=thermal_model)
 
   while not end_event.is_set():
     sm.update(PANDA_STATES_TIMEOUT)
@@ -270,33 +269,26 @@ def hardware_thread(end_event, hw_queue) -> None:
 
     msg.deviceState.screenBrightnessPercent = HARDWARE.get_screen_brightness()
 
-    # this subset is only used for offroad
     temp_sources = [
       msg.deviceState.memoryTempC,
       max(msg.deviceState.cpuTempC, default=0.),
       max(msg.deviceState.gpuTempC, default=0.),
+      max(msg.deviceState.pmicTempC, default=0.),
     ]
-    offroad_comp_temp = offroad_temp_filter.update(max(temp_sources))
-
-    # this drives the thermal status while onroad
-    temp_sources.append(max(msg.deviceState.pmicTempC, default=0.))
     all_comp_temp = all_temp_filter.update(max(temp_sources))
     msg.deviceState.maxTempC = all_comp_temp
 
-    msg.deviceState.fanSpeedPercentDesired = fan_controller.update(all_comp_temp, onroad_conditions["ignition"])
+    current_power_draw = HARDWARE.get_current_power_draw()
+    intake_temp = msg.deviceState.intakeTempC
+    msg.deviceState.fanSpeedPercentDesired = fan_controller.update(all_comp_temp, onroad_conditions["ignition"],
+                                                                    current_power_draw, intake_temp)
 
-    is_offroad_for_5_min = (started_ts is None) and ((not started_seen) or (off_ts is None) or (time.monotonic() - off_ts > 60 * 5))
-    if is_offroad_for_5_min and offroad_comp_temp > OFFROAD_DANGER_TEMP:
-      # if device is offroad and already hot without the extra onroad load,
-      # we want to cool down first before increasing load
-      thermal_status = ThermalStatus.danger
-    else:
-      current_band = THERMAL_BANDS[thermal_status]
-      band_idx = list(THERMAL_BANDS.keys()).index(thermal_status)
-      if current_band.min_temp is not None and all_comp_temp < current_band.min_temp:
-        thermal_status = list(THERMAL_BANDS.keys())[band_idx - 1]
-      elif current_band.max_temp is not None and all_comp_temp > current_band.max_temp:
-        thermal_status = list(THERMAL_BANDS.keys())[band_idx + 1]
+    current_band = THERMAL_BANDS[thermal_status]
+    band_idx = list(THERMAL_BANDS.keys()).index(thermal_status)
+    if current_band.min_temp is not None and all_comp_temp < current_band.min_temp:
+      thermal_status = list(THERMAL_BANDS.keys())[band_idx - 1]
+    elif current_band.max_temp is not None and all_comp_temp > current_band.max_temp:
+      thermal_status = list(THERMAL_BANDS.keys())[band_idx + 1]
 
     # **** starting logic ****
 
@@ -313,13 +305,17 @@ def hardware_thread(end_event, hw_queue) -> None:
 
     # must be at an engageable thermal band to go onroad
     startup_conditions["device_temp_engageable"] = thermal_status < ThermalStatus.red
+    # model-based headroom check: can the cooler sustain onroad power?
+    if thermal_model is not None and intake_temp > 0 and started_ts is None:
+      t_steady_onroad = intake_temp + P_ONROAD_EXPECTED * thermal_model.r_thermal[-1]
+      startup_conditions["device_temp_engageable"] &= t_steady_onroad < THERMAL_BANDS[ThermalStatus.yellow].max_temp
 
     # ensure device is fully booted
     startup_conditions["device_booted"] = startup_conditions.get("device_booted", False) or HARDWARE.booted()
 
     # if the temperature enters the danger zone, go offroad to cool down
     onroad_conditions["device_temp_good"] = thermal_status < ThermalStatus.danger
-    extra_text = f"{offroad_comp_temp:.1f}C"
+    extra_text = f"{all_comp_temp:.1f}C"
     show_alert = (not onroad_conditions["device_temp_good"] or not startup_conditions["device_temp_engageable"]) and onroad_conditions["ignition"]
     set_offroad_alert_if_changed("Offroad_TemperatureTooHigh", show_alert, extra_text=extra_text)
 
@@ -380,7 +376,6 @@ def hardware_thread(end_event, hw_queue) -> None:
     power_monitor.calculate(voltage, onroad_conditions["ignition"])
     msg.deviceState.offroadPowerUsageUwh = power_monitor.get_power_used()
     msg.deviceState.carBatteryCapacityUwh = max(0, power_monitor.get_car_battery_capacity())
-    current_power_draw = HARDWARE.get_current_power_draw()
     statlog.sample("power_draw", current_power_draw)
     msg.deviceState.powerDrawW = current_power_draw
 
