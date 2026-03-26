@@ -85,6 +85,9 @@ class Widget(abc.ABC):
   def set_touch_valid_callback(self, touch_callback: Callable[[], bool]) -> None:
     """Set a callback to determine if the widget can be clicked."""
     self._touch_valid_callback = touch_callback
+    for child in self._children:
+      original_touch_valid = child._touch_valid_callback
+      child.set_touch_valid_callback(lambda otv=original_touch_valid : self._touch_valid() and (otv() if otv is not None else True))
 
   def _touch_valid(self) -> bool:
     """Check if the widget can be touched."""

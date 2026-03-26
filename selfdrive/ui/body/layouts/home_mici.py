@@ -13,9 +13,9 @@ class MiciBodyHomeLayout(MiciHomeLayout):
   def __init__(self):
     super().__init__()
     self._branch_label.set_visible(False)
-    self._pair_button = Button("CONNECT", font_size=PAIR_BTN_FONT_SIZE, font_weight=FontWeight.BOLD,
-                              click_callback=lambda: gui_app.push_widget(OneTimeConnectPanel()),
-                              button_style=ButtonStyle.ACTION)
+    self._pair_button = self._child(Button("CONNECT", font_size=PAIR_BTN_FONT_SIZE, font_weight=FontWeight.BOLD,
+                                           click_callback=lambda: gui_app.push_widget(OneTimeConnectPanel()),
+                                           button_style=ButtonStyle.ACTION))
 
   def _render(self, rect: rl.Rectangle):
     super()._render(rect)
@@ -23,6 +23,6 @@ class MiciBodyHomeLayout(MiciHomeLayout):
     text_size = measure_text_cached(font_bold, "CONNECT", PAIR_BTN_FONT_SIZE)
     btn_w = int(text_size.x + 100)
     btn_h = 124
-    btn_x = int(self._rect.x + self._rect.width - btn_w - PAIR_BTN_MARGIN)
-    btn_y = int(self._rect.y + self._rect.height - btn_h - 5 - PAIR_BTN_MARGIN)
+    btn_x = self._rect.x + self._rect.width - btn_w - PAIR_BTN_MARGIN
+    btn_y = self._rect.y + self._rect.height - btn_h - 5 - PAIR_BTN_MARGIN
     self._pair_button.render(rl.Rectangle(btn_x, btn_y, btn_w, btn_h))
