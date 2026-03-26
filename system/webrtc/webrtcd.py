@@ -127,7 +127,6 @@ def validate_body_sound_name(sound_name: Any) -> str:
   return sound_name
 
 
-
 class StreamSession:
   shared_pub_master = DynamicPubMaster([])
 

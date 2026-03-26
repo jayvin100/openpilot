@@ -105,6 +105,10 @@ class UIState:
   def is_offroad(self) -> bool:
     return not self.started
 
+  @property
+  def is_body(self) -> bool:
+    return self.CP is not None and self.CP.notCar
+
   def update(self) -> None:
     self.prime_state.start()  # start thread after manager forks ui
     self.sm.update(0)

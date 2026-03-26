@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch the big UI (comma 3X) simulating a comma body."""
+"""Launch the comma UI, but simulating a comma body."""
 import argparse
 import os
 import time

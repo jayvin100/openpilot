@@ -19,7 +19,7 @@ if __name__ == "__main__":
   msgs = {s: messaging.new_message(s) for s in ['controlsState', 'deviceState', 'carParams']}
   msgs['deviceState'].deviceState.started = True
   msgs['deviceState'].deviceState.deviceType = HARDWARE.get_device_type()
-  # msgs['carParams'].carParams.openpilotLongitudinalControl = True
+  msgs['carParams'].carParams.openpilotLongitudinalControl = True
 
   msgs['pandaStates'] = messaging.new_message('pandaStates', 1)
   msgs['pandaStates'].pandaStates[0].ignitionLine = True

@@ -24,7 +24,7 @@ class MainLayout(Widget):
 
     self._pm = messaging.PubMaster(['bookmarkButton'])
 
-    self._is_body = self._check_not_car()
+    self._is_body = ui_state.is_body
     self._sidebar = BodySidebar() if self._is_body else Sidebar()
     self._current_mode = MainState.HOME
     self._prev_onroad = False
@@ -74,10 +74,7 @@ class MainLayout(Widget):
     else:
       self._sidebar_rect = rl.Rectangle(self._rect.x, self._rect.y, SIDEBAR_WIDTH, self._rect.height)
       x_offset = SIDEBAR_WIDTH if self._sidebar.is_visible else 0
-      self._content_rect = rl.Rectangle(self._rect.y + x_offset, self._rect.y, self._rect.width - x_offset, self._rect.height)
-
-  def _check_not_car(self):
-    return ui_state.CP is not None and ui_state.CP.notCar
+      self._content_rect = rl.Rectangle(self._rect.x + x_offset, self._rect.y, self._rect.width - x_offset, self._rect.height)
 
   def _handle_onroad_transition(self):
     if ui_state.started != self._prev_onroad:

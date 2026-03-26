@@ -22,7 +22,7 @@ class MiciMainLayout(Scroller):
 
     self._pm = messaging.PubMaster(['bookmarkButton'])
 
-    self._is_body = ui_state.CP is not None and ui_state.CP.notCar
+    self._is_body = ui_state.is_body
     self._prev_onroad = False
     self._prev_standstill = False
     self._prev_joystick_debug_mode = False
