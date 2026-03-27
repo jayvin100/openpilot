@@ -27,7 +27,11 @@ void OS04C10::ife_downscale_configure() {
   pixel_size_mm = 0.002;
   frame_width = 2688;
   frame_height = 1520;
-  exposure_time_max = 2352;
+  frame_stride = (frame_width * 10 / 8);  // full-res RAW10 packed input
+  exposure_time_max = 4716;
+  mipi_format = CAM_FORMAT_MIPI_RAW_10;
+  frame_data_type = CSI_RAW10;
+  readout_time_ns = 16100000;
 
   init_reg_array.insert(init_reg_array.end(), std::begin(ife_downscale_override_array_os04c10), std::end(ife_downscale_override_array_os04c10));
 }
