@@ -4,7 +4,7 @@ import socket
 import time
 import pyray as rl
 
-from openpilot.common.api import CONNECT_HOST, CONNECT_HOST_DISPLAY
+from openpilot.common.api import CONNECT_HOST, CONNECT_HOST_DISPLAY, CONNECT_CLIENT
 from openpilot.selfdrive.ui.ui_state import device
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -60,7 +60,7 @@ class BodyPairingScreen(_BodyConnectBase, TiciPairingDialog):
     self._instructions = [
       tr("Go to {url} on your phone").format(url=CONNECT_HOST_DISPLAY),
       tr("Click \"add new device\" and then \"connect to comma body\""),
-      tr("Enter the IP address: {ip}").format(ip=self._ip_address if self._ip_address else ""),
+      tr("Enter the URL: {url}").format(url=CONNECT_CLIENT),
       tr("Bookmark {url} to your home screen to use it like an app").format(url=CONNECT_HOST_DISPLAY),
     ]
 
@@ -215,7 +215,7 @@ class OneTimeConnectPanel(_BodyConnectBase, MiciPairingDialog):
 
     y += 10
 
-    ip_text = f"IP: {self._ip_address}" if self._ip_address else "IP: not connected"
+    ip_text = f"URL: {CONNECT_CLIENT}"
     rl.draw_text_ex(self._font, ip_text, rl.Vector2(label_x, y), 22, 0, MICI_TEXT_COLOR)
     y += 24
 
