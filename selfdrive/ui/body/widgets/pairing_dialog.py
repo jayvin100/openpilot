@@ -177,10 +177,10 @@ class OneTimeConnectPanel(_BodyConnectBase, MiciPairingDialog):
     rl.draw_text_ex(self._font, "connect manually:", rl.Vector2(label_x, y), MICI_LABEL_SIZE, 0, MICI_TEXT_COLOR)
     y += MICI_LABEL_SIZE + 12
 
-    step_font_size = MICI_LABEL_SIZE - 3
+    step_font_size = MICI_LABEL_SIZE - 5
     circle_r = step_font_size // 2 + 1
     circle_d = circle_r * 2
-    gap = 8
+    gap = 10
     num_font_size = step_font_size - 4
     row_h = circle_d
     for i, step in enumerate((CONNECT_HOST_DISPLAY, "add new device", "connect to comma body"), 1):
@@ -191,7 +191,7 @@ class OneTimeConnectPanel(_BodyConnectBase, MiciPairingDialog):
       num_size = rl.measure_text_ex(self._font_semi, num, num_font_size, 0)
       rl.draw_text_ex(self._font_semi, num, rl.Vector2(int(cx - num_size.x / 2), int(cy - num_size.y / 2 - 1)), num_font_size, 0, MICI_TEXT_COLOR)
       step_size = rl.measure_text_ex(self._font, step, step_font_size, 0)
-      rl.draw_text_ex(self._font, step, rl.Vector2(label_x + circle_d + gap, int(cy - step_size.y / 2 - 3)), step_font_size, 0, MICI_TEXT_COLOR)
+      rl.draw_text_ex(self._font, step, rl.Vector2(label_x + circle_d + gap, int(cy - step_size.y / 2 - 1)), step_font_size, 0, MICI_TEXT_COLOR)
       y += row_h + 6
 
     y += 10
