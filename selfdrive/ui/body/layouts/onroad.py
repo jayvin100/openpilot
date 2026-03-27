@@ -73,20 +73,8 @@ class BodyLayout(Widget):
 
     self.pairing_button.render(rl.Rectangle(btn_x, btn_y, btn_w, btn_h))
 
-  def _dismiss_pairing_screen(self):
-    """Auto-close the pairing screen when a WebRTC connection is established."""
-    for widget in gui_app._nav_stack:
-      if isinstance(widget, BodyPairingScreen):
-        gui_app.pop_widget()
-        break
-
   def _update_state(self):
     sm = ui_state.sm
-
-    # Auto-dismiss pairing screen on connection
-    if gui_app.big_ui() and ui_state.joystick_debug_mode and not self._prev_joystick_debug_mode:
-      self._dismiss_pairing_screen()
-    self._prev_joystick_debug_mode = ui_state.joystick_debug_mode
 
     active = ui_state.is_onroad()
     if active and ui_state.joystick_debug_mode:
@@ -142,5 +130,11 @@ class BodyLayout(Widget):
       remove_set = set(animation.right_turn_remove)
       dots = [d for d in dots if d not in remove_set]
     self.draw_dot_grid(rect, dots)
-    if gui_app.big_ui() and not ui_state.joystick_debug_mode:
-      self._draw_pair_button(rect)
+    if gui_app.big_ui() and ui_state.joystick_debug_mode != self._prev_joystick_debug_mode:
+      if ui_state.joystick_debug_mode:
+        for widget in gui_app._nav_stack:
+          if isinstance(widget, BodyPairingScreen):
+            gui_app.pop_widget()
+            break
+      else:
+        self._draw_pair_button(rect)
