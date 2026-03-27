@@ -129,5 +129,5 @@ class BodyLayout(Widget):
       remove_set = set(animation.right_turn_remove)
       dots = [d for d in dots if d not in remove_set]
     self.draw_dot_grid(rect, dots)
-    if gui_app.big_ui() and ui_state.is_offroad():
+    if gui_app.big_ui() and not ui_state.joystick_debug_mode:
       self._draw_pair_button(rect)
