@@ -11,12 +11,8 @@
 #include <cassert>
 #include <cerrno>
 #include <cmath>
-#include <condition_variable>
 #include <cstring>
-#include <mutex>
-#include <queue>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "media/cam_sensor_cmn_header.h"
@@ -336,63 +332,14 @@ void camerad_thread() {
   // Store the expected SOF offset for secondary cameras.
   for (auto &cam : cams) {
     if (cam->camera.ife_primary_ptr) {
-      cam->camera.fsin_stagger_ns = cam->camera.sensor->image_sensor == cereal::FrameData::ImageSensor::OS04C10
-                                      ? 25000000LL
-                                      : 24000000LL;
+      cam->camera.fsin_stagger_ns = 25000000LL;
     }
   }
 
-  // Start devices:
-  // - OS04C10 secondaries use panda-provided staggered FSIN, so they start with the primaries
-  // - OX03C10 secondaries keep the existing delayed-start free-running stagger
+  // On the target device the panda already provides the 25ms driver FSIN offset,
+  // so all sensors can start together.
   LOG("-- Starting devices");
-  for (auto &cam : cams) {
-    bool start_now = !cam->camera.is_ife_secondary() ||
-                     cam->camera.sensor->image_sensor == cereal::FrameData::ImageSensor::OS04C10;
-    if (start_now) {
-      cam->camera.sensors_start();
-    }
-  }
-  usleep(24000);  // 24ms delay to stagger secondary readout
-  for (auto &cam : cams) {
-    if (cam->camera.is_ife_secondary() &&
-        cam->camera.sensor->image_sensor != cereal::FrameData::ImageSensor::OS04C10) {
-      cam->camera.sensors_start();
-      LOGW("IFE sharing: started secondary cam %d with 24ms stagger (free-running mode)",
-           cam->camera.cc.camera_num);
-    }
-  }
-
-  // Worker thread for standalone (non-IFE-sharing) cameras.
-  // IFE-sharing cameras are processed inline since they need tight coupling
-  // with the event loop. Standalone cameras are offloaded to prevent their
-  // IFE sync waits (~11ms) from delaying the main thread.
-  struct StandaloneEvent {
-    struct cam_req_mgr_message event_data;
-    CameraState *cam;
-  };
-  std::queue<StandaloneEvent> standalone_queue;
-  std::mutex standalone_mutex;
-  std::condition_variable standalone_cv;
-  bool standalone_exit = false;
-
-  std::thread standalone_thread([&]() {
-    util::set_core_affinity({7});
-    while (true) {
-      StandaloneEvent event;
-      {
-        std::unique_lock<std::mutex> lock(standalone_mutex);
-        standalone_cv.wait(lock, [&] { return !standalone_queue.empty() || standalone_exit; });
-        if (standalone_exit && standalone_queue.empty()) break;
-        event = standalone_queue.front();
-        standalone_queue.pop();
-      }
-      bool publish = event.cam->camera.handle_camera_event(&event.event_data);
-      if (publish) {
-        event.cam->sendState();
-      }
-    }
-  });
+  for (auto &cam : cams) cam->camera.sensors_start();
 
   // poll events
   LOG("-- Dequeueing Video events");
@@ -424,7 +371,6 @@ void camerad_thread() {
         for (auto &cam : cams) {
           if (event_data.session_hdl == cam->camera.session_handle) {
             if (cam->camera.ife_secondary) {
-              // IFE-sharing: process inline (PHY switch happens early in handle_camera_event)
               bool publish = cam->camera.handle_camera_event(&event_data);
               if (publish) {
                 cam->sendState();
@@ -433,16 +379,9 @@ void camerad_thread() {
                 cam->camera.secondary_frame_ready = false;
                 secondary_cam_state->sendState();
               }
-            } else if (!SpectraCamera::isSynced()) {
-              // During sync: process inline to avoid race conditions between
-              // the main thread and worker thread accessing sync data
+            } else {
               bool publish = cam->camera.handle_camera_event(&event_data);
               if (publish) cam->sendState();
-            } else {
-              // Standalone: dispatch to worker thread
-              std::lock_guard<std::mutex> lock(standalone_mutex);
-              standalone_queue.push({event_data, cam.get()});
-              standalone_cv.notify_one();
             }
             break;
           }
@@ -452,12 +391,4 @@ void camerad_thread() {
       }
     }
   }
-
-  // Clean up worker thread
-  {
-    std::lock_guard<std::mutex> lock(standalone_mutex);
-    standalone_exit = true;
-  }
-  standalone_cv.notify_all();
-  standalone_thread.join();
 }

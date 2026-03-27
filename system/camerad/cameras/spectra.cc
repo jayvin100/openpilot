@@ -1079,15 +1079,7 @@ bool SpectraCamera::openSensor() {
   LOGD("acquire sensor dev");
 
   LOG("-- Configuring sensor");
-
-  auto init_regs = sensor->init_reg_array;  // mutable copy
-  if (is_ife_secondary() && sensor->image_sensor == cereal::FrameData::ImageSensor::OX03C10) {
-    for (auto &reg : init_regs) {
-      if (reg.reg_addr == 0x383E) reg.reg_data = 0x00;  // disable FSIN control
-      if (reg.reg_addr == 0x3823) reg.reg_data = 0x00;  // disable FSIN trigger
-    }
-  }
-  sensors_i2c(init_regs.data(), init_regs.size(), CAM_SENSOR_PACKET_OPCODE_SENSOR_CONFIG, sensor->data_word);
+  sensors_i2c(sensor->init_reg_array.data(), sensor->init_reg_array.size(), CAM_SENSOR_PACKET_OPCODE_SENSOR_CONFIG, sensor->data_word);
   return true;
 }
 
@@ -1477,7 +1469,6 @@ bool SpectraCamera::handle_camera_event(const cam_req_mgr_message *event_data) {
   // Only inject during primary events — secondary events have FSIN-staggered timestamps
   // that would corrupt the sync check (all cameras must be within 0.2ms).
   if (ife_secondary && !first_frame_synced && !secondary_frame_slot[buf_idx]) {
-    std::lock_guard<std::mutex> lock(sync_mutex);
     camera_sync_data[ife_secondary->cc.camera_num] = SyncData{timestamp};
   }
 
@@ -1634,8 +1625,6 @@ bool SpectraCamera::processFrame(int buf_idx, uint64_t request_id, uint64_t fram
 }
 
 bool SpectraCamera::syncFirstFrame(int camera_id, uint64_t request_id, uint64_t raw_id, uint64_t timestamp, bool staggered) {
-  std::lock_guard<std::mutex> lock(sync_mutex);
-
   if (first_frame_synced) return true;
 
   camera_sync_data[camera_id] = SyncData{timestamp, staggered};
@@ -1648,8 +1637,6 @@ bool SpectraCamera::syncFirstFrame(int camera_id, uint64_t request_id, uint64_t 
   // Check that camera timestamps are properly aligned:
   // - non-staggered cameras should be within 0.2ms of each other
   // - staggered cameras should be within 0.2ms of a 25ms offset from non-staggered cameras
-  // When no cameras are staggered (BPS fallback), skip the tolerance check — all cameras
-  // are FSIN-synced and we just need any reference timestamp.
   bool has_staggered = false;
   for (const auto &[cam, sd] : camera_sync_data) {
     if (sd.staggered) { has_staggered = true; break; }

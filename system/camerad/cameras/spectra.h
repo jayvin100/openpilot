@@ -1,10 +1,8 @@
 #pragma once
 
 #include <sys/mman.h>
-#include <atomic>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <queue>
 #include <optional>
 #include <utility>
@@ -210,7 +208,6 @@ public:
   SpectraMaster *m;
 
   void clearAndRequeue(uint64_t from_request_id);
-  static bool isSynced() { return first_frame_synced.load(std::memory_order_acquire); }
 
 private:
   bool validateEvent(uint64_t request_id, uint64_t frame_id_raw);
@@ -222,8 +219,7 @@ private:
     bool staggered = false;
   };
   inline static std::map<int, SyncData> camera_sync_data;
-  inline static std::atomic<bool> first_frame_synced{false};
-  inline static std::mutex sync_mutex;
+  inline static bool first_frame_synced = false;
 
   // Timestamp-based frame_id: all cameras compute frame_id from SOF relative to this reference.
   // This eliminates alignment issues from IFE raw_id sequences and PHY switch timing.
