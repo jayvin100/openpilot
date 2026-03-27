@@ -36,6 +36,10 @@ class BodyLayout(Widget):
     self._font_bold = gui_app.font(FontWeight.BOLD)
     self._prev_joystick_debug_mode = False
 
+    self.pairing_button = Button("CONNECT", font_size=PAIR_BTN_FONT_SIZE, font_weight=FontWeight.BOLD,
+                        click_callback=lambda: gui_app.push_widget(BodyPairingScreen()),
+                        button_style=ButtonStyle.ACTION)
+
   def set_settings_callback(self, callback):
     pass
 
@@ -60,10 +64,6 @@ class BodyLayout(Widget):
       rl.draw_circle(x, y, RADIUS, color)
 
   def _draw_pair_button(self, rect: rl.Rectangle):
-    self.pairing_button = Button("CONNECT", font_size=PAIR_BTN_FONT_SIZE, font_weight=FontWeight.BOLD,
-                            click_callback=lambda: gui_app.push_widget(BodyPairingScreen()),
-                            button_style=ButtonStyle.ACTION)
-
     text = tr(tr_noop("CONNECT"))
     text_size = measure_text_cached(self._font_bold, text, PAIR_BTN_FONT_SIZE)
     btn_w = int(text_size.x + 200)
@@ -130,7 +130,7 @@ class BodyLayout(Widget):
       remove_set = set(animation.right_turn_remove)
       dots = [d for d in dots if d not in remove_set]
     self.draw_dot_grid(rect, dots)
-    if gui_app.big_ui() and ui_state.joystick_debug_mode != self._prev_joystick_debug_mode:
+    if gui_app.big_ui():
       if ui_state.joystick_debug_mode:
         for widget in gui_app._nav_stack:
           if isinstance(widget, BodyPairingScreen):
