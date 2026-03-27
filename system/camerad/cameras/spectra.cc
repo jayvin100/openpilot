@@ -1048,8 +1048,6 @@ bool SpectraCamera::openSensor() {
 
   LOGD("-- Probing sensor %d", cc.camera_num);
 
-  // IFE-shared cameras skip IFE downscaling and use sensor-side downscaling
-  // for faster readout (~23ms vs ~33ms) to fit within the FSIN stagger window.
   auto init_sensor_lambda = [this](SensorInfo *s) {
     if (s->image_sensor == cereal::FrameData::ImageSensor::OS04C10 && !is_ife_sharing() && cc.output_type == ISP_IFE_PROCESSED) {
       ((OS04C10*)s)->ife_downscale_configure();
@@ -1067,16 +1065,6 @@ bool SpectraCamera::openSensor() {
   }
   LOGD("-- Probing sensor %d success", cc.camera_num);
 
-  // OS04C10 cannot have FSIN fully disabled via registers, so IFE sharing
-  // (which requires sensor stagger) doesn't work. Fall back to BPS mode
-  // for the driver camera, matching master branch behavior.
-  if (sensor->image_sensor == cereal::FrameData::ImageSensor::OS04C10 && cc.ife_share_primary >= 0) {
-    LOGW("OS04C10 detected on IFE-sharing cam %d — falling back to BPS (no free-running support)", cc.camera_num);
-    cc.output_type = ISP_BPS_PROCESSED;
-    cc.ife_share_primary = -1;
-    cc.staggered_sof = false;
-  }
-
   // create session
   struct cam_req_mgr_session_info session_info = {};
   int ret = do_cam_control(m->video0_fd, CAM_REQ_MGR_CREATE_SESSION, &session_info, sizeof(session_info));
@@ -1092,18 +1080,11 @@ bool SpectraCamera::openSensor() {
 
   LOG("-- Configuring sensor");
 
-  // For IFE-secondary cameras (OX03C10 only), disable FSIN sync so the sensor
-  // free-runs at its VTS rate. Stagger from delayed start in camerad_thread.
-  // NOTE: OS04C10 cannot be IFE secondary (falls back to BPS above).
-  // IMPORTANT: do NOT write FSIN delay registers (0x3882/0x3883) — on some
-  // revisions, any write to delay registers re-enables FSIN mode.
   auto init_regs = sensor->init_reg_array;  // mutable copy
-  if (is_ife_secondary()) {
+  if (is_ife_secondary() && sensor->image_sensor == cereal::FrameData::ImageSensor::OX03C10) {
     for (auto &reg : init_regs) {
-      if (sensor->image_sensor == cereal::FrameData::ImageSensor::OX03C10) {
-        if (reg.reg_addr == 0x383E) reg.reg_data = 0x00;  // disable FSIN control
-        if (reg.reg_addr == 0x3823) reg.reg_data = 0x00;  // disable FSIN trigger
-      }
+      if (reg.reg_addr == 0x383E) reg.reg_data = 0x00;  // disable FSIN control
+      if (reg.reg_addr == 0x3823) reg.reg_data = 0x00;  // disable FSIN trigger
     }
   }
   sensors_i2c(init_regs.data(), init_regs.size(), CAM_SENSOR_PACKET_OPCODE_SENSOR_CONFIG, sensor->data_word);

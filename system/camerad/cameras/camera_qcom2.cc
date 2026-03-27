@@ -331,40 +331,32 @@ void camerad_thread() {
     }
   }
 
-  // Handle BPS fallback: cameras that deferred clearAndRequeue (is_ife_sharing() was true
-  // at camera_open time from static config) but didn't get wired because the secondary
-  // fell back to BPS (e.g., OS04C10). These still need clearAndRequeue.
-  for (auto &cam : cams) {
-    if (cam->camera.is_ife_sharing() && !cam->camera.ife_secondary && !cam->camera.is_ife_secondary()) {
-      LOGW("cam %d: IFE sharing expected but secondary not wired (BPS fallback?) — calling clearAndRequeue",
-           cam->camera.cc.camera_num);
-      cam->camera.clearAndRequeue(1);
-    }
-  }
-
   v.start_listener();
 
-  // Store FSIN stagger config for secondary cameras.
-  // Secondary cameras run in free-running mode (FSIN disabled) and are started
-  // ~24ms after the primary to create a readout stagger without relying on
-  // sensor FSIN delay registers (which don't work on all hardware revisions).
+  // Store the expected SOF offset for secondary cameras.
   for (auto &cam : cams) {
     if (cam->camera.ife_primary_ptr) {
-      cam->camera.fsin_stagger_ns = 24000000LL;  // 24ms
+      cam->camera.fsin_stagger_ns = cam->camera.sensor->image_sensor == cereal::FrameData::ImageSensor::OS04C10
+                                      ? 25000000LL
+                                      : 24000000LL;
     }
   }
 
-  // Start devices: primary/standalone sensors first, then secondary after a delay.
-  // The delay creates the readout stagger for IFE-sharing cameras.
+  // Start devices:
+  // - OS04C10 secondaries use panda-provided staggered FSIN, so they start with the primaries
+  // - OX03C10 secondaries keep the existing delayed-start free-running stagger
   LOG("-- Starting devices");
   for (auto &cam : cams) {
-    if (!cam->camera.is_ife_secondary()) {
+    bool start_now = !cam->camera.is_ife_secondary() ||
+                     cam->camera.sensor->image_sensor == cereal::FrameData::ImageSensor::OS04C10;
+    if (start_now) {
       cam->camera.sensors_start();
     }
   }
   usleep(24000);  // 24ms delay to stagger secondary readout
   for (auto &cam : cams) {
-    if (cam->camera.is_ife_secondary()) {
+    if (cam->camera.is_ife_secondary() &&
+        cam->camera.sensor->image_sensor != cereal::FrameData::ImageSensor::OS04C10) {
       cam->camera.sensors_start();
       LOGW("IFE sharing: started secondary cam %d with 24ms stagger (free-running mode)",
            cam->camera.cc.camera_num);
