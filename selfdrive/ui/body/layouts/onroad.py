@@ -34,6 +34,7 @@ class BodyLayout(Widget):
     self._last_input_time = time.monotonic()
     self._was_active = False
     self._font_bold = gui_app.font(FontWeight.BOLD)
+    self._prev_joystick_debug_mode = False
 
   def set_settings_callback(self, callback):
     pass
@@ -72,8 +73,20 @@ class BodyLayout(Widget):
 
     self.pairing_button.render(rl.Rectangle(btn_x, btn_y, btn_w, btn_h))
 
+  def _dismiss_pairing_screen(self):
+    """Auto-close the pairing screen when a WebRTC connection is established."""
+    for widget in gui_app._nav_stack:
+      if isinstance(widget, BodyPairingScreen):
+        gui_app.pop_widget()
+        break
+
   def _update_state(self):
     sm = ui_state.sm
+
+    # Auto-dismiss pairing screen on connection
+    if gui_app.big_ui() and ui_state.joystick_debug_mode and not self._prev_joystick_debug_mode:
+      self._dismiss_pairing_screen()
+    self._prev_joystick_debug_mode = ui_state.joystick_debug_mode
 
     active = ui_state.is_onroad()
     if active and ui_state.joystick_debug_mode:
