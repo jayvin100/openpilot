@@ -32,21 +32,14 @@ class _BodyConnectBase:
   QR_REFRESH_INTERVAL = 300  # seconds
 
   def __init__(self):
-    self._ip_address = ""
+    self.url = CONNECT_CLIENT
     self._last_ip_check = float('-inf')
 
     self._wifi_manager = WifiManager()
     self._wifi_manager.set_active(False)
 
-  def _refresh_ip(self):
-    now = time.monotonic()
-    if now - self._last_ip_check > 10:
-      self._ip_address = _get_local_ip()
-      self._last_ip_check = now
-
   def _get_pairing_url(self) -> str:
-    ip = self._ip_address or "unknown"
-    return f"{CONNECT_HOST}/?body={ip}"
+    return f"{CONNECT_HOST}/?body={CONNECT_CLIENT}"
 
 
 class BodyPairingScreen(_BodyConnectBase, TiciPairingDialog):
