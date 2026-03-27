@@ -27,20 +27,15 @@ def _get_local_ip() -> str:
 
 
 class _BodyConnectBase:
-  """Shared QR generation, URL building, and IP refresh logic for body pairing screens."""
-
-  QR_REFRESH_INTERVAL = 300  # seconds
+  """Shared QR generation overwriting"""
 
   def __init__(self):
     self.url = CONNECT_CLIENT
-    self._last_ip_check = float('-inf')
-
     self._wifi_manager = WifiManager()
     self._wifi_manager.set_active(False)
 
   def _get_pairing_url(self) -> str:
     return f"{CONNECT_HOST}/?body={CONNECT_CLIENT}"
-
 
 class BodyPairingScreen(_BodyConnectBase, TiciPairingDialog):
   """Connection screen for comma body: shows one-time connection QR and manual connect info."""
@@ -56,9 +51,6 @@ class BodyPairingScreen(_BodyConnectBase, TiciPairingDialog):
       tr("Enter the URL: {url}").format(url=CONNECT_CLIENT),
       tr("Bookmark {url} to your home screen to use it like an app").format(url=CONNECT_HOST_DISPLAY),
     ]
-
-  def _update_state(self):
-    self._refresh_ip()
 
   def _render(self, rect: rl.Rectangle) -> int:
     rl.clear_background(rl.Color(224, 224, 224, 255))
@@ -154,10 +146,6 @@ class OneTimeConnectPanel(_BodyConnectBase, MiciPairingDialog):
   def hide_event(self):
     super().hide_event()
     device.set_override_interactive_timeout(None)
-
-  def _update_state(self):
-    super()._update_state()
-    self._refresh_ip()
 
   def _render_qr_code(self) -> None:
     if not self._qr_texture:
