@@ -13,7 +13,7 @@ CAN protocol:
 Based on the Waveshare RP2350-CAN demo (XL2515, MCP2515-compatible).
 Flash MicroPython to the RP2350 first, then copy this file as main.py.
 """
-from machine import Pin, SPI
+from machine import Pin, SPI, PWM
 import time
 
 # -- Hardware pins (from schematic) --
@@ -33,6 +33,12 @@ SOLENOID_CMD_ID = 0x100
 PINBALL_STATE_ID = 0x101
 CAN_RATE = "500KBPS"
 HEARTBEAT_MS = 1000
+
+# -- PWM solenoid config --
+PWM_FREQ = 100            # 100 Hz
+PULL_IN_MS = 60           # full power pull-in duration
+PULL_IN_DUTY = 65535      # 100% duty cycle (16-bit) for initial actuation
+HOLD_DUTY = 45875         # ~70% duty cycle
 
 # -- XL2515 registers (MCP2515-compatible) --
 CANSTAT  = 0x0E
@@ -174,20 +180,44 @@ class XL2515:
         return can_id, data
 
 
+class SolenoidPWM:
+    def __init__(self, pin_num):
+        self.pwm = PWM(Pin(pin_num))
+        self.pwm.freq(PWM_FREQ)
+        self.pwm.duty_u16(0)
+        self.active = False
+        self.pull_in_start = 0
+
+    def set(self, on, now):
+        if on and not self.active:
+            # rising edge: full power pull-in
+            self.pwm.duty_u16(PULL_IN_DUTY)
+            self.pull_in_start = now
+            self.active = True
+        elif on and self.active:
+            # already on: transition to hold after pull-in period
+            if time.ticks_diff(now, self.pull_in_start) >= PULL_IN_MS:
+                self.pwm.duty_u16(HOLD_DUTY)
+        elif not on and self.active:
+            self.pwm.duty_u16(0)
+            self.active = False
+
+
 def main():
     led = Pin(LED_PIN, Pin.OUT, value=1)
-    sol_l = Pin(SOLENOID_L_PIN, Pin.OUT, value=0)
-    sol_r = Pin(SOLENOID_R_PIN, Pin.OUT, value=0)
-    sol_start = Pin(SOLENOID_START_PIN, Pin.OUT, value=0)
+    sol_l = SolenoidPWM(SOLENOID_L_PIN)
+    sol_r = SolenoidPWM(SOLENOID_R_PIN)
+    sol_start = SolenoidPWM(SOLENOID_START_PIN)
     can = XL2515(CAN_RATE)
-    print(f"Listening for CAN ID 0x{SOLENOID_CMD_ID:03X} at {CAN_RATE}...")
+    print(f"Listening for CAN ID 0x{SOLENOID_CMD_ID:03X} at {CAN_RATE} (PWM hold={HOLD_DUTY})...")
 
     heartbeat = 0
     last_heartbeat_ms = time.ticks_ms()
 
     while True:
-        # Send heartbeat (PINBALL_STATE) periodically
         now = time.ticks_ms()
+
+        # Send heartbeat (PINBALL_STATE) periodically
         if time.ticks_diff(now, last_heartbeat_ms) >= HEARTBEAT_MS:
             can.send(PINBALL_STATE_ID, bytes([heartbeat & 0x01]))
             heartbeat ^= 1
@@ -198,12 +228,18 @@ def main():
         if can_id is not None and data is not None:
             if can_id == SOLENOID_CMD_ID and len(data) >= 1:
                 led.value(0)
-                sol_l.value(data[0] & 0x01)
-                sol_r.value((data[0] >> 1) & 0x01)
-                sol_start.value((data[0] >> 2) & 0x01)
+                sol_l.set(data[0] & 0x01, now)
+                sol_r.set((data[0] >> 1) & 0x01, now)
+                sol_start.set((data[0] >> 2) & 0x01, now)
                 print(f"ID=0x{can_id:03X} L={data[0]&1} R={(data[0]>>1)&1} S={(data[0]>>2)&1}")
             else:
                 print(f"ID=0x{can_id:03X} data={[hex(b) for b in data]} (ignored)")
+        else:
+            # no new CAN msg — still need to transition active solenoids from pull-in to hold
+            sol_l.set(sol_l.active, now)
+            sol_r.set(sol_r.active, now)
+            sol_start.set(sol_start.active, now)
+
         time.sleep_ms(1)
 
 
