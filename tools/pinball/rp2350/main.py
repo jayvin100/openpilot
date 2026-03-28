@@ -175,7 +175,7 @@ class XL2515:
 
 
 def main():
-    led = Pin(LED_PIN, Pin.OUT, value=0)
+    led = Pin(LED_PIN, Pin.OUT, value=1)
     sol_l = Pin(SOLENOID_L_PIN, Pin.OUT, value=0)
     sol_r = Pin(SOLENOID_R_PIN, Pin.OUT, value=0)
     sol_start = Pin(SOLENOID_START_PIN, Pin.OUT, value=0)
@@ -197,11 +197,10 @@ def main():
         can_id, data = can.recv()
         if can_id is not None and data is not None:
             if can_id == SOLENOID_CMD_ID and len(data) >= 1:
+                led.value(0)
                 sol_l.value(data[0] & 0x01)
                 sol_r.value((data[0] >> 1) & 0x01)
                 sol_start.value((data[0] >> 2) & 0x01)
-                active = data[0] & 0x07
-                led.value(1 if active else 0)
                 print(f"ID=0x{can_id:03X} L={data[0]&1} R={(data[0]>>1)&1} S={(data[0]>>2)&1}")
             else:
                 print(f"ID=0x{can_id:03X} data={[hex(b) for b in data]} (ignored)")
