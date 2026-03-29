@@ -7,8 +7,11 @@ carControl for the pinball car controller.
 Protocol (TCP, port 8042):
   On connect, device sends: [uint16 width][uint16 height] (4 bytes, big-endian)
   Device → Host: raw NV12 frames (width * height * 3 // 2 bytes each, continuous)
-  Host → Device: [1 byte control bitfield] (B=0x01, F=0x02, J=0x08)
+  Host → Device:
+    Control: [1 byte bitfield] (B=0x01, F=0x02, J=0x08, road_cam=0x10)
+    Command: [0xFF][2 bytes big-endian length][JSON bytes]
 """
+import json
 import time
 import socket
 import struct
@@ -16,28 +19,43 @@ import threading
 import numpy as np
 import cereal.messaging as messaging
 from msgq.visionipc import VisionIpcClient, VisionStreamType
+from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, Ratekeeper
 
 PORT = 8042
 
 
+def subsample_nv12(buf, W, H):
+  half_w, half_h = W // 2, H // 2
+  y_full = np.array(buf.data[:buf.uv_offset], dtype=np.uint8).reshape(-1, buf.stride)[:H, :W]
+  uv_full = np.array(buf.data[buf.uv_offset:buf.uv_offset + buf.stride * (H // 2)], dtype=np.uint8) \
+                .reshape(-1, buf.stride)[:H // 2, :W]
+  y_half = y_full[::2, ::2]
+  uv_half = uv_full[::2].reshape(-1, W // 2, 2)[:, ::2, :].reshape(H // 4, half_w)
+  return np.ascontiguousarray(np.vstack([y_half, uv_half]))
+
+
 def main():
   config_realtime_process(7, 54)
 
+  params = Params()
   pm = messaging.PubMaster(['carControl', 'controlsState'])
 
-  # connect to camerad
+  # connect to both cameras
   while True:
     available = VisionIpcClient.available_streams("camerad", block=False)
     if available:
       break
     time.sleep(0.1)
 
-  vipc = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_WIDE_ROAD, True)
-  while not vipc.connect(False):
+  vipc_wide = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_WIDE_ROAD, True)
+  vipc_road = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_ROAD, True)
+  while not vipc_wide.connect(False):
+    time.sleep(0.1)
+  while not vipc_road.connect(False):
     time.sleep(0.1)
 
-  W, H = vipc.width, vipc.height
+  W, H = vipc_wide.width, vipc_wide.height
   half_w, half_h = W // 2, H // 2
   print(f"framestreamer: camerad {W}x{H}, streaming {half_w}x{half_h} NV12")
 
@@ -63,26 +81,53 @@ def main():
 
     def recv_loop():
       nonlocal running, ctrl_state
+      buf = b''
       while running:
         try:
-          data = conn.recv(1024)
+          data = conn.recv(4096)
           if not data:
             running = False
             break
-          with ctrl_lock:
-            ctrl_state = data[-1]
+          buf += data
+          while buf:
+            if buf[0] == 0xFF:
+              # command: [0xFF][2 bytes length][JSON]
+              if len(buf) < 3:
+                break
+              json_len = struct.unpack('>H', buf[1:3])[0]
+              if len(buf) < 3 + json_len:
+                break
+              try:
+                payload = json.loads(buf[3:3 + json_len])
+                params.put("PinballOcrRegions", payload)
+                print(f"framestreamer: saved PinballOcrRegions: {payload}")
+              except Exception as e:
+                print(f"framestreamer: bad command: {e}")
+              buf = buf[3 + json_len:]
+            else:
+              # control byte — scan forward to find the last one before any command
+              end = len(buf)
+              for i in range(len(buf)):
+                if buf[i] == 0xFF:
+                  end = i
+                  break
+              if end > 0:
+                with ctrl_lock:
+                  ctrl_state = buf[end - 1]
+                buf = buf[end:]
+              else:
+                break
         except Exception:
           running = False
           break
 
     threading.Thread(target=recv_loop, daemon=True).start()
 
-    # single-threaded main loop: publish controls at 100Hz, send frames when ready
     while running:
-      # publish controls every tick (100Hz) — must stay in the RT main thread
       with ctrl_lock:
         state = ctrl_state
 
+      # publish controls at 100Hz
       msg = messaging.new_message('carControl', valid=True)
       msg.carControl.enabled = True
       msg.carControl.actuators.gas = 1.0 if (state & 0x02) else 0.0    # F = left flipper
@@ -94,15 +139,11 @@ def main():
       cs_msg.controlsState.lateralControlState.init('debugState')
       pm.send('controlsState', cs_msg)
 
-      # grab a frame if available (non-blocking)
-      buf = vipc.recv(timeout_ms=0)
-      if buf is not None:
-        y_full = np.array(buf.data[:buf.uv_offset], dtype=np.uint8).reshape(-1, buf.stride)[:H, :W]
-        uv_full = np.array(buf.data[buf.uv_offset:buf.uv_offset + buf.stride * (H // 2)], dtype=np.uint8) \
-                      .reshape(-1, buf.stride)[:H // 2, :W]
-        y_half = y_full[::2, ::2]
-        uv_half = uv_full[::2].reshape(-1, W // 2, 2)[:, ::2, :].reshape(H // 4, half_w)
-        nv12 = np.ascontiguousarray(np.vstack([y_half, uv_half]))
+      # grab a frame from the selected camera (non-blocking)
+      vipc = vipc_road if (state & 0x10) else vipc_wide
+      frame = vipc.recv(timeout_ms=0)
+      if frame is not None:
+        nv12 = subsample_nv12(frame, W, H)
         try:
           conn.sendall(nv12.tobytes())
         except Exception:
