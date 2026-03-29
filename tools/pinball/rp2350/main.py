@@ -38,7 +38,7 @@ HEARTBEAT_MS = 1000
 PWM_FREQ = 100            # 100 Hz
 PULL_IN_MS = 60           # full power pull-in duration
 PULL_IN_DUTY = 65535      # 100% duty cycle (16-bit) for initial actuation
-HOLD_DUTY = 45875         # ~70% duty cycle
+HOLD_DUTY = 65535         # 100% duty cycle
 
 # -- XL2515 registers (MCP2515-compatible) --
 CANSTAT  = 0x0E
