@@ -76,12 +76,15 @@ class BigInputDialog(BigDialogBase):
                default_text: str = "",
                minimum_length: int = 1,
                confirm_callback: Callable[[str], None] | None = None,
-               auto_return_to_letters: str = ""):
+               auto_return_to_letters: str = "",
+               start_on_numbers: bool = False):
     super().__init__()
     self._hint_label = UnifiedLabel(hint, font_size=35, text_color=rl.Color(255, 255, 255, int(255 * 0.35)),
                                     font_weight=FontWeight.MEDIUM)
     self._keyboard = MiciKeyboard(auto_return_to_letters=auto_return_to_letters)
     self._keyboard.set_text(default_text)
+    if start_on_numbers:
+      self._keyboard.set_number_layer()
     self._keyboard.set_enabled(lambda: self.enabled and not self.is_dismissing)  # for nav stack + NavWidget
     self._minimum_length = minimum_length
 

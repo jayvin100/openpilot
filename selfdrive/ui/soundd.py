@@ -85,7 +85,7 @@ class Soundd:
     # Real-time synth for speaker tuning UI
     self.synth_phase = 0.0
     self.synth_freq_hz = 440.0
-    self.synth_gain = 0.25
+    self.synth_gain = 1.0
     self.synth_volume = 1.0
     self.synth_waveform = SYNTH_WAVE_SINE
     self.synth_play = False
@@ -129,7 +129,7 @@ class Soundd:
     return self.get_synth_data(frames)
 
   def get_synth_data(self, frames):
-    target_gain = self.synth_gain if self.synth_play else 0.0
+    target_gain = 1.0 if self.synth_play else 0.0
     if (target_gain <= 0.0 or self.synth_volume <= 0.0) and self.synth_envelope <= 1e-4:
       self.synth_envelope = 0.0
       return np.zeros(frames, dtype=np.float32)
@@ -174,7 +174,7 @@ class Soundd:
 
     self.synth_state_mtime = mtime
     self.synth_freq_hz = float(np.clip(float(state.get("frequency_hz", self.synth_freq_hz)), 20.0, 12000.0))
-    self.synth_gain = float(np.clip(float(state.get("gain", self.synth_gain)), 0.0, 1.0))
+    self.synth_gain = 1.0
     self.synth_volume = float(np.clip(float(state.get("volume", self.synth_volume)), 0.0, 1.0))
     self.synth_waveform = int(np.clip(int(state.get("waveform", self.synth_waveform)), SYNTH_WAVE_SINE, SYNTH_WAVE_TRIANGLE))
     self.synth_play = bool(state.get("play", False))

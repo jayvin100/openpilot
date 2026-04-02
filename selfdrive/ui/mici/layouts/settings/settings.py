@@ -41,7 +41,7 @@ class SettingsLayout(NavScroller):
     firehose_btn.set_click_callback(lambda: gui_app.push_widget(firehose_panel))
 
     sound_playground_panel = SoundPlaygroundLayout()
-    sound_playground_btn = SettingsBigButton("sound\nplayground", "", gui_app.texture("icons_mici/microphone.png", 64, 64))
+    sound_playground_btn = SettingsBigButton("noise\nmaker", "", gui_app.texture("icons_mici/microphone.png", 64, 64))
     sound_playground_btn.set_click_callback(lambda: gui_app.push_widget(sound_playground_panel))
 
     self._scroller.add_widgets([

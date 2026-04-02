@@ -241,6 +241,17 @@ class MiciKeyboard(Widget):
   def text(self) -> str:
     return self._text
 
+  def set_number_layer(self):
+    # If called before first render/layout, avoid _set_keys interpolation logic.
+    # Running _set_keys pre-layout can freeze original key positions at (0,0),
+    # which breaks hit testing (e.g., always selecting the first key).
+    if not self._initialized:
+      self._current_keys = self._special_keys
+    else:
+      self._set_keys(self._special_keys)
+    self._caps_state = CapsState.LOWER
+    self._caps_key.set_icon("icons_mici/settings/keyboard/caps_lower.png", icon_size=(38, 33))
+
   def _handle_mouse_event(self, mouse_event: MouseEvent) -> None:
     keyboard_pos_y = self._rect.y + self._rect.height - self._txt_bg.height
     if mouse_event.left_pressed:

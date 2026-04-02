@@ -9,18 +9,21 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.label import gui_label
 from openpilot.system.ui.widgets.nav_widget import NavWidget
+from openpilot.selfdrive.ui.mici.widgets.dialog import BigInputDialog
 
 STATE_PATH = "/tmp/sound_playground_state.json"
+CONTENT_SIDE_PADDING = 8.0
 
 FREQ_MIN = 20.0
 FREQ_MAX = 12000.0
-GAIN_MIN = 0.0
-GAIN_MAX = 1.0
 VOLUME_MIN = 0.0
 VOLUME_MAX = 1.0
+VOLUME_STEP = 0.05
 
 WAVEFORMS = ["sine", "square", "saw", "triangle"]
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+SLIDER_GRADIENT_LEFT = rl.Color(30, 53, 255, 255)
+SLIDER_GRADIENT_RIGHT = rl.Color(23, 193, 255, 255)
 
 
 def _safe_float(value, default: float) -> float:
@@ -46,6 +49,8 @@ def _safe_int(value, default: int) -> int:
 
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:
+  if not math.isfinite(value):
+    return min_value
   return max(min_value, min(max_value, value))
 
 
@@ -144,7 +149,9 @@ class Slider(Widget):
 
     normalized = self._to_normalized(self._value)
     fill_rect = rl.Rectangle(track_rect.x, track_rect.y, track_rect.width * normalized, track_rect.height)
-    rl.draw_rectangle_rounded(fill_rect, 1.0, 8, rl.Color(62, 158, 246, 255))
+    if fill_rect.width > 0:
+      rl.draw_rectangle_gradient_h(int(fill_rect.x), int(fill_rect.y), int(fill_rect.width), int(fill_rect.height),
+                                   SLIDER_GRADIENT_LEFT, SLIDER_GRADIENT_RIGHT)
 
     knob_x = track_rect.x + track_rect.width * normalized
     knob_y = track_rect.y + track_rect.height / 2
@@ -169,9 +176,9 @@ class CompactButton(Widget):
       self._click_callback()
 
   def _render(self, _):
-    bg = rl.Color(74, 74, 74, 255) if self.is_pressed else rl.Color(57, 57, 57, 255)
-    rl.draw_rectangle_rounded(self._rect, 0.22, 10, bg)
-    rl.draw_rectangle_rounded_lines_ex(self._rect, 0.22, 10, 2, rl.Color(95, 95, 95, 255))
+    texture = gui_app.texture("icons_mici/buttons/button_rectangle_pressed.png" if self.is_pressed else "icons_mici/buttons/button_rectangle.png",
+                              int(self._rect.width), int(self._rect.height), keep_aspect_ratio=False)
+    rl.draw_texture_ex(texture, rl.Vector2(self._rect.x, self._rect.y), 0.0, 1.0, rl.WHITE)
 
     title_font = max(9, int(self._rect.height * 0.24))
     value_font = max(10, int(self._rect.height * 0.32))
@@ -189,21 +196,42 @@ class CompactButton(Widget):
 
 
 class HoldButton(Widget):
-  def _render(self, _):
-    bg = rl.Color(62, 158, 246, 255) if self.is_pressed else rl.Color(57, 57, 57, 255)
-    border = rl.Color(120, 190, 255, 255) if self.is_pressed else rl.Color(95, 95, 95, 255)
-    rl.draw_rectangle_rounded(self._rect, 0.25, 12, bg)
-    rl.draw_rectangle_rounded_lines_ex(self._rect, 0.25, 12, 2, border)
+  def __init__(self, toggle_callback=None):
+    super().__init__()
+    self._playing = False
+    self._toggle_callback = toggle_callback
 
-    # Centered play icon
+  def set_playing(self, playing: bool):
+    self._playing = playing
+
+  def _handle_mouse_release(self, mouse_pos):
+    super()._handle_mouse_release(mouse_pos)
+    self._playing = not self._playing
+    if self._toggle_callback is not None:
+      self._toggle_callback(self._playing)
+
+  def _render(self, _):
+    texture = gui_app.texture("icons_mici/buttons/button_rectangle_pressed.png" if self._playing else "icons_mici/buttons/button_rectangle.png",
+                              int(self._rect.width), int(self._rect.height), keep_aspect_ratio=False)
+    tint = rl.Color(190, 220, 255, 255) if self._playing else rl.WHITE
+    rl.draw_texture_ex(texture, rl.Vector2(self._rect.x, self._rect.y), 0.0, 1.0, tint)
+
     icon_color = rl.Color(250, 250, 250, 255)
-    cx = self._rect.x + self._rect.width / 2
-    cy = self._rect.y + self._rect.height / 2
-    size = min(self._rect.width, self._rect.height) * 0.28
-    p1 = rl.Vector2(cx - size * 0.45, cy - size * 0.55)
-    p2 = rl.Vector2(cx - size * 0.45, cy + size * 0.55)
-    p3 = rl.Vector2(cx + size * 0.60, cy)
-    rl.draw_triangle(p1, p2, p3, icon_color)
+    if self._playing:
+      # Stop icon
+      size = min(self._rect.width, self._rect.height) * 0.32
+      rx = self._rect.x + (self._rect.width - size) / 2
+      ry = self._rect.y + (self._rect.height - size) / 2
+      rl.draw_rectangle_rounded(rl.Rectangle(rx, ry, size, size), 0.1, 4, icon_color)
+    else:
+      # Play icon
+      cx = self._rect.x + self._rect.width / 2
+      cy = self._rect.y + self._rect.height / 2
+      size = min(self._rect.width, self._rect.height) * 0.28
+      p1 = rl.Vector2(cx - size * 0.45, cy - size * 0.55)
+      p2 = rl.Vector2(cx - size * 0.45, cy + size * 0.55)
+      p3 = rl.Vector2(cx + size * 0.60, cy)
+      rl.draw_triangle(p1, p2, p3, icon_color)
 
 
 class SoundPlaygroundLayout(NavWidget):
@@ -211,20 +239,25 @@ class SoundPlaygroundLayout(NavWidget):
     super().__init__()
     state = self._load_state()
     self._freq_hz = _clamp(_safe_float(state.get("frequency_hz"), 440.0), FREQ_MIN, FREQ_MAX)
-    self._gain = _clamp(_safe_float(state.get("gain"), 0.25), GAIN_MIN, GAIN_MAX)
     self._volume = _clamp(_safe_float(state.get("volume"), 1.0), VOLUME_MIN, VOLUME_MAX)
     self._waveform_idx = int(max(0, min(len(WAVEFORMS) - 1, _safe_int(state.get("waveform"), 0))))
     self._is_playing = False
     self._was_driver_view_enabled = False
 
     self._freq_slider = self._child(Slider("frequency", FREQ_MIN, FREQ_MAX, self._freq_hz, self._on_freq_changed, log_scale=True))
-    self._gain_slider = self._child(Slider("gain", GAIN_MIN, GAIN_MAX, self._gain, self._on_gain_changed))
     self._volume_slider = self._child(Slider("volume", VOLUME_MIN, VOLUME_MAX, self._volume, self._on_volume_changed))
 
     self._waveform_btn = self._child(CompactButton("", WAVEFORMS[self._waveform_idx], self._cycle_waveform))
+    self._fine_freq_btn = self._child(CompactButton("", "Hz", self._show_frequency_input))
 
-    self._play_btn = self._child(HoldButton())
-    self._play_btn.set_touch_valid_callback(lambda: not self.is_dismissing)
+    self._play_btn = self._child(HoldButton(toggle_callback=self._put_play))
+    self._freq_input_dialog: BigInputDialog | None = None
+    self._controls_enabled = lambda: (not self.is_dismissing) and (self._freq_input_dialog is None or not gui_app.widget_in_stack(self._freq_input_dialog))
+    self._freq_slider.set_touch_valid_callback(self._controls_enabled)
+    self._volume_slider.set_touch_valid_callback(self._controls_enabled)
+    self._waveform_btn.set_touch_valid_callback(self._controls_enabled)
+    self._fine_freq_btn.set_touch_valid_callback(self._controls_enabled)
+    self._play_btn.set_touch_valid_callback(self._controls_enabled)
 
   def _load_state(self) -> dict:
     try:
@@ -237,7 +270,7 @@ class SoundPlaygroundLayout(NavWidget):
   def _write_state(self):
     state = {
       "frequency_hz": float(self._freq_hz),
-      "gain": float(self._gain),
+      "gain": 1.0,
       "volume": float(self._volume),
       "waveform": int(self._waveform_idx),
       "play": bool(self._is_playing),
@@ -254,24 +287,51 @@ class SoundPlaygroundLayout(NavWidget):
     if self._is_playing == playing:
       return
     self._is_playing = playing
+    self._play_btn.set_playing(playing)
     self._write_state()
 
   def _on_freq_changed(self, value: float):
     self._freq_hz = _clamp(value, FREQ_MIN, FREQ_MAX)
     self._write_state()
 
-  def _on_gain_changed(self, value: float):
-    self._gain = _clamp(value, GAIN_MIN, GAIN_MAX)
-    self._write_state()
-
   def _on_volume_changed(self, value: float):
-    self._volume = _clamp(value, VOLUME_MIN, VOLUME_MAX)
+    snapped = round(value / VOLUME_STEP) * VOLUME_STEP
+    self._volume = _clamp(snapped, VOLUME_MIN, VOLUME_MAX)
+    self._volume_slider.set_value(self._volume)
     self._write_state()
 
   def _cycle_waveform(self):
     self._waveform_idx = (self._waveform_idx + 1) % len(WAVEFORMS)
     self._waveform_btn.set_value(WAVEFORMS[self._waveform_idx])
     self._write_state()
+
+  def _show_frequency_input(self):
+    if self._freq_input_dialog is not None and gui_app.widget_in_stack(self._freq_input_dialog):
+      return
+
+    def apply_frequency(text: str):
+      self._freq_input_dialog = None
+      cleaned = text.strip()
+      if not cleaned:
+        return
+
+      try:
+        parsed = float(cleaned)
+      except ValueError:
+        return
+      if not math.isfinite(parsed):
+        return
+
+      self._freq_hz = _clamp(parsed, FREQ_MIN, FREQ_MAX)
+      self._freq_slider.set_value(self._freq_hz)
+      self._write_state()
+
+    default_text = f"{self._freq_hz:.1f}".rstrip("0").rstrip(".")
+    dlg = BigInputDialog("enter exact frequency (Hz)...", default_text=default_text,
+                         minimum_length=1, confirm_callback=apply_frequency, start_on_numbers=True)
+    dlg.set_back_callback(lambda: setattr(self, "_freq_input_dialog", None))
+    self._freq_input_dialog = dlg
+    gui_app.push_widget(dlg)
 
   def _note_info(self) -> tuple[str, float]:
     midi = 69.0 + 12.0 * math.log2(max(self._freq_hz, 1e-6) / 440.0)
@@ -295,28 +355,22 @@ class SoundPlaygroundLayout(NavWidget):
     device.set_override_interactive_timeout(None)
     ui_state.params.put_bool("IsDriverViewEnabled", self._was_driver_view_enabled)
 
-  def _update_state(self):
-    super()._update_state()
-    self._put_play(self._play_btn.is_pressed and self._play_btn.enabled)
-
   def _render(self, rect: rl.Rectangle):
-    viewport = rect
-    gap = 8.0
-    button_size = 120.0
-    right = rl.Rectangle(viewport.x + viewport.width - button_size, viewport.y, button_size, viewport.height)
-    left = rl.Rectangle(viewport.x, viewport.y, max(0.0, viewport.width - button_size - gap), viewport.height)
+    viewport = rl.Rectangle(rect.x + CONTENT_SIDE_PADDING, rect.y, max(0.0, rect.width - CONTENT_SIDE_PADDING * 2), rect.height)
+    bottom_h = min(80.0, viewport.height)
+    top_h = max(0.0, viewport.height - bottom_h)
+    top = rl.Rectangle(viewport.x, viewport.y, viewport.width, top_h)
+    bottom = rl.Rectangle(viewport.x, viewport.y + top_h, viewport.width, bottom_h)
 
     info_h = 20.0
-    top_margin = 2.0
-    row_gap = 6.0
-    usable_h = max(90.0, left.height - info_h - top_margin - row_gap * 2)
-    slider_h = usable_h / 3.0
-    row_y = left.y + top_margin
-    self._freq_slider.render(rl.Rectangle(left.x, row_y, left.width, slider_h))
+    top_margin = 0.0
+    row_gap = 0.0
+    usable_h = max(40.0, top.height - info_h - top_margin * 2 - row_gap)
+    slider_h = usable_h / 2.0
+    row_y = top.y + top_margin
+    self._freq_slider.render(rl.Rectangle(top.x, row_y, top.width, slider_h))
     row_y += slider_h + row_gap
-    self._gain_slider.render(rl.Rectangle(left.x, row_y, left.width, slider_h))
-    row_y += slider_h + row_gap
-    self._volume_slider.render(rl.Rectangle(left.x, row_y, left.width, slider_h))
+    self._volume_slider.render(rl.Rectangle(top.x, row_y, top.width, slider_h))
 
     note, cents = self._note_info()
     cents_text = f"{cents:+.1f} cents"
@@ -324,13 +378,20 @@ class SoundPlaygroundLayout(NavWidget):
 
     info_color = rl.Color(200, 200, 200, 255)
     info_text = f"piano: {note} ({cents_text})  period: {period_ms:.2f} ms"
-    info_font = _fit_font_size(info_text, left.width - 6, 11, min_size=8, weight=FontWeight.NORMAL)
-    gui_label(rl.Rectangle(left.x, left.y + left.height - info_h, left.width, info_h),
+    title_h = max(12, int(slider_h * 0.42))
+    title_font = max(10, int(title_h * 0.78))
+    info_font = _fit_font_size(info_text, top.width - 6, title_font, min_size=8, weight=FontWeight.NORMAL)
+    gui_label(rl.Rectangle(top.x, top.y + top.height - info_h - 4, top.width, info_h),
               info_text, font_size=info_font, color=info_color,
               alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT)
 
-    # Stack controls on the right edge with 1/3 + 2/3 height split
-    wave_h = right.height / 3.0
-    play_h = right.height - wave_h
-    self._waveform_btn.render(rl.Rectangle(right.x, right.y, button_size, wave_h))
-    self._play_btn.render(rl.Rectangle(right.x, right.y + wave_h, button_size, play_h))
+    # Bottom row: play | waveform | fine frequency
+    button_gap = 10.0
+    play_w = bottom.width * 0.5
+    side_w = max(0.0, (bottom.width - play_w - button_gap * 2.0) / 2.0)
+    play_rect = rl.Rectangle(bottom.x, bottom.y, play_w, bottom.height)
+    wave_rect = rl.Rectangle(bottom.x + play_w + button_gap, bottom.y, side_w, bottom.height)
+    fine_rect = rl.Rectangle(wave_rect.x + side_w + button_gap, bottom.y, side_w, bottom.height)
+    self._play_btn.render(play_rect)
+    self._waveform_btn.render(wave_rect)
+    self._fine_freq_btn.render(fine_rect)
