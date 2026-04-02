@@ -38,6 +38,8 @@ SYNTH_WAVE_SQUARE = 1
 SYNTH_WAVE_SAW = 2
 SYNTH_WAVE_TRIANGLE = 3
 SYNTH_BASS_MIN_AUDIBLE_HZ = 1000.0
+SYNTH_BASS_LPF_MIN_HZ = 900.0
+SYNTH_BASS_LPF_MAX_HZ = 2600.0
 
 SYNTH_STATE_PATH = "/tmp/sound_playground_state.json"
 
@@ -93,6 +95,7 @@ class Soundd:
     self.synth_bass_enabled = False
     self.synth_envelope = 0.0
     self.synth_state_mtime: float | None = None
+    self.synth_bass_lpf_state = 0.0
 
   def load_sounds(self):
     self.loaded_sounds: dict[int, np.ndarray] = {}
@@ -158,7 +161,20 @@ class Soundd:
         harmonic_sum += harmonic_wave * weight
 
       if harmonic_weights:
-        wave = harmonic_sum / float(sum(harmonic_weights))
+        harmonic_mix = harmonic_sum / float(sum(harmonic_weights))
+
+        # Smooth the harmonic stack so the virtual-bass cue is less sharp/bright.
+        # Use a one-pole low-pass with cutoff tied to harmonic start, then clamped.
+        cutoff_hz = float(np.clip(start_harmonic * self.synth_freq_hz * 0.9, SYNTH_BASS_LPF_MIN_HZ, SYNTH_BASS_LPF_MAX_HZ))
+        alpha = 1.0 - math.exp(-2.0 * math.pi * cutoff_hz / SAMPLE_RATE)
+        y = np.empty(frames, dtype=np.float32)
+        state = self.synth_bass_lpf_state
+        for i in range(frames):
+          state += alpha * (harmonic_mix[i] - state)
+          y[i] = state
+        self.synth_bass_lpf_state = float(state)
+
+        wave = y
 
     ramp = np.linspace(self.synth_envelope, target_gain, frames, dtype=np.float32)
     self.synth_envelope = float(target_gain)
