@@ -59,7 +59,8 @@ for cam in [_ar_ox_fisheye, _os_fisheye]:
   w, h = cam.width, cam.height
   pkl = File(f"models/modeld_{w}x{h}_tinygrad.pkl").abspath
   total_onnx_size = sum(os.path.getsize(File(f"models/{m}.onnx").abspath) for m in ['driving_vision', 'driving_on_policy', 'driving_off_policy'])
-  chunk_paths = get_chunk_paths(pkl, estimate_pickle_max_size(total_onnx_size))
+  # combined JIT includes warp kernels + queue ops on top of model weights, so needs more headroom
+  chunk_paths = get_chunk_paths(pkl, estimate_pickle_max_size(total_onnx_size) * 2)
   modeld_chunk_targets.append((pkl, chunk_paths))
 
 def do_modeld_chunk(target, source, env):
