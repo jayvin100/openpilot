@@ -37,9 +37,16 @@ SYNTH_WAVE_SINE = 0
 SYNTH_WAVE_SQUARE = 1
 SYNTH_WAVE_SAW = 2
 SYNTH_WAVE_TRIANGLE = 3
-SYNTH_BASS_MIN_AUDIBLE_HZ = 1000.0
-SYNTH_BASS_LPF_MIN_HZ = 900.0
-SYNTH_BASS_LPF_MAX_HZ = 2600.0
+
+# "bankstown" psychoacoustic bass defaults
+BASS_AMT = 1.50
+BASS_FLOOR_HZ = 33.0
+BASS_CEIL_HZ = 200.0
+BASS_FINAL_HP_HZ = 85.0
+BASS_SAT_SECOND = 1.35
+BASS_SAT_THIRD = 2.35
+BASS_BLEND = 0.37
+BASS_Q = 1.0 / math.sqrt(2.0)  # Butterworth
 
 SYNTH_STATE_PATH = "/tmp/sound_playground_state.json"
 
@@ -95,7 +102,13 @@ class Soundd:
     self.synth_bass_enabled = False
     self.synth_envelope = 0.0
     self.synth_state_mtime: float | None = None
-    self.synth_bass_lpf_state = 0.0
+    self._init_bass_chain()
+
+  def _init_bass_chain(self):
+    self.bass_hp = Biquad.highpass(BASS_FLOOR_HZ, BASS_Q, SAMPLE_RATE)
+    self.bass_lp = Biquad.lowpass(BASS_CEIL_HZ, BASS_Q, SAMPLE_RATE)
+    self.bass_clamp_lp = Biquad.lowpass(3.0 * BASS_CEIL_HZ, BASS_Q, SAMPLE_RATE)
+    self.bass_final_hp = Biquad.highpass(BASS_FINAL_HP_HZ, BASS_Q, SAMPLE_RATE)
 
   def load_sounds(self):
     self.loaded_sounds: dict[int, np.ndarray] = {}
@@ -145,36 +158,25 @@ class Soundd:
 
     wave = self._base_wave(phases, self.synth_waveform)
 
-    if self.synth_bass_enabled and self.synth_freq_hz < SYNTH_BASS_MIN_AUDIBLE_HZ:
-      # Psychoacoustic bass: remove low fundamental and synthesize only higher harmonics.
-      start_harmonic = int(max(2, math.ceil(SYNTH_BASS_MIN_AUDIBLE_HZ / max(self.synth_freq_hz, 1e-6))))
-      harmonic_weights: list[float] = []
-      harmonic_sum = np.zeros(frames, dtype=np.float32)
-      for harmonic in range(start_harmonic, start_harmonic + 4):
-        harmonic_hz = harmonic * self.synth_freq_hz
-        if harmonic_hz > 8000.0:
-          break
-        h_phase = phases * harmonic
-        harmonic_wave = self._base_wave(h_phase, SYNTH_WAVE_SINE)
-        weight = 1.0 / float(harmonic - start_harmonic + 1)
-        harmonic_weights.append(weight)
-        harmonic_sum += harmonic_wave * weight
+    if self.synth_bass_enabled:
+      # bankstown chain:
+      # sample -> bandpass(floor/ceil) -> asymmetric saturator -> final HP -> clamp LP -> add dry
+      out = np.empty(frames, dtype=np.float32)
+      sat_norm = math.pi / (0.5 + math.e)
+      for i in range(frames):
+        sample = float(np.clip(wave[i], -1.0, 1.0))
+        processed = self.bass_lp.process(self.bass_hp.process(sample))
 
-      if harmonic_weights:
-        harmonic_mix = harmonic_sum / float(sum(harmonic_weights))
+        # Saturator_process with 3rd/2nd harmonic blend
+        sat = BASS_BLEND * sat_norm * math.tanh(processed * BASS_SAT_THIRD)
+        if processed <= 0.0:
+          sat += (1.0 - BASS_BLEND) * sat_norm * math.tanh(processed * BASS_SAT_SECOND)
+        sat = float(np.clip(sat, -1.0, 1.0))
 
-        # Smooth the harmonic stack so the virtual-bass cue is less sharp/bright.
-        # Use a one-pole low-pass with cutoff tied to harmonic start, then clamped.
-        cutoff_hz = float(np.clip(start_harmonic * self.synth_freq_hz * 0.9, SYNTH_BASS_LPF_MIN_HZ, SYNTH_BASS_LPF_MAX_HZ))
-        alpha = 1.0 - math.exp(-2.0 * math.pi * cutoff_hz / SAMPLE_RATE)
-        y = np.empty(frames, dtype=np.float32)
-        state = self.synth_bass_lpf_state
-        for i in range(frames):
-          state += alpha * (harmonic_mix[i] - state)
-          y[i] = state
-        self.synth_bass_lpf_state = float(state)
-
-        wave = y
+        processed = sat * BASS_AMT
+        wet = self.bass_clamp_lp.process(self.bass_final_hp.process(processed))
+        out[i] = float(np.clip(wet + sample, -1.0, 1.0))
+      wave = out
 
     ramp = np.linspace(self.synth_envelope, target_gain, frames, dtype=np.float32)
     self.synth_envelope = float(target_gain)
@@ -275,6 +277,57 @@ class Soundd:
         rk.keep_time()
 
         assert stream.active
+
+
+class Biquad:
+  def __init__(self, b0, b1, b2, a1, a2):
+    self.b0 = float(b0)
+    self.b1 = float(b1)
+    self.b2 = float(b2)
+    self.a1 = float(a1)
+    self.a2 = float(a2)
+    self.x1 = 0.0
+    self.x2 = 0.0
+    self.y1 = 0.0
+    self.y2 = 0.0
+
+  @staticmethod
+  def lowpass(frequency_hz: float, q_factor: float, sample_rate: float):
+    x = (frequency_hz * 2.0 * math.pi) / sample_rate
+    sin_x = math.sin(x)
+    y = sin_x / (q_factor * 2.0)
+    cos_x = math.cos(x)
+
+    a0 = y + 1.0
+    a1 = -2.0 * cos_x
+    a2 = 1.0 - y
+    b0 = (1.0 - cos_x) / 2.0
+    b1 = 1.0 - cos_x
+    b2 = (1.0 - cos_x) / 2.0
+    return Biquad(b0 / a0, b1 / a0, b2 / a0, -a1 / a0, -a2 / a0)
+
+  @staticmethod
+  def highpass(frequency_hz: float, q_factor: float, sample_rate: float):
+    x = (frequency_hz * 2.0 * math.pi) / sample_rate
+    sin_x = math.sin(x)
+    y = sin_x / (q_factor * 2.0)
+    cos_x = math.cos(x)
+
+    a0 = y + 1.0
+    a1 = -2.0 * cos_x
+    a2 = 1.0 - y
+    b0 = (1.0 + cos_x) / 2.0
+    b1 = -(1.0 + cos_x)
+    b2 = (1.0 + cos_x) / 2.0
+    return Biquad(b0 / a0, b1 / a0, b2 / a0, -a1 / a0, -a2 / a0)
+
+  def process(self, sample: float) -> float:
+    out = sample * self.b0 + self.x1 * self.b1 + self.x2 * self.b2 + self.y1 * self.a1 + self.y2 * self.a2
+    self.y2 = self.y1
+    self.y1 = out
+    self.x2 = self.x1
+    self.x1 = sample
+    return out
 
 
 def main():

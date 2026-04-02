@@ -24,7 +24,13 @@ WAVEFORMS = ["sine", "square", "saw", "triangle"]
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 SLIDER_GRADIENT_LEFT = rl.Color(30, 53, 255, 255)
 SLIDER_GRADIENT_RIGHT = rl.Color(23, 193, 255, 255)
-BASS_MIN_AUDIBLE_HZ = 1000.0
+
+# Keep UI readout aligned with soundd bankstown defaults.
+BASS_FLOOR_HZ = 33
+BASS_CEIL_HZ = 200
+BASS_FINAL_HP_HZ = 85
+BASS_AMT = 1.50
+BASS_BLEND = 0.37
 
 
 def _safe_float(value, default: float) -> float:
@@ -404,17 +410,7 @@ class SoundPlaygroundLayout(NavWidget):
   def _harmonic_info(self) -> str:
     if not self._bass_enabled:
       return ""
-
-    start = int(max(2, math.ceil(BASS_MIN_AUDIBLE_HZ / max(self._freq_hz, 1e-6))))
-    harmonics = []
-    for h in range(start, start + 4):
-      hz = h * self._freq_hz
-      if hz > 8000.0:
-        break
-      harmonics.append(f"{h}x({hz:.0f}Hz)")
-    if not harmonics:
-      return "harmonics: none"
-    return f"harmonics: {' '.join(harmonics)}"
+    return f"bankstown: bp {BASS_FLOOR_HZ}-{BASS_CEIL_HZ}Hz, hp {BASS_FINAL_HP_HZ}Hz, amt {BASS_AMT:.2f}, blend {BASS_BLEND:.2f}"
 
   def show_event(self):
     super().show_event()
