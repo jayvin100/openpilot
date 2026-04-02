@@ -50,7 +50,7 @@ modeld_targets = []
 for cam in [_ar_ox_fisheye, _os_fisheye]:
   w, h = cam.width, cam.height
   modeld_targets.append(File(f"models/modeld_{w}x{h}_tinygrad.pkl").abspath)
-compile_modeld_cmd = f'{tg_flags} {image_flag} python3 -c "from openpilot.selfdrive.modeld.compile_modeld import compile_modeld, CAMERA_CONFIGS; [compile_modeld(w, h) for w, h in CAMERA_CONFIGS]"'
+compile_modeld_cmd = f'{tg_flags} python3 -c "from openpilot.selfdrive.modeld.compile_modeld import compile_modeld, CAMERA_CONFIGS; [compile_modeld(w, h) for w, h in CAMERA_CONFIGS]"'
 modeld_compile_node = lenv.Command(modeld_targets, modeld_onnx_deps + modeld_meta_deps + tinygrad_files + compile_modeld_script + [chunker_file], compile_modeld_cmd)
 
 # Chunk modeld pickles
