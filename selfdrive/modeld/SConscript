@@ -30,14 +30,46 @@ for model_name in ['driving_vision', 'driving_off_policy', 'driving_on_policy', 
 image_flag = {
      'larch64': 'IMAGE=2',
 }.get(arch, 'IMAGE=0')
-script_files = [File(Dir("#selfdrive/modeld").File("compile_warp.py").abspath)]
-compile_warp_cmd = f'{tg_flags} python3 {Dir("#selfdrive/modeld").abspath}/compile_warp.py '
+
 from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
-warp_targets = []
+
+# DM warp (compile_modeld.py handles dm warp separately)
+dm_warp_script = [File(Dir("#selfdrive/modeld").File("compile_modeld.py").abspath)]
+dm_warp_targets = []
 for cam in [_ar_ox_fisheye, _os_fisheye]:
   w, h = cam.width, cam.height
-  warp_targets += [File(f"models/warp_{w}x{h}_tinygrad.pkl").abspath, File(f"models/dm_warp_{w}x{h}_tinygrad.pkl").abspath]
-lenv.Command(warp_targets, tinygrad_files + script_files, compile_warp_cmd)
+  dm_warp_targets.append(File(f"models/dm_warp_{w}x{h}_tinygrad.pkl").abspath)
+dm_warp_cmd = f'{tg_flags} python3 -c "from openpilot.selfdrive.modeld.compile_modeld import compile_dm_warp, CAMERA_CONFIGS; [compile_dm_warp(w, h) for w, h in CAMERA_CONFIGS]"'
+lenv.Command(dm_warp_targets, tinygrad_files + dm_warp_script, dm_warp_cmd)
+
+# Combined modeld JIT (warp + vision + on_policy + off_policy)
+compile_modeld_script = [File(Dir("#selfdrive/modeld").File("compile_modeld.py").abspath)]
+modeld_onnx_deps = [File(f"models/{m}.onnx").abspath for m in ['driving_vision', 'driving_on_policy', 'driving_off_policy']]
+modeld_meta_deps = [File(f"models/{m}_metadata.pkl").abspath for m in ['driving_vision', 'driving_on_policy', 'driving_off_policy']]
+modeld_targets = []
+for cam in [_ar_ox_fisheye, _os_fisheye]:
+  w, h = cam.width, cam.height
+  modeld_targets.append(File(f"models/modeld_{w}x{h}_tinygrad.pkl").abspath)
+compile_modeld_cmd = f'{tg_flags} python3 -c "from openpilot.selfdrive.modeld.compile_modeld import compile_modeld, CAMERA_CONFIGS; [compile_modeld(w, h) for w, h in CAMERA_CONFIGS]"'
+modeld_compile_node = lenv.Command(modeld_targets, modeld_onnx_deps + modeld_meta_deps + tinygrad_files + compile_modeld_script + [chunker_file], compile_modeld_cmd)
+
+# Chunk modeld pickles
+modeld_chunk_targets = []
+for cam in [_ar_ox_fisheye, _os_fisheye]:
+  w, h = cam.width, cam.height
+  pkl = File(f"models/modeld_{w}x{h}_tinygrad.pkl").abspath
+  total_onnx_size = sum(os.path.getsize(File(f"models/{m}.onnx").abspath) for m in ['driving_vision', 'driving_on_policy', 'driving_off_policy'])
+  chunk_paths = get_chunk_paths(pkl, estimate_pickle_max_size(total_onnx_size))
+  modeld_chunk_targets.append((pkl, chunk_paths))
+
+def do_modeld_chunk(target, source, env):
+  for pkl, chunk_paths in modeld_chunk_targets:
+    chunk_file(pkl, chunk_paths)
+lenv.Command(
+  [p for _, paths in modeld_chunk_targets for p in paths],
+  modeld_compile_node,
+  do_modeld_chunk,
+)
 
 def tg_compile(flags, model_name):
   pythonpath_string = 'PYTHONPATH="${PYTHONPATH}:' + env.Dir("#tinygrad_repo").abspath + '"'
@@ -58,6 +90,5 @@ def tg_compile(flags, model_name):
     do_chunk,
   )
 
-# Compile small models
-for model_name in ['driving_vision', 'driving_off_policy', 'driving_on_policy', 'dmonitoring_model']:
-  tg_compile(tg_flags, model_name)
+# Compile DM model (still separate)
+tg_compile(tg_flags, 'dmonitoring_model')
