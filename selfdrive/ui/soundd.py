@@ -37,6 +37,7 @@ SYNTH_WAVE_SINE = 0
 SYNTH_WAVE_SQUARE = 1
 SYNTH_WAVE_SAW = 2
 SYNTH_WAVE_TRIANGLE = 3
+SYNTH_BASS_MIN_AUDIBLE_HZ = 1000.0
 
 SYNTH_STATE_PATH = "/tmp/sound_playground_state.json"
 
@@ -89,6 +90,7 @@ class Soundd:
     self.synth_volume = 1.0
     self.synth_waveform = SYNTH_WAVE_SINE
     self.synth_play = False
+    self.synth_bass_enabled = False
     self.synth_envelope = 0.0
     self.synth_state_mtime: float | None = None
 
@@ -138,20 +140,41 @@ class Soundd:
     phases = self.synth_phase + phase_inc * np.arange(frames, dtype=np.float32)
     self.synth_phase = float((phases[-1] + phase_inc) % (2.0 * math.pi))
 
-    if self.synth_waveform == SYNTH_WAVE_SQUARE:
-      wave = np.where(np.sin(phases) >= 0.0, 1.0, -1.0).astype(np.float32)
-    elif self.synth_waveform == SYNTH_WAVE_SAW:
-      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
-      wave = (2.0 * phase_unit - 1.0).astype(np.float32)
-    elif self.synth_waveform == SYNTH_WAVE_TRIANGLE:
-      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
-      wave = (1.0 - 4.0 * np.abs(phase_unit - 0.5)).astype(np.float32)
-    else:
-      wave = np.sin(phases).astype(np.float32)
+    wave = self._base_wave(phases, self.synth_waveform)
+
+    if self.synth_bass_enabled and self.synth_freq_hz < SYNTH_BASS_MIN_AUDIBLE_HZ:
+      # Psychoacoustic bass: remove low fundamental and synthesize only higher harmonics.
+      start_harmonic = int(max(2, math.ceil(SYNTH_BASS_MIN_AUDIBLE_HZ / max(self.synth_freq_hz, 1e-6))))
+      harmonic_weights: list[float] = []
+      harmonic_sum = np.zeros(frames, dtype=np.float32)
+      for harmonic in range(start_harmonic, start_harmonic + 4):
+        harmonic_hz = harmonic * self.synth_freq_hz
+        if harmonic_hz > 8000.0:
+          break
+        h_phase = phases * harmonic
+        harmonic_wave = self._base_wave(h_phase, SYNTH_WAVE_SINE)
+        weight = 1.0 / float(harmonic - start_harmonic + 1)
+        harmonic_weights.append(weight)
+        harmonic_sum += harmonic_wave * weight
+
+      if harmonic_weights:
+        wave = harmonic_sum / float(sum(harmonic_weights))
 
     ramp = np.linspace(self.synth_envelope, target_gain, frames, dtype=np.float32)
     self.synth_envelope = float(target_gain)
     return wave * ramp * self.synth_volume
+
+  @staticmethod
+  def _base_wave(phases: np.ndarray, waveform: int) -> np.ndarray:
+    if waveform == SYNTH_WAVE_SQUARE:
+      return np.where(np.sin(phases) >= 0.0, 1.0, -1.0).astype(np.float32)
+    if waveform == SYNTH_WAVE_SAW:
+      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
+      return (2.0 * phase_unit - 1.0).astype(np.float32)
+    if waveform == SYNTH_WAVE_TRIANGLE:
+      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
+      return (1.0 - 4.0 * np.abs(phase_unit - 0.5)).astype(np.float32)
+    return np.sin(phases).astype(np.float32)
 
   def update_synth_params(self):
     try:
@@ -178,6 +201,7 @@ class Soundd:
     self.synth_volume = float(np.clip(float(state.get("volume", self.synth_volume)), 0.0, 1.0))
     self.synth_waveform = int(np.clip(int(state.get("waveform", self.synth_waveform)), SYNTH_WAVE_SINE, SYNTH_WAVE_TRIANGLE))
     self.synth_play = bool(state.get("play", False))
+    self.synth_bass_enabled = bool(state.get("bass", False))
 
   def callback(self, data_out: np.ndarray, frames: int, time, status) -> None:
     if status:

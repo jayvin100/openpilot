@@ -24,6 +24,7 @@ WAVEFORMS = ["sine", "square", "saw", "triangle"]
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 SLIDER_GRADIENT_LEFT = rl.Color(30, 53, 255, 255)
 SLIDER_GRADIENT_RIGHT = rl.Color(23, 193, 255, 255)
+BASS_MIN_AUDIBLE_HZ = 1000.0
 
 
 def _safe_float(value, default: float) -> float:
@@ -195,6 +196,56 @@ class CompactButton(Widget):
                 alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER, alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE)
 
 
+class CircleTextButton(Widget):
+  def __init__(self, value: str, click_callback=None):
+    super().__init__()
+    self._value = value
+    self._click_callback = click_callback
+
+  def set_value(self, value: str):
+    self._value = value
+
+  def _handle_mouse_release(self, mouse_pos):
+    super()._handle_mouse_release(mouse_pos)
+    if self._click_callback is not None:
+      self._click_callback()
+
+  def _render(self, _):
+    texture = gui_app.texture("icons_mici/buttons/button_circle_pressed.png" if self.is_pressed else "icons_mici/buttons/button_circle.png",
+                              int(self._rect.width), int(self._rect.height), keep_aspect_ratio=False)
+    rl.draw_texture_ex(texture, rl.Vector2(self._rect.x, self._rect.y), 0.0, 1.0, rl.WHITE)
+
+    value_font = _fit_font_size(self._value, self._rect.width - 16, max(12, int(self._rect.height * 0.26)),
+                                min_size=8, weight=FontWeight.BOLD)
+    gui_label(self._rect, self._value, font_size=value_font, font_weight=FontWeight.BOLD,
+              alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER, alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE)
+
+
+class ToggleCircleTextButton(CircleTextButton):
+  def __init__(self, value: str, toggle_callback=None):
+    super().__init__(value, click_callback=None)
+    self._toggled = False
+    self._toggle_callback = toggle_callback
+
+  def set_toggled(self, toggled: bool):
+    self._toggled = toggled
+
+  def _handle_mouse_release(self, mouse_pos):
+    super()._handle_mouse_release(mouse_pos)
+    self._toggled = not self._toggled
+    if self._toggle_callback is not None:
+      self._toggle_callback(self._toggled)
+
+  def _render(self, _):
+    texture = gui_app.texture("icons_mici/buttons/button_circle_pressed.png" if self._toggled else "icons_mici/buttons/button_circle.png",
+                              int(self._rect.width), int(self._rect.height), keep_aspect_ratio=False)
+    rl.draw_texture_ex(texture, rl.Vector2(self._rect.x, self._rect.y), 0.0, 1.0, rl.WHITE)
+    value_font = _fit_font_size(self._value, self._rect.width - 16, max(12, int(self._rect.height * 0.26)),
+                                min_size=8, weight=FontWeight.BOLD)
+    gui_label(self._rect, self._value, font_size=value_font, font_weight=FontWeight.BOLD,
+              alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER, alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE)
+
+
 class HoldButton(Widget):
   def __init__(self, toggle_callback=None):
     super().__init__()
@@ -241,14 +292,17 @@ class SoundPlaygroundLayout(NavWidget):
     self._freq_hz = _clamp(_safe_float(state.get("frequency_hz"), 440.0), FREQ_MIN, FREQ_MAX)
     self._volume = _clamp(_safe_float(state.get("volume"), 1.0), VOLUME_MIN, VOLUME_MAX)
     self._waveform_idx = int(max(0, min(len(WAVEFORMS) - 1, _safe_int(state.get("waveform"), 0))))
+    self._bass_enabled = bool(state.get("bass", False))
     self._is_playing = False
     self._was_driver_view_enabled = False
 
     self._freq_slider = self._child(Slider("frequency", FREQ_MIN, FREQ_MAX, self._freq_hz, self._on_freq_changed, log_scale=True))
     self._volume_slider = self._child(Slider("volume", VOLUME_MIN, VOLUME_MAX, self._volume, self._on_volume_changed))
 
-    self._waveform_btn = self._child(CompactButton("", WAVEFORMS[self._waveform_idx], self._cycle_waveform))
-    self._fine_freq_btn = self._child(CompactButton("", "Hz", self._show_frequency_input))
+    self._waveform_btn = self._child(CircleTextButton(WAVEFORMS[self._waveform_idx], self._cycle_waveform))
+    self._fine_freq_btn = self._child(CircleTextButton("Hz", self._show_frequency_input))
+    self._bass_btn = self._child(ToggleCircleTextButton("bass", toggle_callback=self._on_bass_toggled))
+    self._bass_btn.set_toggled(self._bass_enabled)
 
     self._play_btn = self._child(HoldButton(toggle_callback=self._put_play))
     self._freq_input_dialog: BigInputDialog | None = None
@@ -257,6 +311,7 @@ class SoundPlaygroundLayout(NavWidget):
     self._volume_slider.set_touch_valid_callback(self._controls_enabled)
     self._waveform_btn.set_touch_valid_callback(self._controls_enabled)
     self._fine_freq_btn.set_touch_valid_callback(self._controls_enabled)
+    self._bass_btn.set_touch_valid_callback(self._controls_enabled)
     self._play_btn.set_touch_valid_callback(self._controls_enabled)
 
   def _load_state(self) -> dict:
@@ -273,6 +328,7 @@ class SoundPlaygroundLayout(NavWidget):
       "gain": 1.0,
       "volume": float(self._volume),
       "waveform": int(self._waveform_idx),
+      "bass": bool(self._bass_enabled),
       "play": bool(self._is_playing),
     }
     tmp_path = f"{STATE_PATH}.tmp"
@@ -303,6 +359,10 @@ class SoundPlaygroundLayout(NavWidget):
   def _cycle_waveform(self):
     self._waveform_idx = (self._waveform_idx + 1) % len(WAVEFORMS)
     self._waveform_btn.set_value(WAVEFORMS[self._waveform_idx])
+    self._write_state()
+
+  def _on_bass_toggled(self, toggled: bool):
+    self._bass_enabled = toggled
     self._write_state()
 
   def _show_frequency_input(self):
@@ -341,6 +401,21 @@ class SoundPlaygroundLayout(NavWidget):
     octave = nearest // 12 - 1
     return f"{note_name}{octave}", cents
 
+  def _harmonic_info(self) -> str:
+    if not self._bass_enabled:
+      return ""
+
+    start = int(max(2, math.ceil(BASS_MIN_AUDIBLE_HZ / max(self._freq_hz, 1e-6))))
+    harmonics = []
+    for h in range(start, start + 4):
+      hz = h * self._freq_hz
+      if hz > 8000.0:
+        break
+      harmonics.append(f"{h}x({hz:.0f}Hz)")
+    if not harmonics:
+      return "harmonics: none"
+    return f"harmonics: {' '.join(harmonics)}"
+
   def show_event(self):
     super().show_event()
     self._was_driver_view_enabled = ui_state.params.get_bool("IsDriverViewEnabled")
@@ -374,24 +449,35 @@ class SoundPlaygroundLayout(NavWidget):
 
     note, cents = self._note_info()
     cents_text = f"{cents:+.1f} cents"
-    period_ms = 1000.0 / max(self._freq_hz, 1e-6)
-
     info_color = rl.Color(200, 200, 200, 255)
-    info_text = f"piano: {note} ({cents_text})  period: {period_ms:.2f} ms"
+    info_text = f"piano: {note} ({cents_text})"
+    harmonic_text = self._harmonic_info()
     title_h = max(12, int(slider_h * 0.42))
     title_font = max(10, int(title_h * 0.78))
     info_font = _fit_font_size(info_text, top.width - 6, title_font, min_size=8, weight=FontWeight.NORMAL)
     gui_label(rl.Rectangle(top.x, top.y + top.height - info_h - 4, top.width, info_h),
               info_text, font_size=info_font, color=info_color,
               alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT)
+    if harmonic_text:
+      harmonic_font = _fit_font_size(harmonic_text, top.width - 6, max(8, title_font - 2), min_size=7, weight=FontWeight.NORMAL)
+      gui_label(rl.Rectangle(top.x, top.y + top.height - info_h - 20, top.width, info_h),
+                harmonic_text, font_size=harmonic_font, color=rl.Color(170, 170, 170, 255),
+                alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT)
 
-    # Bottom row: play | waveform | fine frequency
+    # Bottom row: play | waveform | bass | Hz
     button_gap = 10.0
-    play_w = bottom.width * 0.5
-    side_w = max(0.0, (bottom.width - play_w - button_gap * 2.0) / 2.0)
-    play_rect = rl.Rectangle(bottom.x, bottom.y, play_w, bottom.height)
-    wave_rect = rl.Rectangle(bottom.x + play_w + button_gap, bottom.y, side_w, bottom.height)
-    fine_rect = rl.Rectangle(wave_rect.x + side_w + button_gap, bottom.y, side_w, bottom.height)
+    circle_size = 80.0
+    total_gaps = button_gap * 3.0
+    circle_block_w = circle_size * 3.0
+    play_w = max(0.0, bottom.width - circle_block_w - total_gaps)
+
+    play_rect = rl.Rectangle(bottom.x, bottom.y + (bottom.height - 80.0) / 2.0, play_w, 80.0)
+    start_x = bottom.x + play_w + button_gap
+    circle_y = bottom.y + (bottom.height - 80.0) / 2.0
+    wave_rect = rl.Rectangle(start_x, circle_y, circle_size, circle_size)
+    bass_rect = rl.Rectangle(start_x + circle_size + button_gap, circle_y, circle_size, circle_size)
+    fine_rect = rl.Rectangle(start_x + (circle_size + button_gap) * 2.0, circle_y, circle_size, circle_size)
     self._play_btn.render(play_rect)
     self._waveform_btn.render(wave_rect)
+    self._bass_btn.render(bass_rect)
     self._fine_freq_btn.render(fine_rect)
