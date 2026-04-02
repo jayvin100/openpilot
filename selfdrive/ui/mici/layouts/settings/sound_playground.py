@@ -25,13 +25,6 @@ NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 SLIDER_GRADIENT_LEFT = rl.Color(30, 53, 255, 255)
 SLIDER_GRADIENT_RIGHT = rl.Color(23, 193, 255, 255)
 
-# Keep UI readout aligned with soundd bankstown defaults.
-BASS_FLOOR_HZ = 33
-BASS_CEIL_HZ = 200
-BASS_FINAL_HP_HZ = 85
-BASS_AMT = 1.50
-BASS_BLEND = 0.37
-
 
 def _safe_float(value, default: float) -> float:
   if value is None:
@@ -53,6 +46,20 @@ def _safe_int(value, default: int) -> int:
     return int(value)
   except (TypeError, ValueError):
     return default
+
+
+def _safe_bool(value, default: bool = False) -> bool:
+  if value is None:
+    return default
+  if isinstance(value, bool):
+    return value
+  if isinstance(value, (int, float)):
+    return bool(value)
+  if isinstance(value, bytes):
+    value = value.decode("utf-8", errors="ignore")
+  if isinstance(value, str):
+    return value.strip().lower() in ("1", "true", "yes", "on")
+  return default
 
 
 def _clamp(value: float, min_value: float, max_value: float) -> float:
@@ -298,7 +305,7 @@ class SoundPlaygroundLayout(NavWidget):
     self._freq_hz = _clamp(_safe_float(state.get("frequency_hz"), 440.0), FREQ_MIN, FREQ_MAX)
     self._volume = _clamp(_safe_float(state.get("volume"), 1.0), VOLUME_MIN, VOLUME_MAX)
     self._waveform_idx = int(max(0, min(len(WAVEFORMS) - 1, _safe_int(state.get("waveform"), 0))))
-    self._bass_enabled = bool(state.get("bass", False))
+    self._bass_enabled = _safe_bool(state.get("bass_enabled"), False)
     self._is_playing = False
     self._was_driver_view_enabled = False
 
@@ -307,7 +314,7 @@ class SoundPlaygroundLayout(NavWidget):
 
     self._waveform_btn = self._child(CircleTextButton(WAVEFORMS[self._waveform_idx], self._cycle_waveform))
     self._fine_freq_btn = self._child(CircleTextButton("Hz", self._show_frequency_input))
-    self._bass_btn = self._child(ToggleCircleTextButton("bass", toggle_callback=self._on_bass_toggled))
+    self._bass_btn = self._child(ToggleCircleTextButton("bass", self._on_bass_toggled))
     self._bass_btn.set_toggled(self._bass_enabled)
 
     self._play_btn = self._child(HoldButton(toggle_callback=self._put_play))
@@ -334,7 +341,7 @@ class SoundPlaygroundLayout(NavWidget):
       "gain": 1.0,
       "volume": float(self._volume),
       "waveform": int(self._waveform_idx),
-      "bass": bool(self._bass_enabled),
+      "bass_enabled": bool(self._bass_enabled),
       "play": bool(self._is_playing),
     }
     tmp_path = f"{STATE_PATH}.tmp"
@@ -367,10 +374,6 @@ class SoundPlaygroundLayout(NavWidget):
     self._waveform_btn.set_value(WAVEFORMS[self._waveform_idx])
     self._write_state()
 
-  def _on_bass_toggled(self, toggled: bool):
-    self._bass_enabled = toggled
-    self._write_state()
-
   def _show_frequency_input(self):
     if self._freq_input_dialog is not None and gui_app.widget_in_stack(self._freq_input_dialog):
       return
@@ -399,6 +402,10 @@ class SoundPlaygroundLayout(NavWidget):
     self._freq_input_dialog = dlg
     gui_app.push_widget(dlg)
 
+  def _on_bass_toggled(self, enabled: bool):
+    self._bass_enabled = enabled
+    self._write_state()
+
   def _note_info(self) -> tuple[str, float]:
     midi = 69.0 + 12.0 * math.log2(max(self._freq_hz, 1e-6) / 440.0)
     nearest = int(round(midi))
@@ -406,11 +413,6 @@ class SoundPlaygroundLayout(NavWidget):
     note_name = NOTE_NAMES[nearest % 12]
     octave = nearest // 12 - 1
     return f"{note_name}{octave}", cents
-
-  def _harmonic_info(self) -> str:
-    if not self._bass_enabled:
-      return ""
-    return f"bankstown: bp {BASS_FLOOR_HZ}-{BASS_CEIL_HZ}Hz, hp {BASS_FINAL_HP_HZ}Hz, amt {BASS_AMT:.2f}, blend {BASS_BLEND:.2f}"
 
   def show_event(self):
     super().show_event()
@@ -445,20 +447,22 @@ class SoundPlaygroundLayout(NavWidget):
 
     note, cents = self._note_info()
     cents_text = f"{cents:+.1f} cents"
+    second_h = self._freq_hz * 2.0
+    third_h = self._freq_hz * 3.0
+
     info_color = rl.Color(200, 200, 200, 255)
     info_text = f"piano: {note} ({cents_text})"
-    harmonic_text = self._harmonic_info()
     title_h = max(12, int(slider_h * 0.42))
     title_font = max(10, int(title_h * 0.78))
     info_font = _fit_font_size(info_text, top.width - 6, title_font, min_size=8, weight=FontWeight.NORMAL)
     gui_label(rl.Rectangle(top.x, top.y + top.height - info_h - 4, top.width, info_h),
               info_text, font_size=info_font, color=info_color,
               alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT)
-    if harmonic_text:
-      harmonic_font = _fit_font_size(harmonic_text, top.width - 6, max(8, title_font - 2), min_size=7, weight=FontWeight.NORMAL)
-      gui_label(rl.Rectangle(top.x, top.y + top.height - info_h - 20, top.width, info_h),
-                harmonic_text, font_size=harmonic_font, color=rl.Color(170, 170, 170, 255),
-                alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT)
+    harmonic_text = f"harmonics: 2x {second_h:.0f}Hz, 3x {third_h:.0f}Hz  bankstown {'ON' if self._bass_enabled else 'OFF'}"
+    harmonic_font = _fit_font_size(harmonic_text, top.width - 6, info_font, min_size=8, weight=FontWeight.NORMAL)
+    gui_label(rl.Rectangle(top.x, top.y + top.height - info_h + 10, top.width, info_h),
+              harmonic_text, font_size=harmonic_font, color=rl.Color(170, 200, 255, 255),
+              alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT)
 
     # Bottom row: play | waveform | bass | Hz
     button_gap = 10.0

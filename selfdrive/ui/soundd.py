@@ -38,17 +38,8 @@ SYNTH_WAVE_SQUARE = 1
 SYNTH_WAVE_SAW = 2
 SYNTH_WAVE_TRIANGLE = 3
 
-# "bankstown" psychoacoustic bass defaults
-BASS_AMT = 1.50
-BASS_FLOOR_HZ = 33.0
-BASS_CEIL_HZ = 200.0
-BASS_FINAL_HP_HZ = 85.0
-BASS_SAT_SECOND = 1.35
-BASS_SAT_THIRD = 2.35
-BASS_BLEND = 0.37
-BASS_Q = 1.0 / math.sqrt(2.0)  # Butterworth
-
 SYNTH_STATE_PATH = "/tmp/sound_playground_state.json"
+BANKSTOWN_Q = 1.0 / math.sqrt(2.0)
 
 
 sound_list: dict[int, tuple[str, int | None, float]] = {
@@ -80,6 +71,105 @@ def check_selfdrive_timeout_alert(sm):
   return False
 
 
+def clamp_sample(sample, low, high):
+  return min(max(sample, low), high)
+
+
+class Saturator:
+  def __init__(self, third_gain, second_gain, coeff):
+    self.third_gain = third_gain
+    self.second_gain = second_gain
+    self.coeff = coeff
+    self.k = math.pi / (0.5 + math.e)
+
+  def process(self, sample):
+    out = self.coeff * self.k * math.tanh(sample * self.third_gain)
+    if sample <= 0.0:
+      out += (1.0 - self.coeff) * self.k * math.tanh(sample * self.second_gain)
+    return clamp_sample(out, -1.0, 1.0)
+
+
+class BiquadFilter:
+  def __init__(self, b0, b1, b2, a1, a2):
+    self.b0 = b0
+    self.b1 = b1
+    self.b2 = b2
+    self.a1 = a1
+    self.a2 = a2
+    self.y_2 = 0.0
+    self.y_1 = 0.0
+    self.x_2 = 0.0
+    self.x_1 = 0.0
+
+  def process(self, sample):
+    out = sample * self.b0 + self.x_1 * self.b1 + self.x_2 * self.b2 + self.y_1 * self.a1 + self.y_2 * self.a2
+    self.y_2 = self.y_1
+    self.y_1 = out
+    self.x_2 = self.x_1
+    self.x_1 = sample
+    return out
+
+
+def _make_low_pass(frequency, q_factor, sample_rate):
+  x = (frequency * 2.0 * math.pi) / sample_rate
+  sin_x = math.sin(x)
+  y = sin_x / (q_factor * 2.0)
+  cos_x = math.cos(x)
+
+  a0 = y + 1.0
+  a1 = cos_x * -2.0
+  a2 = 1.0 - y
+  b0 = (1.0 - cos_x) / 2.0
+  b1 = 1.0 - cos_x
+  b2 = (1.0 - cos_x) / 2.0
+  return BiquadFilter(b0 / a0, b1 / a0, b2 / a0, -a1 / a0, -a2 / a0)
+
+
+def _make_high_pass(frequency, q_factor, sample_rate):
+  x = (frequency * 2.0 * math.pi) / sample_rate
+  sin_x = math.sin(x)
+  y = sin_x / (q_factor * 2.0)
+  cos_x = math.cos(x)
+
+  a0 = y + 1.0
+  a1 = cos_x * -2.0
+  a2 = 1.0 - y
+  b0 = (1.0 + cos_x) / 2.0
+  b1 = (1.0 + cos_x) * -1.0
+  b2 = (1.0 + cos_x) / 2.0
+  return BiquadFilter(b0 / a0, b1 / a0, b2 / a0, -a1 / a0, -a2 / a0)
+
+
+class BankstownPsychoBass:
+  def __init__(self, sample_rate):
+    d_amt = 1.50
+    d_floor = 33.0
+    d_ceil = 200.0
+    d_final_hp = 85.0
+    d_sat_second = 1.35
+    d_sat_third = 2.35
+    d_blend = 0.37
+
+    self.amount = d_amt
+    self.sat = Saturator(d_sat_third, d_sat_second, d_blend)
+    self.high_pass = _make_high_pass(d_floor, BANKSTOWN_Q, sample_rate)
+    self.low_pass = _make_low_pass(d_ceil, BANKSTOWN_Q, sample_rate)
+    self.clamp_pass = _make_low_pass(3.0 * d_ceil, BANKSTOWN_Q, sample_rate)
+    self.final_pass = _make_high_pass(d_final_hp, BANKSTOWN_Q, sample_rate)
+
+  def process_block(self, samples: np.ndarray) -> np.ndarray:
+    out = np.empty_like(samples)
+    for i in range(samples.shape[0]):
+      sample = clamp_sample(float(samples[i]), -1.0, 1.0)
+      processed = self.high_pass.process(sample)
+      processed = self.low_pass.process(processed)
+      processed = self.sat.process(processed) * self.amount
+      enhanced = self.final_pass.process(processed)
+      enhanced = self.clamp_pass.process(enhanced)
+      out[i] = sample + enhanced
+    return np.clip(out, -1.0, 1.0)
+
+
 class Soundd:
   def __init__(self):
     self.load_sounds()
@@ -99,16 +189,10 @@ class Soundd:
     self.synth_volume = 1.0
     self.synth_waveform = SYNTH_WAVE_SINE
     self.synth_play = False
-    self.synth_bass_enabled = False
     self.synth_envelope = 0.0
     self.synth_state_mtime: float | None = None
-    self._init_bass_chain()
-
-  def _init_bass_chain(self):
-    self.bass_hp = Biquad.highpass(BASS_FLOOR_HZ, BASS_Q, SAMPLE_RATE)
-    self.bass_lp = Biquad.lowpass(BASS_CEIL_HZ, BASS_Q, SAMPLE_RATE)
-    self.bass_clamp_lp = Biquad.lowpass(3.0 * BASS_CEIL_HZ, BASS_Q, SAMPLE_RATE)
-    self.bass_final_hp = Biquad.highpass(BASS_FINAL_HP_HZ, BASS_Q, SAMPLE_RATE)
+    self.synth_bass_enabled = False
+    self.psycho_bass = BankstownPsychoBass(SAMPLE_RATE)
 
   def load_sounds(self):
     self.loaded_sounds: dict[int, np.ndarray] = {}
@@ -156,43 +240,23 @@ class Soundd:
     phases = self.synth_phase + phase_inc * np.arange(frames, dtype=np.float32)
     self.synth_phase = float((phases[-1] + phase_inc) % (2.0 * math.pi))
 
-    wave = self._base_wave(phases, self.synth_waveform)
-
-    if self.synth_bass_enabled:
-      # bankstown chain:
-      # sample -> bandpass(floor/ceil) -> asymmetric saturator -> final HP -> clamp LP -> add dry
-      out = np.empty(frames, dtype=np.float32)
-      sat_norm = math.pi / (0.5 + math.e)
-      for i in range(frames):
-        sample = float(np.clip(wave[i], -1.0, 1.0))
-        processed = self.bass_lp.process(self.bass_hp.process(sample))
-
-        # Saturator_process with 3rd/2nd harmonic blend
-        sat = BASS_BLEND * sat_norm * math.tanh(processed * BASS_SAT_THIRD)
-        if processed <= 0.0:
-          sat += (1.0 - BASS_BLEND) * sat_norm * math.tanh(processed * BASS_SAT_SECOND)
-        sat = float(np.clip(sat, -1.0, 1.0))
-
-        processed = sat * BASS_AMT
-        wet = self.bass_clamp_lp.process(self.bass_final_hp.process(processed))
-        out[i] = float(np.clip(wet + sample, -1.0, 1.0))
-      wave = out
+    if self.synth_waveform == SYNTH_WAVE_SQUARE:
+      wave = np.where(np.sin(phases) >= 0.0, 1.0, -1.0).astype(np.float32)
+    elif self.synth_waveform == SYNTH_WAVE_SAW:
+      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
+      wave = (2.0 * phase_unit - 1.0).astype(np.float32)
+    elif self.synth_waveform == SYNTH_WAVE_TRIANGLE:
+      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
+      wave = (1.0 - 4.0 * np.abs(phase_unit - 0.5)).astype(np.float32)
+    else:
+      wave = np.sin(phases).astype(np.float32)
 
     ramp = np.linspace(self.synth_envelope, target_gain, frames, dtype=np.float32)
     self.synth_envelope = float(target_gain)
-    return wave * ramp * self.synth_volume
-
-  @staticmethod
-  def _base_wave(phases: np.ndarray, waveform: int) -> np.ndarray:
-    if waveform == SYNTH_WAVE_SQUARE:
-      return np.where(np.sin(phases) >= 0.0, 1.0, -1.0).astype(np.float32)
-    if waveform == SYNTH_WAVE_SAW:
-      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
-      return (2.0 * phase_unit - 1.0).astype(np.float32)
-    if waveform == SYNTH_WAVE_TRIANGLE:
-      phase_unit = np.mod(phases / (2.0 * math.pi), 1.0).astype(np.float32)
-      return (1.0 - 4.0 * np.abs(phase_unit - 0.5)).astype(np.float32)
-    return np.sin(phases).astype(np.float32)
+    output = wave * ramp
+    if self.synth_bass_enabled:
+      output = self.psycho_bass.process_block(output)
+    return output * self.synth_volume
 
   def update_synth_params(self):
     try:
@@ -219,7 +283,7 @@ class Soundd:
     self.synth_volume = float(np.clip(float(state.get("volume", self.synth_volume)), 0.0, 1.0))
     self.synth_waveform = int(np.clip(int(state.get("waveform", self.synth_waveform)), SYNTH_WAVE_SINE, SYNTH_WAVE_TRIANGLE))
     self.synth_play = bool(state.get("play", False))
-    self.synth_bass_enabled = bool(state.get("bass", False))
+    self.synth_bass_enabled = bool(state.get("bass_enabled", False))
 
   def callback(self, data_out: np.ndarray, frames: int, time, status) -> None:
     if status:
@@ -277,57 +341,6 @@ class Soundd:
         rk.keep_time()
 
         assert stream.active
-
-
-class Biquad:
-  def __init__(self, b0, b1, b2, a1, a2):
-    self.b0 = float(b0)
-    self.b1 = float(b1)
-    self.b2 = float(b2)
-    self.a1 = float(a1)
-    self.a2 = float(a2)
-    self.x1 = 0.0
-    self.x2 = 0.0
-    self.y1 = 0.0
-    self.y2 = 0.0
-
-  @staticmethod
-  def lowpass(frequency_hz: float, q_factor: float, sample_rate: float):
-    x = (frequency_hz * 2.0 * math.pi) / sample_rate
-    sin_x = math.sin(x)
-    y = sin_x / (q_factor * 2.0)
-    cos_x = math.cos(x)
-
-    a0 = y + 1.0
-    a1 = -2.0 * cos_x
-    a2 = 1.0 - y
-    b0 = (1.0 - cos_x) / 2.0
-    b1 = 1.0 - cos_x
-    b2 = (1.0 - cos_x) / 2.0
-    return Biquad(b0 / a0, b1 / a0, b2 / a0, -a1 / a0, -a2 / a0)
-
-  @staticmethod
-  def highpass(frequency_hz: float, q_factor: float, sample_rate: float):
-    x = (frequency_hz * 2.0 * math.pi) / sample_rate
-    sin_x = math.sin(x)
-    y = sin_x / (q_factor * 2.0)
-    cos_x = math.cos(x)
-
-    a0 = y + 1.0
-    a1 = -2.0 * cos_x
-    a2 = 1.0 - y
-    b0 = (1.0 + cos_x) / 2.0
-    b1 = -(1.0 + cos_x)
-    b2 = (1.0 + cos_x) / 2.0
-    return Biquad(b0 / a0, b1 / a0, b2 / a0, -a1 / a0, -a2 / a0)
-
-  def process(self, sample: float) -> float:
-    out = sample * self.b0 + self.x1 * self.b1 + self.x2 * self.b2 + self.y1 * self.a1 + self.y2 * self.a2
-    self.y2 = self.y1
-    self.y1 = out
-    self.x2 = self.x1
-    self.x1 = sample
-    return out
 
 
 def main():
