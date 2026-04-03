@@ -189,8 +189,12 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
 
   bool ignition_local = ((health.ignition_line_pkt != 0) || (health.ignition_can_pkt != 0));
 
+  static Params params;
+  bool body_firmware_flashing = params.getBool("BodyFirmwareFlashing");
+
   // Make sure CAN buses are live: safety_setter_thread does not work if Panda CAN are silent and there is only one other CAN node
-  if (health.safety_mode_pkt == (uint8_t)(cereal::CarParams::SafetyModel::SILENT)) {
+  // skip if body firmware is being flashed over CAN
+  if (health.safety_mode_pkt == (uint8_t)(cereal::CarParams::SafetyModel::SILENT) && && !body_firmware_flashing) {
     panda->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
   }
 
@@ -200,8 +204,9 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
   }
 
   // set safety mode to NO_OUTPUT when car is off or we're not onroad. ELM327 is an alternative if we want to leverage athenad/connect
+  // skip if body firmware is being flashed over CAN, as that requires the relay to stay open
   bool should_close_relay = !ignition_local || !is_onroad;
-  if (should_close_relay && (health.safety_mode_pkt != (uint8_t)(cereal::CarParams::SafetyModel::NO_OUTPUT))) {
+  if (should_close_relay && (health.safety_mode_pkt != (uint8_t)(cereal::CarParams::SafetyModel::NO_OUTPUT)) && !body_firmware_flashing) {
     panda->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
   }
 
@@ -341,9 +346,9 @@ void process_peripheral_state(Panda *panda, PubMaster *pm, bool no_fan_control) 
     }
 
     if (ir_pwr != prev_ir_pwr || sm.frame % 100 == 0) {
-      int16_t ir_panda = util::map_val(ir_pwr, 0, 100, 0, MAX_IR_PANDA_VAL); 
+      int16_t ir_panda = util::map_val(ir_pwr, 0, 100, 0, MAX_IR_PANDA_VAL);
       panda->set_ir_pwr(ir_panda);
-      Hardware::set_ir_power(ir_pwr); 
+      Hardware::set_ir_power(ir_pwr);
       prev_ir_pwr = ir_pwr;
     }
   }
@@ -367,7 +372,7 @@ void pandad_run(Panda *panda) {
 
   // Main loop: receive CAN data and process states
   while (!do_exit && check_connected(panda)) {
-    can_recv(panda, &pm);
+    if (params.getBool("BodyFirmwareFlashing")) can_recv(panda, &pm);
 
     // Process peripheral state at 20 Hz
     if (rk.frame() % 5 == 0) {
