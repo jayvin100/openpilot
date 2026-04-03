@@ -88,6 +88,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     lowMemory @51;
     stockAeb @52;
     stockLkas @98;
+    lateralManeuver @99;
     ldw @53;
     carUnrecognized @54;
     invalidLkasSetting @55;
@@ -1241,6 +1242,10 @@ struct DriverAssistance {
   # FCW, AEB, etc. will go here
 }
 
+struct LateralManeuverPlan {
+  desiredCurvature @0 :Float32;  # 1/m
+}
+
 struct LongitudinalPlan @0xe00b5b3eba12876c {
   modelMonoTime @9 :UInt64;
   hasLead @7 :Bool;
@@ -2171,12 +2176,14 @@ struct DriverStateV2 {
     facePosition @2 :List(Float32);
     facePositionStd @3 :List(Float32);
     faceProb @4 :Float32;
-    leftEyeProb @5 :Float32;
-    rightEyeProb @6 :Float32;
-    leftBlinkProb @7 :Float32;
-    rightBlinkProb @8 :Float32;
-    sunglassesProb @9 :Float32;
+    eyesVisibleProb @14 :Float32;
+    eyesClosedProb @15 :Float32;
     phoneProb @13 :Float32;
+    leftEyeProbDEPRECATED @5 :Float32;
+    rightEyeProbDEPRECATED @6 :Float32;
+    leftBlinkProbDEPRECATED @7 :Float32;
+    rightBlinkProbDEPRECATED @8 :Float32;
+    sunglassesProbDEPRECATED @9 :Float32;
     notReadyProbDEPRECATED @12 :List(Float32);
     occludedProbDEPRECATED @10 :Float32;
     readyProbDEPRECATED @11 :List(Float32);
@@ -2617,6 +2624,8 @@ struct Event {
     audioFeedback @149 :AudioFeedback;
     soundRequest @150 :SoundRequest;
     webrtcAudioData @151 :AudioData;
+
+    lateralManeuverPlan @150 :LateralManeuverPlan;
 
     # *********** debug ***********
     testJoystick @52 :Joystick;
