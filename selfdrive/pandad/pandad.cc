@@ -194,7 +194,7 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
 
   // Make sure CAN buses are live: safety_setter_thread does not work if Panda CAN are silent and there is only one other CAN node
   // skip if body firmware is being flashed over CAN
-  if (health.safety_mode_pkt == (uint8_t)(cereal::CarParams::SafetyModel::SILENT) && && !body_firmware_flashing) {
+  if (health.safety_mode_pkt == (uint8_t)(cereal::CarParams::SafetyModel::SILENT) && !body_firmware_flashing) {
     panda->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
   }
 
