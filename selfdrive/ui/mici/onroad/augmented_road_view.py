@@ -5,7 +5,7 @@ from cereal import messaging, car, log
 from msgq.visionipc import VisionStreamType
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
-from openpilot.selfdrive.ui.mici.onroad.alert_renderer import AlertRenderer
+from openpilot.selfdrive.ui.mici.onroad.alert_renderer import AlertRenderer, TEST_USE_BLINDSPOT_ICON_FOR_BLINKERS
 from openpilot.selfdrive.ui.mici.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.mici.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.mici.onroad.model_renderer import ModelRenderer
@@ -14,7 +14,7 @@ from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent
 from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets import Widget
-from openpilot.common.filter_simple import BounceFilter
+from openpilot.common.filter_simple import BounceFilter, FirstOrderFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
 from enum import IntEnum
@@ -35,6 +35,7 @@ WIDE_CAM_MAX_SPEED = 5.0  # m/s (10 mph)
 ROAD_CAM_MIN_SPEED = 10  # m/s (25 mph)
 
 CAM_Y_OFFSET = 20
+LEFT_BLINDSPOT_SHIFT = 60
 
 
 class BookmarkIcon(Widget):
@@ -145,6 +146,8 @@ class AugmentedRoadView(CameraView):
     self._cached_matrix: np.ndarray | None = None
     self._content_rect = rl.Rectangle()
     self._last_click_time = 0.0
+    self._left_shift_filter = FirstOrderFilter(0.0, 0.08, 1 / gui_app.target_fps)
+    self._right_inset_filter = FirstOrderFilter(float(SIDE_PANEL_WIDTH), 0.08, 1 / gui_app.target_fps)
 
     # Bookmark icon with swipe gesture
     self._bookmark_icon = BookmarkIcon(bookmark_callback)
@@ -170,12 +173,30 @@ class AugmentedRoadView(CameraView):
 
   def _update_state(self):
     super()._update_state()
+    left_blindspot_active = self._is_left_blindspot_alert_active()
+    self._left_shift_filter.update(LEFT_BLINDSPOT_SHIFT if left_blindspot_active else 0.0)
+    # When left blindspot alert is active, reclaim the right side panel area.
+    self._right_inset_filter.update(0.0 if left_blindspot_active else float(SIDE_PANEL_WIDTH))
 
     # update offroad label
     if ui_state.panda_type == log.PandaState.PandaType.unknown:
       self._offroad_label.set_text("system booting")
     else:
       self._offroad_label.set_text("start the car to\nuse openpilot")
+
+  def _is_left_blindspot_alert_active(self) -> bool:
+    ss = ui_state.sm['selfdriveState']
+    if ss.alertSize == log.SelfdriveState.AlertSize.none:
+      return False
+
+    event_name = ss.alertType.split('/')[0] if ss.alertType else ''
+    if event_name == 'laneChangeBlocked':
+      return ui_state.sm['carState'].leftBlinker
+
+    if TEST_USE_BLINDSPOT_ICON_FOR_BLINKERS:
+      return event_name == 'preLaneChangeLeft'
+
+    return False
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
     # Don't trigger click callback if bookmark was triggered
@@ -190,10 +211,12 @@ class AugmentedRoadView(CameraView):
     self._update_calibration()
 
     # Create inner content area with border padding
+    left_shift = int(round(self._left_shift_filter.x))
+    right_inset = int(round(self._right_inset_filter.x))
     self._content_rect = rl.Rectangle(
-      self.rect.x,
+      self.rect.x + left_shift,
       self.rect.y,
-      self.rect.width - SIDE_PANEL_WIDTH,
+      self.rect.width - left_shift - right_inset,
       self.rect.height,
     )
 
@@ -238,16 +261,15 @@ class AugmentedRoadView(CameraView):
     # End clipping region
     rl.end_scissor_mode()
 
-    # Custom UI extension point - add custom overlays here
-    # Use self._content_rect for positioning within camera bounds
-    self._confidence_ball.render(self.rect)
-
     self._bookmark_icon.render(self.rect)
 
     # Draw darkened background and text if not onroad
     if not ui_state.started:
       rl.draw_rectangle(int(self.rect.x), int(self.rect.y), int(self.rect.width), int(self.rect.height), rl.Color(0, 0, 0, 175))
       self._offroad_label.render(self._rect)
+
+    # Draw confidence indicator last so it's always above other overlays and dim layers.
+    self._confidence_ball.render(self.rect)
 
     # publish uiDebug
     msg = messaging.new_message('uiDebug')

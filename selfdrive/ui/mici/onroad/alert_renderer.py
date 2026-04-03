@@ -27,13 +27,16 @@ SELFDRIVE_UNRESPONSIVE_TIMEOUT = 10  # Seconds
 # Constants
 ALERT_COLORS = {
   AlertStatus.normal: rl.Color(0, 0, 0, 255),
-  AlertStatus.userPrompt: rl.Color(255, 115, 0, 255),
+  AlertStatus.userPrompt: rl.Color(0, 0, 0, 255),
   AlertStatus.critical: rl.Color(255, 0, 21, 255),
 }
 
 TURN_SIGNAL_BLINK_PERIOD = 1 / (80 / 60)  # Mazda heartbeat turn signal BPM
 
 DEBUG = False
+# Test override: when enabled, blinker/lane-change alerts show blindspot icons.
+# Set to False to restore normal turn-signal icons.
+TEST_USE_BLINDSPOT_ICON_FOR_BLINKERS = False
 
 
 class IconSide(StrEnum):
@@ -163,21 +166,36 @@ class AlertRenderer(Widget):
 
     if event_name == 'preLaneChangeLeft':
       icon_side = IconSide.left
-      txt_icon = self._txt_turn_signal_left
-      icon_margin_x = 2
-      icon_margin_y = 5
+      if TEST_USE_BLINDSPOT_ICON_FOR_BLINKERS:
+        txt_icon = self._txt_blind_spot_left
+        icon_margin_x = 8
+        icon_margin_y = 0
+      else:
+        txt_icon = self._txt_turn_signal_left
+        icon_margin_x = 2
+        icon_margin_y = 5
 
     elif event_name == 'preLaneChangeRight':
       icon_side = IconSide.right
-      txt_icon = self._txt_turn_signal_right
-      icon_margin_x = 2
-      icon_margin_y = 5
+      if TEST_USE_BLINDSPOT_ICON_FOR_BLINKERS:
+        txt_icon = self._txt_blind_spot_right
+        icon_margin_x = 8
+        icon_margin_y = 0
+      else:
+        txt_icon = self._txt_turn_signal_right
+        icon_margin_x = 2
+        icon_margin_y = 5
 
     elif event_name == 'laneChange':
       icon_side = self._last_icon_side
-      txt_icon = self._txt_turn_signal_left if self._last_icon_side == 'left' else self._txt_turn_signal_right
-      icon_margin_x = 2
-      icon_margin_y = 5
+      if TEST_USE_BLINDSPOT_ICON_FOR_BLINKERS:
+        txt_icon = self._txt_blind_spot_left if self._last_icon_side == 'left' else self._txt_blind_spot_right
+        icon_margin_x = 8
+        icon_margin_y = 0
+      else:
+        txt_icon = self._txt_turn_signal_left if self._last_icon_side == 'left' else self._txt_turn_signal_right
+        icon_margin_x = 2
+        icon_margin_y = 5
 
     elif event_name == 'laneChangeBlocked':
       CS = ui_state.sm['carState']

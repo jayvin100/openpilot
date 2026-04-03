@@ -1,10 +1,29 @@
 import math
 import pyray as rl
+from cereal import log
 from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.filter_simple import FirstOrderFilter
+
+MORPH_DURATION = 0.2  # seconds
+MORPH_RC = MORPH_DURATION / 3.0
+BLINK_GROW_DELAY = 0.3
+BLINK_OFF_1 = 0.12
+BLINK_ON_1 = 0.12
+BLINK_OFF_2 = 0.12
+BLINK_ON_2 = 0.6
+BLINK_CYCLE = BLINK_OFF_1 + BLINK_ON_1 + BLINK_OFF_2 + BLINK_ON_2
+BLINK_DIM_ALPHA = 0.2
+BLINK_ALPHA_RC = 0.035
+# Test override to match alert icon test mode in alert_renderer.py.
+# When True, lane-change events also trigger the orange confidence bar.
+TEST_ORANGE_BAR_FOR_LANE_CHANGE_EVENTS = False
+LEFT_BLINDSPOT_SHIFT = 60
+RIGHT_DOT_EXIT_RC = 0.06
+RIGHT_DOT_EXIT_PIXELS = 14
+ORANGE_BAR_WIDTH = 48  # Match normal confidence ball diameter (2 * 24)
 
 
 def draw_circle_gradient(center_x: float, center_y: float, radius: int,
@@ -26,9 +45,149 @@ class ConfidenceBall(Widget):
     super().__init__()
     self._demo = demo
     self._confidence_filter = FirstOrderFilter(-0.5, 0.5, 1 / gui_app.target_fps)
+    self._alert_morph_filter = FirstOrderFilter(0.0, MORPH_RC, 1 / gui_app.target_fps)
+    self._blink_alpha_filter = FirstOrderFilter(1.0, BLINK_ALPHA_RC, 1 / gui_app.target_fps)
+    self._right_dot_presence_filter = FirstOrderFilter(1.0, RIGHT_DOT_EXIT_RC, 1 / gui_app.target_fps)
+    self._orange_alert_started_at = -1.0
+    self._orange_alert_prev_active = False
 
   def update_filter(self, value: float):
     self._confidence_filter.update(value)
+
+  def _is_orange_alert_active(self) -> bool:
+    ss = ui_state.sm['selfdriveState']
+    if ss.alertSize == log.SelfdriveState.AlertSize.none:
+      return False
+
+    # Keep default behavior for orange/userPrompt alerts.
+    if ss.alertStatus == log.SelfdriveState.AlertStatus.userPrompt:
+      return True
+
+    # Blindspot warning should also trigger the orange grow bar.
+    event_name = ss.alertType.split('/')[0] if ss.alertType else ''
+    if event_name == 'laneChangeBlocked':
+      return True
+
+    # Keep this test behavior aligned with the icon override experiment.
+    if TEST_ORANGE_BAR_FOR_LANE_CHANGE_EVENTS:
+      return event_name in ('preLaneChangeLeft', 'preLaneChangeRight', 'laneChange')
+
+    return False
+
+  def _is_left_blindspot_alert_active(self) -> bool:
+    ss = ui_state.sm['selfdriveState']
+    if ss.alertSize == log.SelfdriveState.AlertSize.none:
+      return False
+
+    event_name = ss.alertType.split('/')[0] if ss.alertType else ''
+    if event_name == 'laneChangeBlocked':
+      return ui_state.sm['carState'].leftBlinker
+    if TEST_ORANGE_BAR_FOR_LANE_CHANGE_EVENTS:
+      return event_name == 'preLaneChangeLeft'
+    return False
+
+  def _orange_blink_target_alpha(self) -> float:
+    """Blink schedule with dim phases after initial grow delay."""
+    if self._orange_alert_started_at < 0:
+      return 1.0
+
+    elapsed = rl.get_time() - self._orange_alert_started_at
+    if elapsed < BLINK_GROW_DELAY:
+      return 1.0
+
+    phase = (elapsed - BLINK_GROW_DELAY) % BLINK_CYCLE
+    if phase < BLINK_OFF_1:
+      return BLINK_DIM_ALPHA
+    if phase < BLINK_OFF_1 + BLINK_ON_1:
+      return 1.0
+    if phase < BLINK_OFF_1 + BLINK_ON_1 + BLINK_OFF_2:
+      return BLINK_DIM_ALPHA
+    return 1.0
+
+  @staticmethod
+  def _lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+  @staticmethod
+  def _lerp_color(a: rl.Color, b: rl.Color, t: float) -> rl.Color:
+    return rl.Color(
+      int(a.r + (b.r - a.r) * t),
+      int(a.g + (b.g - a.g) * t),
+      int(a.b + (b.b - a.b) * t),
+      int(a.a + (b.a - a.a) * t),
+    )
+
+  @staticmethod
+  def _with_alpha(c: rl.Color, alpha_scale: float) -> rl.Color:
+    return rl.Color(c.r, c.g, c.b, int(c.a * alpha_scale))
+
+  def _draw_gradient_capsule(self, x: float, y: float, width: float, height: float, top_color: rl.Color, bottom_color: rl.Color) -> None:
+    width_i = max(1, int(round(width)))
+    height_i = max(1, int(round(height)))
+    x_i = int(round(x))
+    y_i = int(round(y))
+    radius = width_i / 2.0
+    cx = x_i + radius - 0.5
+
+    for i in range(height_i):
+      t = i / max(height_i - 1, 1)
+      r = int(top_color.r + (bottom_color.r - top_color.r) * t)
+      g = int(top_color.g + (bottom_color.g - top_color.g) * t)
+      b = int(top_color.b + (bottom_color.b - top_color.b) * t)
+      a = int(top_color.a + (bottom_color.a - top_color.a) * t)
+      row_color = rl.Color(r, g, b, a)
+
+      # Signed distance from the top/bottom arc centers.
+      if i < radius:
+        dy = (radius - 0.5) - i
+        half_w = math.sqrt(max(radius * radius - dy * dy, 0.0))
+      elif i >= height_i - radius:
+        dy = i - (height_i - radius) + 0.5
+        half_w = math.sqrt(max(radius * radius - dy * dy, 0.0))
+      else:
+        half_w = radius
+
+      left = cx - half_w
+      right = cx + half_w
+      lp = math.floor(left)
+      rp = math.floor(right)
+
+      # One-pixel span near tips
+      if lp == rp:
+        cov = max(0.0, min(1.0, right - left))
+        if cov > 0:
+          rl.draw_pixel(lp, y_i + i, rl.Color(row_color.r, row_color.g, row_color.b, int(row_color.a * cov)))
+        continue
+
+      # Anti-aliased left edge pixel
+      left_cov = 1.0 - (left - lp)
+      if left_cov > 0:
+        rl.draw_pixel(lp, y_i + i, rl.Color(row_color.r, row_color.g, row_color.b, int(row_color.a * min(left_cov, 1.0))))
+
+      # Solid interior
+      inner_x = lp + 1
+      inner_w = max(0, rp - lp - 1)
+      if inner_w > 0:
+        rl.draw_rectangle(inner_x, y_i + i, inner_w, 1, row_color)
+
+      # Anti-aliased right edge pixel
+      right_cov = right - rp
+      if right_cov > 0:
+        rl.draw_pixel(rp, y_i + i, rl.Color(row_color.r, row_color.g, row_color.b, int(row_color.a * min(right_cov, 1.0))))
+
+  def _get_regular_dot_colors(self) -> tuple[rl.Color, rl.Color]:
+    # confidence zones
+    if ui_state.status == UIStatus.ENGAGED or self._demo:
+      if self._confidence_filter.x > 0.5:
+        return rl.Color(0, 255, 204, 255), rl.Color(0, 255, 38, 255)
+      if self._confidence_filter.x > 0.2:
+        return rl.Color(255, 200, 0, 255), rl.Color(255, 115, 0, 255)
+      return rl.Color(255, 0, 21, 255), rl.Color(255, 0, 89, 255)
+
+    if ui_state.status == UIStatus.OVERRIDE:
+      return rl.Color(255, 255, 255, 255), rl.Color(82, 82, 82, 255)
+
+    return rl.Color(50, 50, 50, 255), rl.Color(13, 13, 13, 255)
 
   def _update_state(self):
     if self._demo:
@@ -41,6 +200,20 @@ class ConfidenceBall(Widget):
       self._confidence_filter.update((1 - max(ui_state.sm['modelV2'].meta.disengagePredictions.brakeDisengageProbs or [1])) *
                                                         (1 - max(ui_state.sm['modelV2'].meta.disengagePredictions.steerOverrideProbs or [1])))
 
+    orange_active = self._is_orange_alert_active()
+    left_blindspot_active = self._is_left_blindspot_alert_active()
+    if orange_active and not self._orange_alert_prev_active:
+      self._orange_alert_started_at = rl.get_time()
+    elif not orange_active:
+      self._orange_alert_started_at = -1.0
+    self._orange_alert_prev_active = orange_active
+    self._alert_morph_filter.update(1.0 if orange_active else 0.0)
+    target_alpha = self._orange_blink_target_alpha() if orange_active else 1.0
+    self._blink_alpha_filter.update(target_alpha)
+    # Hide the base confidence dot whenever the orange alert bar is active,
+    # so blink dim phases never reveal the dot underneath.
+    self._right_dot_presence_filter.update(0.0 if orange_active else 1.0)
+
   def _render(self, _):
     content_rect = rl.Rectangle(
       self.rect.x + self.rect.width - SIDE_PANEL_WIDTH,
@@ -52,27 +225,49 @@ class ConfidenceBall(Widget):
     status_dot_radius = 24
     dot_height = (1 - self._confidence_filter.x) * (content_rect.height - 2 * status_dot_radius) + status_dot_radius
     dot_height = self._rect.y + dot_height
+    top_dot_color, bottom_dot_color = self._get_regular_dot_colors()
+    orange_active = self._is_orange_alert_active()
+    left_blindspot_active = self._is_left_blindspot_alert_active()
 
-    # confidence zones
-    if ui_state.status == UIStatus.ENGAGED or self._demo:
-      if self._confidence_filter.x > 0.5:
-        top_dot_color = rl.Color(0, 255, 204, 255)
-        bottom_dot_color = rl.Color(0, 255, 38, 255)
-      elif self._confidence_filter.x > 0.2:
-        top_dot_color = rl.Color(255, 200, 0, 255)
-        bottom_dot_color = rl.Color(255, 115, 0, 255)
-      else:
-        top_dot_color = rl.Color(255, 0, 21, 255)
-        bottom_dot_color = rl.Color(255, 0, 89, 255)
+    # Right confidence dot with a small out-animation during left-side blindspot alerts.
+    right_presence = self._right_dot_presence_filter.x
+    right_exit_offset = (1.0 - right_presence) * RIGHT_DOT_EXIT_PIXELS
+    # Keep motion relative to the shifted onroad content: when left blindspot mode is active,
+    # move the dot right by the same content shift while it animates out.
+    if left_blindspot_active:
+      right_exit_offset += (1.0 - right_presence) * LEFT_BLINDSPOT_SHIFT
+    right_dot_center_x = content_rect.x + content_rect.width - status_dot_radius + right_exit_offset
+    if right_presence > 0.01:
+      draw_circle_gradient(right_dot_center_x, dot_height, status_dot_radius,
+                           self._with_alpha(top_dot_color, right_presence),
+                           self._with_alpha(bottom_dot_color, right_presence))
 
-    elif ui_state.status == UIStatus.OVERRIDE:
-      top_dot_color = rl.Color(255, 255, 255, 255)
-      bottom_dot_color = rl.Color(82, 82, 82, 255)
+    morph = self._alert_morph_filter.x
+    if morph < 0.01:
+      return
 
+    orange_top = rl.Color(255, 200, 0, 255)
+    orange_bottom = rl.Color(255, 115, 0, 255)
+
+    dot_d = status_dot_radius * 2
+    if left_blindspot_active:
+      dot_x = self.rect.x
+      bar_x = self.rect.x
     else:
-      top_dot_color = rl.Color(50, 50, 50, 255)
-      bottom_dot_color = rl.Color(13, 13, 13, 255)
+      dot_x = content_rect.x + content_rect.width - dot_d
+      bar_x = content_rect.x + content_rect.width - ORANGE_BAR_WIDTH
+    dot_y = dot_height - status_dot_radius
+    bar_w = ORANGE_BAR_WIDTH
+    bar_h = content_rect.height
+    bar_y = content_rect.y
 
-    draw_circle_gradient(content_rect.x + content_rect.width - status_dot_radius,
-                         dot_height, status_dot_radius,
-                         top_dot_color, bottom_dot_color)
+    x = self._lerp(dot_x, bar_x, morph)
+    y = self._lerp(dot_y, bar_y, morph)
+    w = self._lerp(dot_d, bar_w, morph)
+    h = self._lerp(dot_d, bar_h, morph)
+    top_color = self._lerp_color(top_dot_color, orange_top, morph)
+    bottom_color = self._lerp_color(bottom_dot_color, orange_bottom, morph)
+    blink_alpha = self._blink_alpha_filter.x if orange_active else 1.0
+    top_color = rl.Color(top_color.r, top_color.g, top_color.b, int(top_color.a * blink_alpha))
+    bottom_color = rl.Color(bottom_color.r, bottom_color.g, bottom_color.b, int(bottom_color.a * blink_alpha))
+    self._draw_gradient_capsule(x, y, w, h, top_color, bottom_color)
