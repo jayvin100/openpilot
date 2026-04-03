@@ -372,7 +372,7 @@ void pandad_run(Panda *panda) {
 
   // Main loop: receive CAN data and process states
   while (!do_exit && check_connected(panda)) {
-    if (params.getBool("BodyFirmwareFlashing")) can_recv(panda, &pm);
+    if (!params.getBool("BodyFirmwareFlashing")) can_recv(panda, &pm);
 
     // Process peripheral state at 20 Hz
     if (rk.frame() % 5 == 0) {
