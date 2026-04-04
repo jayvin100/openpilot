@@ -53,14 +53,7 @@ function install_ubuntu_deps() {
   $SUDO apt-get update
 
   # normal stuff, mostly for the bare docker image
-  $SUDO apt-get install -y --no-install-recommends \
-    ca-certificates \
-    build-essential \
-    curl \
-    libcurl4-openssl-dev \
-    locales \
-    git \
-    xvfb
+  $SUDO apt-get install -y --no-install-recommends ca-certificates build-essential curl libcurl4-openssl-dev locales git xvfb
 
   if [[ -d "/etc/udev/rules.d/" ]]; then
     # Setup jungle udev rules
