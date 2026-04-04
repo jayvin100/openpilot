@@ -329,10 +329,6 @@ def hardware_thread(end_event, hw_queue) -> None:
       # to make a different decision in your software
       startup_conditions["registered_device"] = PC or (params.get("DongleId") != UNREGISTERED_DONGLE_ID)
 
-    # keep ignition alive while body firmware is being flashed
-    if not onroad_conditions["ignition"] and params.get_bool("BodyFirmwareFlashing"):
-      onroad_conditions["ignition"] = True
-
     # Handle offroad/onroad transition
     should_start = all(onroad_conditions.values())
     if started_ts is None:

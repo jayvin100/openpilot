@@ -187,14 +187,16 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
     health.ignition_line_pkt = 1;
   }
 
+  static Params params;
+  if (params.getBool("BodyFirmwareFlashing")) {
+    health.ignition_line_pkt = 1;
+    health.safety_mode_pkt = (uint8_t)(cereal::CarParams::SafetyModel::BODY);
+  }
+
   bool ignition_local = ((health.ignition_line_pkt != 0) || (health.ignition_can_pkt != 0));
 
-  static Params params;
-  bool body_firmware_flashing = params.getBool("BodyFirmwareFlashing");
-
   // Make sure CAN buses are live: safety_setter_thread does not work if Panda CAN are silent and there is only one other CAN node
-  // skip if body firmware is being flashed over CAN
-  if (health.safety_mode_pkt == (uint8_t)(cereal::CarParams::SafetyModel::SILENT) && !body_firmware_flashing) {
+  if (health.safety_mode_pkt == (uint8_t)(cereal::CarParams::SafetyModel::SILENT)) {
     panda->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
   }
 
@@ -204,9 +206,8 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
   }
 
   // set safety mode to NO_OUTPUT when car is off or we're not onroad. ELM327 is an alternative if we want to leverage athenad/connect
-  // skip if body firmware is being flashed over CAN, as that requires the relay to stay open
   bool should_close_relay = !ignition_local || !is_onroad;
-  if (should_close_relay && (health.safety_mode_pkt != (uint8_t)(cereal::CarParams::SafetyModel::NO_OUTPUT)) && !body_firmware_flashing) {
+  if (should_close_relay && (health.safety_mode_pkt != (uint8_t)(cereal::CarParams::SafetyModel::NO_OUTPUT))) {
     panda->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
   }
 
