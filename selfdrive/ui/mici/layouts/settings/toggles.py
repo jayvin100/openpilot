@@ -13,6 +13,7 @@ class TogglesLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
 
+    smooth_warning_toggle = BigParamControl("smooth warning", "SmoothWarning")
     self._personality_toggle = BigMultiParamToggle("driving personality", "LongitudinalPersonality", ["aggressive", "standard", "relaxed"])
     self._experimental_btn = BigParamControl("experimental mode", "ExperimentalMode")
     is_metric_toggle = BigParamControl("use metric units", "IsMetric")
@@ -23,6 +24,7 @@ class TogglesLayoutMici(NavScroller):
     enable_openpilot = BigParamControl("enable openpilot", "OpenpilotEnabledToggle", toggle_callback=restart_needed_callback)
 
     self._scroller.add_widgets([
+      smooth_warning_toggle,
       self._personality_toggle,
       self._experimental_btn,
       is_metric_toggle,
@@ -35,6 +37,7 @@ class TogglesLayoutMici(NavScroller):
 
     # Toggle lists
     self._refresh_toggles = (
+      ("SmoothWarning", smooth_warning_toggle),
       ("ExperimentalMode", self._experimental_btn),
       ("IsMetric", is_metric_toggle),
       ("IsLdwEnabled", ldw_toggle),

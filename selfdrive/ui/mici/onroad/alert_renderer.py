@@ -1,4 +1,5 @@
 import time
+import math
 from enum import StrEnum
 from typing import NamedTuple
 import pyray as rl
@@ -32,6 +33,12 @@ ALERT_COLORS = {
 }
 
 TURN_SIGNAL_BLINK_PERIOD = 1 / (80 / 60)  # Mazda heartbeat turn signal BPM
+CRITICAL_BG_TRANSITION_RC = 0.16
+CRITICAL_PULSE_RC = 0.04
+CRITICAL_PULSE_START_DELAY = 0.18
+RED_BLINK_ON = 0.28
+RED_BLINK_OFF = 0.28
+RED_BLINK_CYCLE = RED_BLINK_ON + RED_BLINK_OFF
 
 DEBUG = False
 # Test override: when enabled, blinker/lane-change alerts show blindspot icons.
@@ -110,6 +117,11 @@ class AlertRenderer(Widget):
     self._turn_signal_timer = 0.0
     self._turn_signal_alpha_filter = FirstOrderFilter(0.0, 0.3, 1 / gui_app.target_fps)
     self._last_icon_side: IconSide | None = None
+    self._critical_bg_mix_filter = FirstOrderFilter(0.0, CRITICAL_BG_TRANSITION_RC, 1 / gui_app.target_fps)
+    self._critical_pulse_filter = FirstOrderFilter(1.0, CRITICAL_PULSE_RC, 1 / gui_app.target_fps)
+    self._critical_alert_started_at = -1.0
+    self._critical_pulse_phase = 0.0
+    self._critical_prev_active = False
 
     self._load_icons()
 
@@ -280,11 +292,6 @@ class AlertRenderer(Widget):
                        rl.Color(255, 255, 255, int(icon_alpha * self._alpha_filter.x)))
 
   def _draw_background(self, alert: Alert) -> None:
-    # draw top gradient for alert text at top
-    color = ALERT_COLORS.get(alert.status, ALERT_COLORS[AlertStatus.normal])
-    color = rl.Color(color.r, color.g, color.b, int(255 * 0.90 * self._alpha_filter.x))
-    translucent_color = rl.Color(color.r, color.g, color.b, int(0 * self._alpha_filter.x))
-
     small_alert_height = round(self._rect.height * 0.583) # 140px at mici height
     medium_alert_height = round(self._rect.height * 0.833) # 200px at mici height
 
@@ -302,11 +309,60 @@ class AlertRenderer(Widget):
     else:
       bg_height = int(self._rect.height)
 
-    solid_height = round(bg_height * 0.2)
-    rl.draw_rectangle(int(self._rect.x), int(self._rect.y), int(self._rect.width), solid_height, color)
-    rl.draw_rectangle_gradient_v(int(self._rect.x), int(self._rect.y + solid_height), int(self._rect.width),
-                                 int(bg_height - solid_height),
-                                 color, translucent_color)
+    critical_active = alert.status == AlertStatus.critical
+    if critical_active:
+      critical_mix = self._critical_bg_mix_filter.update(1.0)
+    else:
+      # Avoid red carryover on the next non-critical alert.
+      self._critical_bg_mix_filter.x = 0.0
+      critical_mix = 0.0
+    alpha = int(255 * self._alpha_filter.x)
+
+    # Base notification gradient: black top -> transparent black bottom.
+    base_top = rl.Color(0, 0, 0, alpha)
+    base_bottom = rl.Color(0, 0, 0, 0)
+    # Critical notification gradient target: red top -> black bottom, both fully opaque.
+    critical_top = rl.Color(255, 0, 21, alpha)
+    critical_bottom = rl.Color(0, 0, 0, alpha)
+
+    top = rl.Color(
+      int(base_top.r + (critical_top.r - base_top.r) * critical_mix),
+      int(base_top.g + (critical_top.g - base_top.g) * critical_mix),
+      int(base_top.b + (critical_top.b - base_top.b) * critical_mix),
+      int(base_top.a + (critical_top.a - base_top.a) * critical_mix),
+    )
+    bottom = rl.Color(
+      int(base_bottom.r + (critical_bottom.r - base_bottom.r) * critical_mix),
+      int(base_bottom.g + (critical_bottom.g - base_bottom.g) * critical_mix),
+      int(base_bottom.b + (critical_bottom.b - base_bottom.b) * critical_mix),
+      int(base_bottom.a + (critical_bottom.a - base_bottom.a) * critical_mix),
+    )
+
+    # Critical background inherits the bar cadence:
+    # - SmoothWarning ON: breathing cadence
+    # - SmoothWarning OFF: steady on/off cadence
+    if critical_active and critical_mix > 0.0 and ui_state.params.get_bool("SmoothWarning"):
+      if not self._critical_prev_active:
+        self._critical_alert_started_at = time.monotonic()
+        self._critical_pulse_phase = 0.0
+
+      elapsed = time.monotonic() - self._critical_alert_started_at
+      if elapsed < CRITICAL_PULSE_START_DELAY:
+        # Let red gradient settle in before pulse cadence starts.
+        target_pulse = 1.0
+      else:
+        dt = 1 / gui_app.target_fps
+        self._critical_pulse_phase = (self._critical_pulse_phase + dt / RED_BLINK_CYCLE) % 1.0
+        target_pulse = 0.5 * (1.0 + math.cos(self._critical_pulse_phase * 2.0 * math.pi))
+
+      pulse = self._critical_pulse_filter.update(target_pulse)
+      top = rl.Color(int(top.r * pulse), int(top.g * pulse), int(top.b * pulse), top.a)
+    else:
+      self._critical_pulse_filter.x = 1.0
+
+    self._critical_prev_active = critical_active
+
+    rl.draw_rectangle_gradient_v(int(self._rect.x), int(self._rect.y), int(self._rect.width), int(bg_height), top, bottom)
 
   def _draw_text(self, alert: Alert, alert_layout: AlertLayout) -> None:
     icon_side = alert_layout.icon.side if alert_layout.icon is not None else None

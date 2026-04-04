@@ -109,6 +109,7 @@ class HudRenderer(Widget):
 
     self._can_draw_top_icons = True
     self._show_wheel_critical = False
+    self._hide_lower_hud = False
 
     self._font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
     self._font_medium: rl.Font = gui_app.font(FontWeight.MEDIUM)
@@ -134,6 +135,10 @@ class HudRenderer(Widget):
   def set_can_draw_top_icons(self, can_draw_top_icons: bool):
     """Set whether to draw the top part of the HUD."""
     self._can_draw_top_icons = can_draw_top_icons
+
+  def set_hide_lower_hud(self, hide_lower_hud: bool):
+    """Hide lower HUD elements (wheel + torque bar) for critical alerts."""
+    self._hide_lower_hud = hide_lower_hud
 
   def drawing_top_icons(self) -> bool:
     # whether we're drawing any top icons currently
@@ -171,13 +176,14 @@ class HudRenderer(Widget):
 
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
-
-    self._torque_bar.render(rect)
+    if not self._hide_lower_hud:
+      self._torque_bar.render(rect)
 
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
-    self._draw_steering_wheel(rect)
+    if not self._hide_lower_hud:
+      self._draw_steering_wheel(rect)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel

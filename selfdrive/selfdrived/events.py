@@ -525,7 +525,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "Pay Attention",
       "Driver Distracted",
       AlertStatus.userPrompt, AlertSize.mid,
-      Priority.MID, VisualAlert.steerRequired, AudibleAlert.promptDistracted, .1),
+      Priority.MID, VisualAlert.steerRequired, AudibleAlert.prompt, .1),
   },
 
   EventName.driverDistracted: {
@@ -1044,7 +1044,7 @@ if HARDWARE.get_device_type() == 'mici':
         "Pay Attention",
         "Driver Distracted",
         AlertStatus.userPrompt, AlertSize.mid,
-        Priority.MID, VisualAlert.steerRequired, AudibleAlert.promptDistracted, 1),
+        Priority.MID, VisualAlert.steerRequired, AudibleAlert.prompt, 1),
     },
     EventName.resumeRequired: {
       ET.WARNING: Alert(

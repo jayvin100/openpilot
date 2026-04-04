@@ -15,7 +15,12 @@ BLINK_ON_1 = 0.12
 BLINK_OFF_2 = 0.12
 BLINK_ON_2 = 0.6
 BLINK_CYCLE = BLINK_OFF_1 + BLINK_ON_1 + BLINK_OFF_2 + BLINK_ON_2
-BLINK_DIM_ALPHA = 0.2
+RED_BLINK_ON = 0.28
+RED_BLINK_OFF = 0.28
+RED_BLINK_CYCLE = RED_BLINK_ON + RED_BLINK_OFF
+SMOOTH_WARNING_START_SPEED = 0.5  # relative to red cadence
+SMOOTH_WARNING_ACCEL_DURATION = 6.0  # seconds to reach max cadence
+BLINK_DIM_ALPHA = 0.15
 BLINK_ALPHA_RC = 0.035
 # Test override to match alert icon test mode in alert_renderer.py.
 # When True, lane-change events also trigger the orange confidence bar.
@@ -24,6 +29,8 @@ LEFT_BLINDSPOT_SHIFT = 60
 RIGHT_DOT_EXIT_RC = 0.06
 RIGHT_DOT_EXIT_PIXELS = 14
 ORANGE_BAR_WIDTH = 48  # Match normal confidence ball diameter (2 * 24)
+ALERT_COLOR_MIX_RC = 0.08
+BALL_ANIM_RC = 0.04
 
 
 def draw_circle_gradient(center_x: float, center_y: float, radius: int,
@@ -47,9 +54,15 @@ class ConfidenceBall(Widget):
     self._confidence_filter = FirstOrderFilter(-0.5, 0.5, 1 / gui_app.target_fps)
     self._alert_morph_filter = FirstOrderFilter(0.0, MORPH_RC, 1 / gui_app.target_fps)
     self._blink_alpha_filter = FirstOrderFilter(1.0, BLINK_ALPHA_RC, 1 / gui_app.target_fps)
+    self._ball_alpha_filter = FirstOrderFilter(1.0, BALL_ANIM_RC, 1 / gui_app.target_fps)
+    self._alert_color_mix_filter = FirstOrderFilter(0.0, ALERT_COLOR_MIX_RC, 1 / gui_app.target_fps)
     self._right_dot_presence_filter = FirstOrderFilter(1.0, RIGHT_DOT_EXIT_RC, 1 / gui_app.target_fps)
     self._orange_alert_started_at = -1.0
     self._orange_alert_prev_active = False
+    self._orange_breath_phase = 0.0
+    self._ball_anim_started_at = rl.get_time()
+    self._ball_breath_phase = 0.0
+    self._ball_anim_prev_active = False
 
   def update_filter(self, value: float):
     self._confidence_filter.update(value)
@@ -74,6 +87,21 @@ class ConfidenceBall(Widget):
 
     return False
 
+  def _is_red_alert_active(self) -> bool:
+    ss = ui_state.sm['selfdriveState']
+    return ss.alertSize != log.SelfdriveState.AlertSize.none and ss.alertStatus == log.SelfdriveState.AlertStatus.critical
+
+  def _is_alert_bar_active(self) -> bool:
+    return self._is_orange_alert_active() or self._is_red_alert_active()
+
+  def _is_first_pay_attention_warning_active(self) -> bool:
+    """First level DM warning: 'Pay Attention' pre-warning state."""
+    ss = ui_state.sm['selfdriveState']
+    if ss.alertSize == log.SelfdriveState.AlertSize.none:
+      return False
+    event_name = ss.alertType.split('/')[0] if ss.alertType else ''
+    return event_name == 'preDriverDistracted'
+
   def _is_left_blindspot_alert_active(self) -> bool:
     ss = ui_state.sm['selfdriveState']
     if ss.alertSize == log.SelfdriveState.AlertSize.none:
@@ -95,6 +123,17 @@ class ConfidenceBall(Widget):
     if elapsed < BLINK_GROW_DELAY:
       return 1.0
 
+    # Alternate animation mode: breathing pulse that accelerates over time.
+    if ui_state.params.get_bool("SmoothWarning"):
+      post_delay_elapsed = elapsed - BLINK_GROW_DELAY
+      progress = min(max(post_delay_elapsed / SMOOTH_WARNING_ACCEL_DURATION, 0.0), 1.0)
+      start_cycle = RED_BLINK_CYCLE / SMOOTH_WARNING_START_SPEED
+      current_cycle = self._lerp(start_cycle, RED_BLINK_CYCLE, progress)
+      dt = 1 / gui_app.target_fps
+      self._orange_breath_phase = (self._orange_breath_phase + dt / max(current_cycle, 1e-3)) % 1.0
+      wave = 0.5 * (1.0 + math.cos(self._orange_breath_phase * 2.0 * math.pi))
+      return BLINK_DIM_ALPHA + (1.0 - BLINK_DIM_ALPHA) * wave
+
     phase = (elapsed - BLINK_GROW_DELAY) % BLINK_CYCLE
     if phase < BLINK_OFF_1:
       return BLINK_DIM_ALPHA
@@ -103,6 +142,38 @@ class ConfidenceBall(Widget):
     if phase < BLINK_OFF_1 + BLINK_ON_1 + BLINK_OFF_2:
       return BLINK_DIM_ALPHA
     return 1.0
+
+  def _red_blink_target_alpha(self) -> float:
+    """Default (non-smooth) red cadence for the side bar."""
+    if self._orange_alert_started_at < 0:
+      return 1.0
+
+    elapsed = rl.get_time() - self._orange_alert_started_at
+    if elapsed < BLINK_GROW_DELAY:
+      return 1.0
+
+    phase = (elapsed - BLINK_GROW_DELAY) % RED_BLINK_CYCLE
+    return 1.0 if phase < RED_BLINK_ON else BLINK_DIM_ALPHA
+
+  def _ball_blink_target_alpha(self) -> float:
+    """Default-mode confidence ball cadence: same pattern as orange alert."""
+    elapsed = rl.get_time() - self._ball_anim_started_at
+    phase = elapsed % BLINK_CYCLE
+    if phase < BLINK_OFF_1:
+      return BLINK_DIM_ALPHA
+    if phase < BLINK_OFF_1 + BLINK_ON_1:
+      return 1.0
+    if phase < BLINK_OFF_1 + BLINK_ON_1 + BLINK_OFF_2:
+      return BLINK_DIM_ALPHA
+    return 1.0
+
+  def _ball_breath_target_alpha(self) -> float:
+    """Smooth-mode confidence ball cadence: breathe at orange starting speed."""
+    start_cycle = RED_BLINK_CYCLE / SMOOTH_WARNING_START_SPEED
+    dt = 1 / gui_app.target_fps
+    self._ball_breath_phase = (self._ball_breath_phase + dt / max(start_cycle, 1e-3)) % 1.0
+    wave = 0.5 * (1.0 + math.cos(self._ball_breath_phase * 2.0 * math.pi))
+    return BLINK_DIM_ALPHA + (1.0 - BLINK_DIM_ALPHA) * wave
 
   @staticmethod
   def _lerp(a: float, b: float, t: float) -> float:
@@ -201,18 +272,52 @@ class ConfidenceBall(Widget):
                                                         (1 - max(ui_state.sm['modelV2'].meta.disengagePredictions.steerOverrideProbs or [1])))
 
     orange_active = self._is_orange_alert_active()
+    red_active = self._is_red_alert_active()
+    alert_active = orange_active or red_active
     left_blindspot_active = self._is_left_blindspot_alert_active()
-    if orange_active and not self._orange_alert_prev_active:
+    if alert_active and not self._orange_alert_prev_active:
       self._orange_alert_started_at = rl.get_time()
-    elif not orange_active:
+      self._orange_breath_phase = 0.0
+    elif not alert_active:
       self._orange_alert_started_at = -1.0
-    self._orange_alert_prev_active = orange_active
-    self._alert_morph_filter.update(1.0 if orange_active else 0.0)
-    target_alpha = self._orange_blink_target_alpha() if orange_active else 1.0
+      self._orange_breath_phase = 0.0
+    self._orange_alert_prev_active = alert_active
+    self._alert_morph_filter.update(1.0 if alert_active else 0.0)
+    if red_active:
+      if ui_state.params.get_bool("SmoothWarning"):
+        # Smooth mode: keep red side bar solid; cadence is on background.
+        target_alpha = 1.0
+      else:
+        # Non-smooth mode: red cadence stays on side bar.
+        target_alpha = self._red_blink_target_alpha()
+    elif orange_active:
+      target_alpha = self._orange_blink_target_alpha()
+    else:
+      target_alpha = 1.0
     self._blink_alpha_filter.update(target_alpha)
+    if alert_active:
+      self._alert_color_mix_filter.update(1.0 if red_active else 0.0)
+    else:
+      # Reset immediately when no alert bar is active to prevent red tint carryover.
+      self._alert_color_mix_filter.x = 0.0
+
+    # Animate the regular confidence ball ONLY during first-level "Pay Attention" warning.
+    ball_anim_active = (not alert_active) and self._is_first_pay_attention_warning_active()
+    if ball_anim_active and not self._ball_anim_prev_active:
+      self._ball_anim_started_at = rl.get_time()
+      self._ball_breath_phase = 0.0
+    self._ball_anim_prev_active = ball_anim_active
+
+    if ball_anim_active:
+      if ui_state.params.get_bool("SmoothWarning"):
+        self._ball_alpha_filter.update(self._ball_breath_target_alpha())
+      else:
+        self._ball_alpha_filter.update(self._ball_blink_target_alpha())
+    else:
+      self._ball_alpha_filter.update(1.0)
     # Hide the base confidence dot whenever the orange alert bar is active,
     # so blink dim phases never reveal the dot underneath.
-    self._right_dot_presence_filter.update(0.0 if orange_active else 1.0)
+    self._right_dot_presence_filter.update(0.0 if alert_active else 1.0)
 
   def _render(self, _):
     content_rect = rl.Rectangle(
@@ -226,7 +331,7 @@ class ConfidenceBall(Widget):
     dot_height = (1 - self._confidence_filter.x) * (content_rect.height - 2 * status_dot_radius) + status_dot_radius
     dot_height = self._rect.y + dot_height
     top_dot_color, bottom_dot_color = self._get_regular_dot_colors()
-    orange_active = self._is_orange_alert_active()
+    alert_active = self._is_alert_bar_active()
     left_blindspot_active = self._is_left_blindspot_alert_active()
 
     # Right confidence dot with a small out-animation during left-side blindspot alerts.
@@ -238,9 +343,10 @@ class ConfidenceBall(Widget):
       right_exit_offset += (1.0 - right_presence) * LEFT_BLINDSPOT_SHIFT
     right_dot_center_x = content_rect.x + content_rect.width - status_dot_radius + right_exit_offset
     if right_presence > 0.01:
+      ball_alpha = self._ball_alpha_filter.x if not alert_active else 1.0
       draw_circle_gradient(right_dot_center_x, dot_height, status_dot_radius,
-                           self._with_alpha(top_dot_color, right_presence),
-                           self._with_alpha(bottom_dot_color, right_presence))
+                           self._with_alpha(top_dot_color, right_presence * ball_alpha),
+                           self._with_alpha(bottom_dot_color, right_presence * ball_alpha))
 
     morph = self._alert_morph_filter.x
     if morph < 0.01:
@@ -248,6 +354,11 @@ class ConfidenceBall(Widget):
 
     orange_top = rl.Color(255, 200, 0, 255)
     orange_bottom = rl.Color(255, 115, 0, 255)
+    red_top = rl.Color(255, 0, 21, 255)
+    red_bottom = rl.Color(255, 0, 89, 255)
+    alert_color_mix = self._alert_color_mix_filter.x
+    alert_top = self._lerp_color(orange_top, red_top, alert_color_mix)
+    alert_bottom = self._lerp_color(orange_bottom, red_bottom, alert_color_mix)
 
     dot_d = status_dot_radius * 2
     if left_blindspot_active:
@@ -265,9 +376,9 @@ class ConfidenceBall(Widget):
     y = self._lerp(dot_y, bar_y, morph)
     w = self._lerp(dot_d, bar_w, morph)
     h = self._lerp(dot_d, bar_h, morph)
-    top_color = self._lerp_color(top_dot_color, orange_top, morph)
-    bottom_color = self._lerp_color(bottom_dot_color, orange_bottom, morph)
-    blink_alpha = self._blink_alpha_filter.x if orange_active else 1.0
+    top_color = self._lerp_color(top_dot_color, alert_top, morph)
+    bottom_color = self._lerp_color(bottom_dot_color, alert_bottom, morph)
+    blink_alpha = self._blink_alpha_filter.x if alert_active else 1.0
     top_color = rl.Color(top_color.r, top_color.g, top_color.b, int(top_color.a * blink_alpha))
     bottom_color = rl.Color(bottom_color.r, bottom_color.g, bottom_color.b, int(bottom_color.a * blink_alpha))
     self._draw_gradient_capsule(x, y, w, h, top_color, bottom_color)
