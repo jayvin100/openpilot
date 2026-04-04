@@ -168,7 +168,8 @@ def ui_thread(addr):
     else:
       angle_steers_k = np.inf
 
-    plot_arr[:-1] = plot_arr[1:]
+    if sm.updated['carState']:
+      plot_arr[:-1] = plot_arr[1:]
     plot_arr[-1, name_to_arr_idx['angle_steers']] = sm['carState'].steeringAngleDeg
     plot_arr[-1, name_to_arr_idx['angle_steers_des']] = sm['carControl'].actuators.steeringAngleDeg
     plot_arr[-1, name_to_arr_idx['angle_steers_k']] = angle_steers_k
