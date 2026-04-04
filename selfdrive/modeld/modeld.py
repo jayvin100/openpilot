@@ -165,11 +165,15 @@ class ModelState:
 
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
 
-    self.numpy_inputs = {k: np.zeros(self.policy_input_shapes[k], dtype=np.float32) for k in self.policy_input_shapes}
+    self.numpy_inputs = {k: np.zeros(self.policy_input_shapes[k], dtype=np.float32) for k in ['desire_pulse', 'traffic_convention']}
     self.full_input_queues = InputQueues(ModelConstants.MODEL_CONTEXT_FREQ, ModelConstants.MODEL_RUN_FREQ, ModelConstants.N_FRAMES)
     for k in ['desire_pulse']:
       self.full_input_queues.update_dtypes_and_shapes({k: self.numpy_inputs[k].dtype}, {k: self.numpy_inputs[k].shape})
     self.full_input_queues.reset()
+
+    self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
+    fb = self.policy_input_shapes['features_buffer']
+    self.features_queue = Tensor.zeros(fb[0], fb[1] * self.frame_skip, fb[2]).contiguous().realize()
 
     self.img_queues = {'img': Tensor.zeros(IMG_QUEUE_SHAPE, dtype='uint8').contiguous().realize(),
                        'big_img': Tensor.zeros(IMG_QUEUE_SHAPE, dtype='uint8').contiguous().realize()}
@@ -204,21 +208,22 @@ class ModelState:
       self.full_frames[key] = self._blob_cache[cache_key]
       self.transforms_np[key][:,:] = transforms[key][:,:]
 
-    # TODO cleanup
     self.full_input_queues.enqueue({'desire_pulse': new_desire})
     self.numpy_inputs['desire_pulse'][:] = self.full_input_queues.get('desire_pulse')['desire_pulse']
     self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
 
-    vision_output, off_policy_output, on_policy_output = self.run_policy(
+    vision_output, on_policy_output, off_policy_output = self.run_policy(
       self.img_queues['img'], self.full_frames['img'], self.transforms['img'],
       self.img_queues['big_img'], self.full_frames['big_img'], self.transforms['big_img'],
-      self.policy_inputs
+      self.features_queue, self.policy_inputs
     )
 
-    # TODO cleanup
-    vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(vision_output.uop.base.buffer.numpy().flatten(), self.vision_output_slices)) # TODO do we still need the weird numpy?
-    policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(on_policy_output.uop.base.buffer.numpy().flatten(), self.policy_output_slices))
-    off_policy_outputs_dict = self.parser.parse_off_policy_outputs(self.slice_outputs(off_policy_output.uop.base.buffer.numpy(), self.off_policy_output_slices))
+    vision_output = vision_output.uop.base.buffer.numpy().flatten()
+    on_policy_output = on_policy_output.uop.base.buffer.numpy().flatten()
+    off_policy_output = off_policy_output.uop.base.buffer.numpy()
+    vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(vision_output, self.vision_output_slices))
+    policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(on_policy_output, self.policy_output_slices))
+    off_policy_outputs_dict = self.parser.parse_off_policy_outputs(self.slice_outputs(off_policy_output, self.off_policy_output_slices))
     off_policy_outputs_dict.pop('plan')
     combined_outputs_dict = {**vision_outputs_dict, **off_policy_outputs_dict, **policy_outputs_dict}
 

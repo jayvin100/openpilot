@@ -124,36 +124,70 @@ def make_warp_dm(cam_w, cam_h, dm_w, dm_h):
   return warp_dm
 
 
-def make_run_policy(cam_w, cam_h):
-  def run_policy():
-    pass
+def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, cam_h,
+                    vision_features_slice, frame_skip):
+  model_w, model_h = MEDMODEL_INPUT_SIZE
+  frame_prepare = make_frame_prepare(cam_w, cam_h, model_w, model_h)
+  update_both_imgs = make_update_both_imgs(frame_prepare, model_w, model_h)
+
+  def run_policy(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
+                 feat_q, policy_inputs):
+    img, big_img = update_both_imgs(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm)
+
+    vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
+
+    feat_q.assign(feat_q[:, 1:].cat(vision_out[:, vision_features_slice].reshape(1, 1, -1), dim=1).contiguous())
+    feat_buf = feat_q[:, frame_skip - 1::frame_skip]
+
+    inputs = {k: v.to(Device.DEFAULT) for k, v in policy_inputs.items()}
+    inputs['features_buffer'] = feat_buf
+    on_policy_out = next(iter(on_policy_runner(inputs).values())).cast('float32')
+    off_policy_out = next(iter(off_policy_runner(inputs).values())).cast('float32')
+
+    return vision_out, on_policy_out, off_policy_out
   return run_policy
 
 
 def compile_modeld(cam_w, cam_h):
-  model_w, model_h = MEDMODEL_INPUT_SIZE
+  from tinygrad.nn.onnx import OnnxRunner
+  from openpilot.selfdrive.modeld.constants import ModelConstants
+
   _, _, _, yuv_size = get_nv12_info(cam_w, cam_h)
+  print(f"Compiling combined policy JIT for {cam_w}x{cam_h}...")
 
-  print(f"Compiling modeld warp for {cam_w}x{cam_h}...")
+  vision_runner = OnnxRunner(MODELS_DIR / 'driving_vision.onnx')
+  on_policy_runner = OnnxRunner(MODELS_DIR / 'driving_on_policy.onnx')
+  off_policy_runner = OnnxRunner(MODELS_DIR / 'driving_off_policy.onnx')
 
-  frame_prepare = make_frame_prepare(cam_w, cam_h, model_w, model_h)
-  update_both_imgs = make_update_both_imgs(frame_prepare, model_w, model_h)
-  update_img_jit = TinyJit(update_both_imgs, prune=True)
+  with open(MODELS_DIR / 'driving_vision_metadata.pkl', 'rb') as f:
+    vision_features_slice = pickle.load(f)['output_slices']['hidden_state']
+  with open(MODELS_DIR / 'driving_on_policy_metadata.pkl', 'rb') as f:
+    policy_input_shapes = pickle.load(f)['input_shapes']
 
-  full_buffer = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()
-  big_full_buffer = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()
+  frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
+
+  _run = make_run_policy(vision_runner, on_policy_runner, off_policy_runner,
+                         cam_w, cam_h, vision_features_slice, frame_skip)
+  run_policy_jit = TinyJit(_run, prune=True)
+
+  # warmup inputs
+  img_buf = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()
+  big_img_buf = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()
+  fb = policy_input_shapes['features_buffer']
+  feat_q = Tensor.zeros(fb[0], fb[1] * frame_skip, fb[2]).contiguous().realize()
+  numpy_inputs = {k: np.zeros(policy_input_shapes[k], dtype=np.float32) for k in ['desire_pulse', 'traffic_convention']}
+  policy_inputs = {k: Tensor(v, device='NPY').realize() for k, v in numpy_inputs.items()}
+  tfm = Tensor(np.zeros((3, 3), dtype=np.float32), device='NPY').realize()
+  big_tfm = Tensor(np.zeros((3, 3), dtype=np.float32), device='NPY').realize()
+
   for i in range(10):
-    img_inputs = [full_buffer,
-                  Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize(),
-                  Tensor(Tensor.randn(3, 3).mul(8).realize().numpy(), device='NPY')]
-    big_img_inputs = [big_full_buffer,
-                      Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize(),
-                      Tensor(Tensor.randn(3, 3).mul(8).realize().numpy(), device='NPY')]
-    inputs = img_inputs + big_img_inputs
+    frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
+    big_frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
     Device.default.synchronize()
 
     st = time.perf_counter()
-    _ = update_img_jit(*inputs)
+    outs = run_policy_jit(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
+                          feat_q, policy_inputs)
     mt = time.perf_counter()
     Device.default.synchronize()
     et = time.perf_counter()
@@ -161,11 +195,11 @@ def compile_modeld(cam_w, cam_h):
 
   pkl_path = policy_pkl_path(cam_w, cam_h)
   with open(pkl_path, "wb") as f:
-    pickle.dump(update_img_jit, f)
+    pickle.dump(run_policy_jit, f)
   print(f"  Saved to {pkl_path}")
 
   jit = pickle.load(open(pkl_path, "rb"))
-  jit(*inputs)
+  jit(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm, feat_q, policy_inputs)
 
 
 def compile_dm_warp(cam_w, cam_h):
@@ -196,7 +230,7 @@ def compile_dm_warp(cam_w, cam_h):
 
 def run_and_save_pickle():
   for cam_w, cam_h in CAMERA_CONFIGS:
-    compile_modeld_warp(cam_w, cam_h)
+    compile_modeld(cam_w, cam_h)
     compile_dm_warp(cam_w, cam_h)
 
 
