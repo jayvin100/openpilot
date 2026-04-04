@@ -25,7 +25,7 @@ UV_SCALE_MATRIX_INV = np.linalg.inv(UV_SCALE_MATRIX)
 IMG_BUFFER_SHAPE = (30, MEDMODEL_INPUT_SIZE[1] // 2, MEDMODEL_INPUT_SIZE[0] // 2)
 
 
-def warp_pkl_path(w, h):
+def policy_pkl_path(w, h):
   return MODELS_DIR / f'warp_{w}x{h}_tinygrad.pkl'
 
 
@@ -124,7 +124,13 @@ def make_warp_dm(cam_w, cam_h, dm_w, dm_h):
   return warp_dm
 
 
-def compile_modeld_warp(cam_w, cam_h):
+def make_run_policy(cam_w, cam_h):
+  def run_policy():
+    pass
+  return run_policy
+
+
+def compile_modeld(cam_w, cam_h):
   model_w, model_h = MEDMODEL_INPUT_SIZE
   _, _, _, yuv_size = get_nv12_info(cam_w, cam_h)
 
@@ -153,7 +159,7 @@ def compile_modeld_warp(cam_w, cam_h):
     et = time.perf_counter()
     print(f"  [{i+1}/10] enqueue {(mt-st)*1e3:6.2f} ms -- total {(et-st)*1e3:6.2f} ms")
 
-  pkl_path = warp_pkl_path(cam_w, cam_h)
+  pkl_path = policy_pkl_path(cam_w, cam_h)
   with open(pkl_path, "wb") as f:
     pickle.dump(update_img_jit, f)
   print(f"  Saved to {pkl_path}")
