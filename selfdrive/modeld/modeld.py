@@ -140,9 +140,9 @@ class InputQueues:
           out[k] = self.q[k][:, idxs]
       return out
 
+
+
 class ModelState:
-  inputs: dict[str, np.ndarray]
-  output: np.ndarray
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
   def __init__(self, cam_w: int, cam_h: int):
@@ -211,7 +211,6 @@ class ModelState:
       if cache_key not in self._blob_cache:
         self._blob_cache[cache_key] = Tensor.from_blob(ptr, (yuv_size,), dtype='uint8')
       self.full_frames[key] = self._blob_cache[cache_key]
-    for key in bufs.keys():
       self.transforms_np[key][:,:] = transforms[key][:,:]
 
     out = self.update_imgs(self.img_queues['img'], self.full_frames['img'], self.transforms['img'],
