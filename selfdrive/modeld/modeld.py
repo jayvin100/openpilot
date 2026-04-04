@@ -145,7 +145,7 @@ class ModelState:
   output: np.ndarray
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
-  def __init__(self):
+  def __init__(self, cam_w: int, cam_h: int):
     with open(VISION_METADATA_PATH, 'rb') as f:
       vision_metadata = pickle.load(f)
       self.vision_input_shapes =  vision_metadata['input_shapes']
@@ -185,8 +185,10 @@ class ModelState:
     self.policy_output = np.zeros(policy_output_size, dtype=np.float32)
     self.off_policy_output = np.zeros(off_policy_output_size, dtype=np.float32)
     self.parser = Parser()
-    self.frame_buf_params : dict[str, tuple[int, int, int, int]] = {}
-    self.update_imgs = None
+    self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in self.img_queues}
+    warp_path = MODELS_DIR / f'warp_{cam_w}x{cam_h}_tinygrad.pkl'
+    with open(warp_path, "rb") as f:
+      self.update_imgs = pickle.load(f)
     self.vision_run = pickle.loads(read_file_chunked(str(VISION_PKL_PATH)))
     self.policy_run = pickle.loads(read_file_chunked(str(ON_POLICY_PKL_PATH)))
     self.off_policy_run = pickle.loads(read_file_chunked(str(OFF_POLICY_PKL_PATH)))
@@ -201,14 +203,6 @@ class ModelState:
     inputs['desire_pulse'][0] = 0
     new_desire = np.where(inputs['desire_pulse'] - self.prev_desire > .99, inputs['desire_pulse'], 0)
     self.prev_desire[:] = inputs['desire_pulse']
-    if self.update_imgs is None:
-      for key in bufs.keys():
-        w, h = bufs[key].width, bufs[key].height
-        self.frame_buf_params[key] = get_nv12_info(w, h)
-      warp_path = MODELS_DIR / f'warp_{w}x{h}_tinygrad.pkl'
-      with open(warp_path, "rb") as f:
-        self.update_imgs = pickle.load(f)
-
     for key in bufs.keys():
       ptr = bufs[key].data.ctypes.data
       yuv_size = self.frame_buf_params[key][3]
@@ -260,11 +254,6 @@ def main(demo=False):
     # also need to move the aux USB interrupts for good timings
     config_realtime_process(7, 54)
 
-  st = time.monotonic()
-  cloudlog.warning("loading model")
-  model = ModelState()
-  cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
-
   # visionipc clients
   while True:
     available_streams = VisionIpcClient.available_streams("camerad", block=False)
@@ -287,6 +276,11 @@ def main(demo=False):
   cloudlog.warning(f"connected main cam with buffer size: {vipc_client_main.buffer_len} ({vipc_client_main.width} x {vipc_client_main.height})")
   if use_extra_client:
     cloudlog.warning(f"connected extra cam with buffer size: {vipc_client_extra.buffer_len} ({vipc_client_extra.width} x {vipc_client_extra.height})")
+
+  st = time.monotonic()
+  cloudlog.warning("loading model")
+  model = ModelState(vipc_client_main.width, vipc_client_main.height)
+  cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 
   # messaging
   pm = PubMaster(["modelV2", "drivingModelData", "cameraOdometry"])
