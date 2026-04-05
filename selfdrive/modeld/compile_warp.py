@@ -134,15 +134,15 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
                  feat_q, policy_inputs):
     img, big_img = update_both_imgs(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm)
 
-    vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
+    vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32').contiguous().realize()
 
     feat_q.assign(feat_q[:, 1:].cat(vision_out[:, vision_features_slice].reshape(1, 1, -1), dim=1).contiguous())
-    feat_buf = feat_q[:, frame_skip - 1::frame_skip]
+    feat_buf = feat_q[:, frame_skip - 1::frame_skip].contiguous().realize()
 
     inputs = {k: v.to(Device.DEFAULT) for k, v in policy_inputs.items()}
     inputs['features_buffer'] = feat_buf
-    on_policy_out = next(iter(on_policy_runner(inputs).values())).cast('float32')
-    off_policy_out = next(iter(off_policy_runner(inputs).values())).cast('float32')
+    on_policy_out = next(iter(on_policy_runner(inputs).values())).cast('float32').contiguous().realize()
+    off_policy_out = next(iter(off_policy_runner(inputs).values())).cast('float32').contiguous().realize()
 
     return vision_out, on_policy_out, off_policy_out
   return run_policy
