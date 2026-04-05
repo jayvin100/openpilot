@@ -186,8 +186,9 @@ def compile_modeld(cam_w, cam_h):
     Device.default.synchronize()
 
     st = time.perf_counter()
-    outs = run_policy_jit(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
-                          feat_q, policy_inputs)
+    with Context(OPENPILOT_HACKS=1):
+      outs = run_policy_jit(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
+                            feat_q, policy_inputs)
     mt = time.perf_counter()
     Device.default.synchronize()
     et = time.perf_counter()
