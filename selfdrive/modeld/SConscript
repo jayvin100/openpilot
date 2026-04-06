@@ -64,11 +64,11 @@ def tg_compile(flags, model_name):
   )
   def do_chunk(target, source, env):
     chunk_file(pkl, chunk_targets)
-  return lenv.Command(
-    chunk_targets,
-    compile_node,
-    do_chunk,
-  )
+  # return lenv.Command(
+  #   chunk_targets,
+  #   compile_node,
+  #   do_chunk,
+  # )
 
 # Compile dmonitoring model (driving models are in the combined policy JIT)
 tg_compile(tg_flags, 'dmonitoring_model')
