@@ -4,7 +4,7 @@ import time
 import wave
 
 
-from cereal import car, messaging
+from cereal import car, log, messaging
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import Ratekeeper
@@ -70,6 +70,9 @@ class Soundd:
     self.current_sound_frame = 0
 
     self.selfdrive_timeout_alert = False
+    self._prev_alert_event_name = ""
+    self._pre_distracted_prompt_active = False
+    self._prev_distracted_warning_active = False
 
     self.spl_filter_weighted = FirstOrderFilter(0, 2.5, FILTER_DT, initialized=False)
 
@@ -122,8 +125,55 @@ class Soundd:
 
   def get_audible_alert(self, sm):
     if sm.updated['selfdriveState']:
-      new_alert = sm['selfdriveState'].alertSound.raw
-      self.update_alert(new_alert)
+      ss = sm['selfdriveState']
+      event_name = ss.alertType.split('/')[0] if ss.alertType else ""
+      pre_driver_distracted_from_type = event_name == "preDriverDistracted"
+      prompt_driver_distracted_from_type = event_name == "promptDriverDistracted"
+      pre_driver_distracted_from_events = any(e.name == log.OnroadEvent.EventName.preDriverDistracted for e in sm['onroadEvents'])
+      prompt_driver_distracted_from_events = any(e.name == log.OnroadEvent.EventName.promptDriverDistracted for e in sm['onroadEvents'])
+      # Replay-safe fallback when neither alertType nor onroadEvents are populated.
+      pre_driver_distracted_from_text = (
+        ss.alertText1 == "Pay Attention" and
+        ss.alertText2 == "" and
+        ss.alertStatus == log.SelfdriveState.AlertStatus.normal and
+        ss.alertSize == log.SelfdriveState.AlertSize.small
+      )
+      prompt_driver_distracted_from_text = (
+        ss.alertText1 == "Pay Attention" and
+        ss.alertText2 == "Driver Distracted" and
+        ss.alertStatus == log.SelfdriveState.AlertStatus.userPrompt and
+        ss.alertSize == log.SelfdriveState.AlertSize.mid
+      )
+      pre_driver_distracted_active = (
+        pre_driver_distracted_from_type or
+        pre_driver_distracted_from_events or
+        pre_driver_distracted_from_text
+      )
+      prompt_driver_distracted_active = (
+        prompt_driver_distracted_from_type or
+        prompt_driver_distracted_from_events or
+        prompt_driver_distracted_from_text
+      )
+      distracted_warning_active = pre_driver_distracted_active or prompt_driver_distracted_active
+
+      # One-shot pre-driver-distracted cue:
+      # play prompt.wav once when distracted warning sequence first appears.
+      if distracted_warning_active and not self._prev_distracted_warning_active:
+        self._pre_distracted_prompt_active = True
+        self.update_alert(AudibleAlert.prompt)
+      elif self._pre_distracted_prompt_active:
+        prompt_done = self.current_sound_frame >= len(self.loaded_sounds[AudibleAlert.prompt])
+        if prompt_done:
+          self._pre_distracted_prompt_active = False
+          self.update_alert(ss.alertSound.raw)
+        else:
+          # Keep playing prompt until the one-shot file completes.
+          self.update_alert(AudibleAlert.prompt)
+      else:
+        self.update_alert(ss.alertSound.raw)
+
+      self._prev_alert_event_name = event_name
+      self._prev_distracted_warning_active = distracted_warning_active
     elif check_selfdrive_timeout_alert(sm):
       self.update_alert(AudibleAlert.warningImmediate)
       self.selfdrive_timeout_alert = True
@@ -146,7 +196,7 @@ class Soundd:
     # sounddevice must be imported after forking processes
     import sounddevice as sd
 
-    sm = messaging.SubMaster(['selfdriveState', 'soundPressure'])
+    sm = messaging.SubMaster(['selfdriveState', 'soundPressure', 'onroadEvents'])
 
     with self.get_stream(sd) as stream:
       rk = Ratekeeper(20)
