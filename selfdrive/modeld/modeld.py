@@ -163,9 +163,6 @@ class ModelState:
       self.policy_output_slices = policy_metadata['output_slices']
       # policy_output_size = policy_metadata['output_shapes']['outputs'][1]
 
-    # load JIT pickle before creating any Tensors to avoid UOp UNIQUE counter collisions in the interning cache
-    self.run_policy = pickle.loads(read_file_chunked(str(policy_pkl_path(cam_w, cam_h))))
-
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
 
     self.numpy_inputs = {k: np.zeros(self.policy_input_shapes[k], dtype=np.float32) for k in ['desire_pulse', 'traffic_convention']}
@@ -188,6 +185,11 @@ class ModelState:
 
     self.parser = Parser()
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in self.img_queues}
+    # clear UOp interning cache before loading JIT pickle to avoid UNIQUE counter collisions
+    # (the pickle contains UOps with UNIQUE values starting at 0, same as this process)
+    from tinygrad.uop.ops import UOpMetaClass
+    UOpMetaClass.ucache.clear()
+    self.run_policy = pickle.loads(read_file_chunked(str(policy_pkl_path(cam_w, cam_h))))
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
