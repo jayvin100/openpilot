@@ -25,6 +25,7 @@ from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_value, get_curvature_from_plan
+from openpilot.selfdrive.modeld.action_grid import get_should_stop_from_action_grid
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState
 from openpilot.common.file_chunker import read_file_chunked
@@ -57,6 +58,8 @@ def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.
                                                      plan[:,Plan.ACCELERATION][:,0],
                                                      ModelConstants.T_IDXS,
                                                      action_t=long_action_t)
+    if 'action_grid' in model_output:
+      should_stop = get_should_stop_from_action_grid(model_output['action_grid'][0], long_action_t)
     desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, LONG_SMOOTH_SECONDS)
 
     desired_curvature = get_curvature_from_plan(plan[:,Plan.T_FROM_CURRENT_EULER][:,2],
