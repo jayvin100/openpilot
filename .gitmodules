@@ -1,9 +1,11 @@
 [submodule "panda"]
   path = panda
   url = ../../commaai/panda.git
+  branch = body-v1-update
 [submodule "opendbc"]
   path = opendbc_repo
   url = ../../commaai/opendbc.git
+  branch = body-v1-update
 [submodule "msgq"]
   path = msgq_repo
   url = ../../commaai/msgq.git
