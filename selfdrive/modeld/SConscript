@@ -30,18 +30,18 @@ for model_name in ['driving_vision', 'driving_off_policy', 'driving_on_policy', 
 image_flag = {
      'larch64': 'IMAGE=2',
 }.get(arch, 'IMAGE=0')
-script_files = [File(Dir("#selfdrive/modeld").File("compile_warp.py").abspath)]
-compile_warp_cmd = f'{tg_flags} {image_flag} python3 {Dir("#selfdrive/modeld").abspath}/compile_warp.py '
+script_files = [File(Dir("#selfdrive/modeld").File("compile_modeld.py").abspath)]
+compile_modeld_cmd = f'{tg_flags} {image_flag} python3 {Dir("#selfdrive/modeld").abspath}/compile_modeld.py '
 from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
 driving_onnx_deps = [File(f"models/{m}.onnx").abspath for m in ['driving_vision', 'driving_on_policy', 'driving_off_policy']]
 driving_metadata_deps = [File(f"models/{m}_metadata.pkl").abspath for m in ['driving_vision', 'driving_on_policy']]
-warp_targets = []
+modeld_targets = []
 policy_pkls = []
 for cam in [_ar_ox_fisheye, _os_fisheye]:
   w, h = cam.width, cam.height
-  policy_pkls.append(File(f"models/warp_{w}x{h}_tinygrad.pkl").abspath)
-  warp_targets += [File(f"models/warp_{w}x{h}_tinygrad.pkl").abspath, File(f"models/dm_warp_{w}x{h}_tinygrad.pkl").abspath]
-compile_node = lenv.Command(warp_targets, tinygrad_files + script_files + driving_onnx_deps + driving_metadata_deps + [chunker_file], compile_warp_cmd)
+  policy_pkls.append(File(f"models/driving_{w}x{h}_tinygrad.pkl").abspath)
+  modeld_targets += [File(f"models/driving_{w}x{h}_tinygrad.pkl").abspath, File(f"models/dm_warp_{w}x{h}_tinygrad.pkl").abspath]
+compile_node = lenv.Command(modeld_targets, tinygrad_files + script_files + driving_onnx_deps + driving_metadata_deps + [chunker_file], compile_modeld_cmd)
 
 # chunk the combined policy pkls (they contain model weights)
 for policy_pkl in policy_pkls:
