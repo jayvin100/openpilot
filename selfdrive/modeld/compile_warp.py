@@ -168,7 +168,7 @@ def compile_modeld(cam_w, cam_h):
 
   _run = make_run_policy(vision_runner, on_policy_runner, off_policy_runner,
                          cam_w, cam_h, vision_features_slice, frame_skip)
-  run_policy_jit = TinyJit(_run, prune=False)
+  run_policy_jit = TinyJit(_run, prune=True)
 
   # warmup inputs
   img_buf = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()

@@ -185,6 +185,10 @@ class ModelState:
 
     self.parser = Parser()
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in self.img_queues}
+    # clear UOp interning cache before loading JIT pickle to avoid UNIQUE counter collisions
+    # (the pickle contains UOps with UNIQUE values starting at 0, same as this process)
+    from tinygrad.uop.ops import UOpMetaClass
+    UOpMetaClass.ucache.clear()
     self.run_policy = pickle.loads(read_file_chunked(str(policy_pkl_path(cam_w, cam_h))))
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
