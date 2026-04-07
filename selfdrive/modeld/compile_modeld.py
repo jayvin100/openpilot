@@ -190,7 +190,10 @@ def compile_modeld(cam_w, cam_h):
   _run = make_run_policy(vision_runner, on_policy_runner, off_policy_runner,
                          cam_w, cam_h, vision_features_slice, frame_skip)
   run_policy_jit = TinyJit(_run, prune=True)
-  bufs, _ = make_buffers(vision_input_shapes, policy_input_shapes, frame_skip)
+  bufs, npy = make_buffers(vision_input_shapes, policy_input_shapes, frame_skip)
+
+  for k, v in npy.items():
+    v[:] = np.random.randn(*v.shape).astype(v.dtype)
 
   for i in range(3):
     frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
