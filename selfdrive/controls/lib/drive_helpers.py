@@ -53,8 +53,6 @@ def _quadratic_bins(max_abs: float, n_bins: int) -> np.ndarray:
 
 def _get_stop_probability_from_action_grid(action_grid, t_idxs, action_t):
   probs = np.asarray(action_grid, dtype=np.float32)
-  if probs.ndim != 3 or probs.shape[0] <= ACTION_GRID_ACCEL or len(t_idxs) < probs.shape[1]:
-    return None
 
   accel_bins = _quadratic_bins(ACTION_GRID_MAX_ABS_ACCEL, probs.shape[2])
   stop_probs = probs[ACTION_GRID_ACCEL][:, accel_bins <= 0.0].sum(axis=-1)
@@ -70,6 +68,7 @@ def get_accel_from_plan(speeds, accels, t_idxs, action_t=DT_MDL, vEgoStopping=0.
     a_target = 2 * (v_target - v_now) / (action_t) - a_now
     v_target_1sec = np.interp(action_t + 1.0, t_idxs, speeds)
   else:
+    v_now = 0.0
     v_target = 0.0
     v_target_1sec = 0.0
     a_target = 0.0
@@ -78,8 +77,7 @@ def get_accel_from_plan(speeds, accels, t_idxs, action_t=DT_MDL, vEgoStopping=0.
 
   if action_grid is not None:
     stop_probability = _get_stop_probability_from_action_grid(action_grid, t_idxs, action_t)
-    if stop_probability is not None:
-      should_stop = stop_probability > (ACTION_GRID_STOP_THRESHOLD + ACTION_GRID_STOP_EPS)
+    should_stop = stop_probability > (ACTION_GRID_STOP_THRESHOLD + ACTION_GRID_STOP_EPS) and v_now < vEgoStopping
 
   return a_target, should_stop
 
