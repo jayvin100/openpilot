@@ -145,9 +145,9 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
 
   def run_policy(img_buf, big_img_buf, feat_q, desire_q, desire, traffic_convention, tfm, big_tfm, frame, big_frame):
 
-    with Context(IMAGE=0):
-      img = shift_and_sample(img_buf, frame_prepare(frame, tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
-      big_img = shift_and_sample(big_img_buf, frame_prepare(big_frame, big_tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
+    # with Context(IMAGE=0): TODO check if needed
+    img = shift_and_sample(img_buf, frame_prepare(frame, tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
+    big_img = shift_and_sample(big_img_buf, frame_prepare(big_frame, big_tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
 
     vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
 
@@ -192,30 +192,53 @@ def compile_modeld(cam_w, cam_h):
   _run = make_run_policy(vision_runner, on_policy_runner, off_policy_runner,
                          cam_w, cam_h, vision_features_slice, frame_skip)
   run_policy_jit = TinyJit(_run, prune=True)
-
-  # warmup inputs
   bufs, _ = make_buffers(vision_input_shapes, policy_input_shapes, frame_skip)
 
-  for i in range(10):
+  for i in range(3):
     frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
     big_frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
     Device.default.synchronize()
 
     st = time.perf_counter()
     with Context(OPENPILOT_HACKS=1):
-      outs = run_policy_jit(**bufs, frame=frame, big_frame=big_frame)
+      inputs = {**bufs, 'frame': frame, 'big_frame': big_frame}
+      outs = run_policy_jit(**inputs)
     mt = time.perf_counter()
     Device.default.synchronize()
     et = time.perf_counter()
     print(f"  [{i+1}/10] enqueue {(mt-st)*1e3:6.2f} ms -- total {(et-st)*1e3:6.2f} ms")
 
+    if i == 1:
+      test_val = [np.copy(v.numpy()) for v in outs]
+      test_inputs = {k: Tensor(v.numpy().copy(), device=v.device) for k, v in inputs.items()}
+
   pkl_path = policy_pkl_path(cam_w, cam_h)
   with open(pkl_path, "wb") as f:
     pickle.dump(run_policy_jit, f)
   print(f"  Saved to {pkl_path}")
+  return test_inputs, test_val
 
-  jit = pickle.load(open(pkl_path, "rb"))
-  jit(**bufs, frame=frame, big_frame=big_frame)
+
+def test_vs_compile(run, inputs: dict[str, Tensor], test_val: list[np.ndarray]):
+
+  # run 20 times
+  for i in range(20):
+    st = time.perf_counter()
+    out = run(**inputs)
+    mt = time.perf_counter()
+    val = [v.numpy() for v in out]
+    et = time.perf_counter()
+    print(f"enqueue {(mt-st)*1e3:6.2f} ms -- total run {(et-st)*1e3:6.2f} ms")
+
+    if test_val is not None and i == 0:  # check output matches before buffers get mutated by the jit
+      np.testing.assert_equal(test_val, val)
+
+  # test that changing the numpy changes the model outputs
+  inputs_2x = {k: Tensor(v.numpy()*2, device=v.device) for k,v in inputs.items()}
+  out = run(**inputs_2x)
+  changed_val = [v.numpy() for v in out]
+  assert any(not np.array_equal(a, b) for a, b in zip(val, changed_val)), "changing inputs should change outputs"
+  print('test_vs_compile OK')
 
 
 def compile_dm_warp(cam_w, cam_h):
@@ -246,7 +269,10 @@ def compile_dm_warp(cam_w, cam_h):
 
 def run_and_save_pickle():
   for cam_w, cam_h in CAMERA_CONFIGS:
-    compile_modeld(cam_w, cam_h)
+    inputs, outputs = compile_modeld(cam_w, cam_h)
+    pickle_loaded = pickle.load(open(policy_pkl_path(cam_w, cam_h), "rb"))
+    test_vs_compile(pickle_loaded, inputs, outputs)
+
     compile_dm_warp(cam_w, cam_h)
 
 
