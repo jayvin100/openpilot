@@ -16,6 +16,7 @@ from pathlib import Path
 from cereal.messaging import PubMaster, SubMaster
 from msgq.visionipc import VisionIpcClient, VisionStreamType, VisionBuf
 from opendbc.car.car_helpers import get_demo_car_params
+from openpilot.common.git import get_commit
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -144,6 +145,7 @@ class ModelState:
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
   def __init__(self, cam_w: int, cam_h: int):
+    self.policy_path = policy_pkl_path(cam_w, cam_h)
     with open(VISION_METADATA_PATH, 'rb') as f:
       vision_metadata = pickle.load(f)
       self.vision_input_shapes =  vision_metadata['input_shapes']
@@ -185,9 +187,9 @@ class ModelState:
 
     self.parser = Parser()
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in self.img_queues}
-    with open(policy_pkl_path(cam_w, cam_h), 'rb') as f:
+    with open(self.policy_path, 'rb') as f:
       self.run_policy = pickle.load(f)
-    # self.run_policy = pickle.loads(read_file_chunked(str(policy_pkl_path(cam_w, cam_h))))
+    # self.run_policy = pickle.loads(read_file_chunked(str(self.policy_path)))
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
@@ -268,8 +270,11 @@ def main(demo=False):
     cloudlog.warning(f"connected extra cam with buffer size: {vipc_client_extra.buffer_len} ({vipc_client_extra.width} x {vipc_client_extra.height})")
 
   st = time.monotonic()
-  cloudlog.warning("loading model")
+  commit = get_commit()[:7]
+  cloudlog.warning(f"loading model commit={commit} dev={os.getenv('DEV', '')} tici={TICI} usbgpu={USBGPU}")
   model = ModelState(vipc_client_main.width, vipc_client_main.height)
+  policy_path = model.policy_path
+  cloudlog.warning(f"modeld artifact policy_pkl={policy_path} exists={policy_path.is_file()} size={policy_path.stat().st_size if policy_path.is_file() else 'missing'}")
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 
   # messaging
