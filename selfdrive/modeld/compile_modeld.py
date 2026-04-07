@@ -132,7 +132,9 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
 
   def run_policy(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
                  feat_q, policy_inputs):
-    img, big_img = update_both_imgs(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm)
+
+    with Context(IMAGE=0):
+      img, big_img = update_both_imgs(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm)
 
     vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
 
