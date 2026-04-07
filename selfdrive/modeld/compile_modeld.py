@@ -192,12 +192,12 @@ def compile_modeld(cam_w, cam_h):
   run_policy_jit = TinyJit(_run, prune=True)
   bufs, npy = make_buffers(vision_input_shapes, policy_input_shapes, frame_skip)
 
-  for k, v in npy.items():
-    v[:] = np.random.randn(*v.shape).astype(v.dtype)
 
   for i in range(3):
     frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
     big_frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
+    for v in npy.values():
+      v[:] = np.random.randn(*v.shape).astype(v.dtype)
     Device.default.synchronize()
 
     st = time.perf_counter()
