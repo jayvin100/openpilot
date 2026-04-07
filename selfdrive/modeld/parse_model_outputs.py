@@ -123,7 +123,10 @@ class Parser:
       self.parse_mdn('planplus', outs, in_N=0, out_N=0, out_shape=(ModelConstants.IDX_N, ModelConstants.PLAN_WIDTH))
     self.parse_categorical_crossentropy('desire_state', outs, out_shape=(ModelConstants.DESIRE_PRED_WIDTH,))
     if 'action_grid' in outs:
-      self.parse_categorical_crossentropy('action_grid', outs, out_shape=(ModelConstants.ACTION_GRID_NUM_CHANNELS, ModelConstants.ACTION_GRID_LEN, ModelConstants.ACTION_GRID_WIDTH))
+      self.parse_categorical_crossentropy(
+        'action_grid', outs,
+        out_shape=(ModelConstants.ACTION_GRID_NUM_CHANNELS, ModelConstants.ACTION_GRID_LEN, ModelConstants.ACTION_GRID_WIDTH),
+      )
     return outs
 
   def parse_outputs(self, outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
