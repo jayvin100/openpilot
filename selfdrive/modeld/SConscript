@@ -48,8 +48,7 @@ for policy_pkl in policy_pkls:
   onnx_sizes_sum = sum(os.path.getsize(f) for f in driving_onnx_deps)
   chunk_targets = get_chunk_paths(policy_pkl, 2.0 * onnx_sizes_sum + 10 * 1024 * 1024)
   def do_chunk(target, source, env, pkl=policy_pkl, chunks=chunk_targets):
-    # chunk_file(pkl, chunks)
-    pass
+    chunk_file(pkl, chunks)
   lenv.Command(chunk_targets, compile_node, do_chunk)
 
 def tg_compile(flags, model_name):
