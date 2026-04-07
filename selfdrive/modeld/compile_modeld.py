@@ -22,9 +22,6 @@ CAMERA_CONFIGS = [
 UV_SCALE_MATRIX = np.array([[0.5, 0, 0], [0, 0.5, 0], [0, 0, 1]], dtype=np.float32)
 UV_SCALE_MATRIX_INV = np.linalg.inv(UV_SCALE_MATRIX)
 
-IMG_BUFFER_SHAPE = (5, 6, MEDMODEL_INPUT_SIZE[1] // 2, MEDMODEL_INPUT_SIZE[0] // 2)
-
-
 def policy_pkl_path(w, h):
   return MODELS_DIR / f'driving_{w}x{h}_tinygrad.pkl'
 
@@ -93,6 +90,31 @@ def make_frame_prepare(cam_w, cam_h, model_w, model_h):
   return frame_prepare_tinygrad
 
 
+def make_buffers(vision_input_shapes, policy_input_shapes, frame_skip):
+  img = vision_input_shapes['img']  # (1, 12, 128, 256)
+  n_frames = img[1] // 6
+  img_buf_shape = (frame_skip * (n_frames - 1) + 1, 6, img[2], img[3])
+
+  fb = policy_input_shapes['features_buffer']  # (1, 25, 512)
+  dp = policy_input_shapes['desire_pulse']  # (1, 25, 8)
+  tc = policy_input_shapes['traffic_convention']  # (1, 2)
+
+  npy = {
+    'desire': np.zeros(dp[2], dtype=np.float32),
+    'traffic_convention': np.zeros(tc, dtype=np.float32),
+    'tfm': np.zeros((3, 3), dtype=np.float32),
+    'big_tfm': np.zeros((3, 3), dtype=np.float32),
+  }
+  bufs = {
+    'img_buf': Tensor.zeros(img_buf_shape, dtype='uint8').contiguous().realize(),
+    'big_img_buf': Tensor.zeros(img_buf_shape, dtype='uint8').contiguous().realize(),
+    'feat_q': Tensor.zeros(frame_skip * (fb[1] - 1) + 1, fb[0], fb[2]).contiguous().realize(),
+    'desire_q': Tensor.zeros(frame_skip * dp[1], dp[0], dp[2]).contiguous().realize(),
+    **{k: Tensor(v, device='NPY').realize() for k, v in npy.items()},
+  }
+  return bufs, npy
+
+
 def shift_and_sample(buf, new_val, sample_fn):
   buf.assign(buf[1:].cat(new_val, dim=0).contiguous())
   return sample_fn(buf)
@@ -120,8 +142,7 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
   def sample_desire(buf):
     return buf.reshape(-1, frame_skip, *buf.shape[1:]).max(1).flatten(0, 1).unsqueeze(0)
 
-  def run_policy(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
-                 feat_q, desire_q, desire, traffic_convention):
+  def run_policy(img_buf, big_img_buf, feat_q, desire_q, desire, traffic_convention, tfm, big_tfm, frame, big_frame):
 
     with Context(IMAGE=0):
       img = shift_and_sample(img_buf, frame_prepare(frame, tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
@@ -154,7 +175,9 @@ def compile_modeld(cam_w, cam_h):
   off_policy_runner = OnnxRunner(MODELS_DIR / 'driving_off_policy.onnx')
 
   with open(MODELS_DIR / 'driving_vision_metadata.pkl', 'rb') as f:
-    vision_features_slice = pickle.load(f)['output_slices']['hidden_state']
+    vision_metadata = pickle.load(f)
+    vision_features_slice = vision_metadata['output_slices']['hidden_state']
+    vision_input_shapes = vision_metadata['input_shapes']
   with open(MODELS_DIR / 'driving_on_policy_metadata.pkl', 'rb') as f:
     policy_input_shapes = pickle.load(f)['input_shapes']
 
@@ -165,16 +188,7 @@ def compile_modeld(cam_w, cam_h):
   run_policy_jit = TinyJit(_run, prune=True)
 
   # warmup inputs
-  img_buf = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()
-  big_img_buf = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()
-  fb = policy_input_shapes['features_buffer']  # (1, 25, 512)
-  feat_q = Tensor.zeros(frame_skip * (fb[1] - 1) + 1, fb[0], fb[2]).contiguous().realize()
-  dp = policy_input_shapes['desire_pulse']  # (1, 25, 8)
-  desire_q = Tensor.zeros(frame_skip * dp[1], dp[0], dp[2]).contiguous().realize()
-  desire = Tensor(np.zeros(dp[2], dtype=np.float32), device='NPY').realize()
-  traffic_convention = Tensor(np.zeros(policy_input_shapes['traffic_convention'], dtype=np.float32), device='NPY').realize()
-  tfm = Tensor(np.zeros((3, 3), dtype=np.float32), device='NPY').realize()
-  big_tfm = Tensor(np.zeros((3, 3), dtype=np.float32), device='NPY').realize()
+  bufs, _ = make_buffers(vision_input_shapes, policy_input_shapes, frame_skip)
 
   for i in range(10):
     frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
@@ -183,8 +197,7 @@ def compile_modeld(cam_w, cam_h):
 
     st = time.perf_counter()
     with Context(OPENPILOT_HACKS=1):
-      outs = run_policy_jit(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
-                            feat_q, desire_q, desire, traffic_convention)
+      outs = run_policy_jit(**bufs, frame=frame, big_frame=big_frame)
     mt = time.perf_counter()
     Device.default.synchronize()
     et = time.perf_counter()
@@ -196,7 +209,7 @@ def compile_modeld(cam_w, cam_h):
   print(f"  Saved to {pkl_path}")
 
   jit = pickle.load(open(pkl_path, "rb"))
-  jit(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm, feat_q, desire_q, desire, traffic_convention)
+  jit(**bufs, frame=frame, big_frame=big_frame)
 
 
 def compile_dm_warp(cam_w, cam_h):

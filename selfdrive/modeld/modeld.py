@@ -26,7 +26,7 @@ from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_value, get_curvature_from_plan
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
-from openpilot.selfdrive.modeld.compile_modeld import policy_pkl_path
+from openpilot.selfdrive.modeld.compile_modeld import policy_pkl_path, make_buffers
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState
 from openpilot.common.file_chunker import read_file_chunked
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
@@ -45,8 +45,6 @@ LAT_SMOOTH_SECONDS = 0.0
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 
-IMG_QUEUE_SHAPE = (ModelConstants.MODEL_RUN_FREQ//ModelConstants.MODEL_CONTEXT_FREQ + 1, 6, 128, 256)
-assert IMG_QUEUE_SHAPE[0] == 5
 
 
 def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
@@ -166,25 +164,12 @@ class ModelState:
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
 
     self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
-    fb = self.policy_input_shapes['features_buffer']  # (1, 25, 512)
-    self.features_queue = Tensor.zeros(self.frame_skip * (fb[1] - 1) + 1, fb[0], fb[2]).contiguous().realize()
-    dp = self.policy_input_shapes['desire_pulse']  # (1, 25, 8)
-    self.desire_queue = Tensor.zeros(self.frame_skip * dp[1], dp[0], dp[2]).contiguous().realize()
-    self.desire_np = np.zeros(dp[2], dtype=np.float32)
-    self.desire = Tensor(self.desire_np, device='NPY').realize()
-    tc = self.policy_input_shapes['traffic_convention']  # (1, 2)
-    self.traffic_convention_np = np.zeros(tc, dtype=np.float32)
-    self.traffic_convention = Tensor(self.traffic_convention_np, device='NPY').realize()
-
-    self.img_queues = {'img': Tensor.zeros(IMG_QUEUE_SHAPE, dtype='uint8').contiguous().realize(),
-                       'big_img': Tensor.zeros(IMG_QUEUE_SHAPE, dtype='uint8').contiguous().realize()}
+    self.bufs, self.npy = make_buffers(self.vision_input_shapes, self.policy_input_shapes, self.frame_skip)
     self.full_frames : dict[str, Tensor] = {}
     self._blob_cache : dict[int, Tensor] = {}
-    self.transforms_np = {k: np.zeros((3,3), dtype=np.float32) for k in self.img_queues}
-    self.transforms = {k: Tensor(v, device='NPY').realize() for k, v in self.transforms_np.items()}
 
     self.parser = Parser()
-    self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in self.img_queues}
+    self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
     self.run_policy = pickle.loads(read_file_chunked(str(policy_pkl_path(cam_w, cam_h))))
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
@@ -206,15 +191,14 @@ class ModelState:
       if cache_key not in self._blob_cache:
         self._blob_cache[cache_key] = Tensor.from_blob(ptr, (yuv_size,), dtype='uint8')
       self.full_frames[key] = self._blob_cache[cache_key]
-      self.transforms_np[key][:,:] = transforms[key][:,:]
 
-    self.desire_np[:] = new_desire
-    self.traffic_convention_np[:] = inputs['traffic_convention']
+    self.npy['desire'][:] = new_desire
+    self.npy['traffic_convention'][:] = inputs['traffic_convention']
+    self.npy['tfm'][:,:] = transforms['img'][:,:]
+    self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
 
     vision_output, on_policy_output, off_policy_output = self.run_policy(
-      self.img_queues['img'], self.full_frames['img'], self.transforms['img'],
-      self.img_queues['big_img'], self.full_frames['big_img'], self.transforms['big_img'],
-      self.features_queue, self.desire_queue, self.desire, self.traffic_convention
+      **self.bufs, frame=self.full_frames['img'], big_frame=self.full_frames['big_img']
     )
 
     vision_output = vision_output.uop.base.buffer.numpy().flatten()
