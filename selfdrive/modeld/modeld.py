@@ -165,15 +165,16 @@ class ModelState:
 
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
 
-    self.numpy_inputs = {k: np.zeros(self.policy_input_shapes[k], dtype=np.float32) for k in ['desire_pulse', 'traffic_convention']}
-    self.full_input_queues = InputQueues(ModelConstants.MODEL_CONTEXT_FREQ, ModelConstants.MODEL_RUN_FREQ, ModelConstants.N_FRAMES)
-    for k in ['desire_pulse']:
-      self.full_input_queues.update_dtypes_and_shapes({k: self.numpy_inputs[k].dtype}, {k: self.numpy_inputs[k].shape})
-    self.full_input_queues.reset()
-
     self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
     fb = self.policy_input_shapes['features_buffer']  # (1, 25, 512)
     self.features_queue = Tensor.zeros(self.frame_skip * (fb[1] - 1) + 1, fb[0], fb[2]).contiguous().realize()
+    dp = self.policy_input_shapes['desire_pulse']  # (1, 25, 8)
+    self.desire_queue = Tensor.zeros(self.frame_skip * dp[1], dp[0], dp[2]).contiguous().realize()
+    self.desire_np = np.zeros(dp[2], dtype=np.float32)
+    self.desire = Tensor(self.desire_np, device='NPY').realize()
+    tc = self.policy_input_shapes['traffic_convention']  # (1, 2)
+    self.traffic_convention_np = np.zeros(tc, dtype=np.float32)
+    self.traffic_convention = Tensor(self.traffic_convention_np, device='NPY').realize()
 
     self.img_queues = {'img': Tensor.zeros(IMG_QUEUE_SHAPE, dtype='uint8').contiguous().realize(),
                        'big_img': Tensor.zeros(IMG_QUEUE_SHAPE, dtype='uint8').contiguous().realize()}
@@ -181,7 +182,6 @@ class ModelState:
     self._blob_cache : dict[int, Tensor] = {}
     self.transforms_np = {k: np.zeros((3,3), dtype=np.float32) for k in self.img_queues}
     self.transforms = {k: Tensor(v, device='NPY').realize() for k, v in self.transforms_np.items()}
-    self.policy_inputs = {k: Tensor(v, device='NPY').realize() for k,v in self.numpy_inputs.items()}
 
     self.parser = Parser()
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in self.img_queues}
@@ -208,14 +208,13 @@ class ModelState:
       self.full_frames[key] = self._blob_cache[cache_key]
       self.transforms_np[key][:,:] = transforms[key][:,:]
 
-    self.full_input_queues.enqueue({'desire_pulse': new_desire})
-    self.numpy_inputs['desire_pulse'][:] = self.full_input_queues.get('desire_pulse')['desire_pulse']
-    self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
+    self.desire_np[:] = new_desire
+    self.traffic_convention_np[:] = inputs['traffic_convention']
 
     vision_output, on_policy_output, off_policy_output = self.run_policy(
       self.img_queues['img'], self.full_frames['img'], self.transforms['img'],
       self.img_queues['big_img'], self.full_frames['big_img'], self.transforms['big_img'],
-      self.features_queue, self.policy_inputs
+      self.features_queue, self.desire_queue, self.desire, self.traffic_convention
     )
 
     vision_output = vision_output.uop.base.buffer.numpy().flatten()
