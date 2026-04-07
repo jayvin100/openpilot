@@ -22,7 +22,7 @@ CAMERA_CONFIGS = [
 UV_SCALE_MATRIX = np.array([[0.5, 0, 0], [0, 0.5, 0], [0, 0, 1]], dtype=np.float32)
 UV_SCALE_MATRIX_INV = np.linalg.inv(UV_SCALE_MATRIX)
 
-IMG_BUFFER_SHAPE = (30, MEDMODEL_INPUT_SIZE[1] // 2, MEDMODEL_INPUT_SIZE[0] // 2)
+IMG_BUFFER_SHAPE = (5, 6, MEDMODEL_INPUT_SIZE[1] // 2, MEDMODEL_INPUT_SIZE[0] // 2)
 
 
 def policy_pkl_path(w, h):
@@ -93,24 +93,9 @@ def make_frame_prepare(cam_w, cam_h, model_w, model_h):
   return frame_prepare_tinygrad
 
 
-def make_update_img_input(frame_prepare, model_w, model_h):
-  def update_img_input_tinygrad(frame_buffer, frame, M_inv):
-    M_inv = M_inv.to(Device.DEFAULT)
-    new_img = frame_prepare(frame, M_inv)
-    frame_buffer.assign(frame_buffer[6:].cat(new_img, dim=0).contiguous())
-    return Tensor.cat(frame_buffer[:6], frame_buffer[-6:], dim=0).contiguous().reshape(1, 12, model_h//2, model_w//2)
-  return update_img_input_tinygrad
-
-
-def make_update_both_imgs(frame_prepare, model_w, model_h):
-  update_img = make_update_img_input(frame_prepare, model_w, model_h)
-
-  def update_both_imgs_tinygrad(calib_img_buffer, new_img, M_inv,
-                                calib_big_img_buffer, new_big_img, M_inv_big):
-    calib_img_pair = update_img(calib_img_buffer, new_img, M_inv)
-    calib_big_img_pair = update_img(calib_big_img_buffer, new_big_img, M_inv_big)
-    return calib_img_pair, calib_big_img_pair
-  return update_both_imgs_tinygrad
+def shift_and_sample(buf, new_val, sample_fn):
+  buf.assign(buf[1:].cat(new_val, dim=0).contiguous())
+  return sample_fn(buf)
 
 
 def make_warp_dm(cam_w, cam_h, dm_w, dm_h):
@@ -128,18 +113,21 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
                     vision_features_slice, frame_skip):
   model_w, model_h = MEDMODEL_INPUT_SIZE
   frame_prepare = make_frame_prepare(cam_w, cam_h, model_w, model_h)
-  update_both_imgs = make_update_both_imgs(frame_prepare, model_w, model_h)
+
+  def sample_skip(buf):
+    return buf[::frame_skip].contiguous().flatten(0, 1).unsqueeze(0)
 
   def run_policy(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
                  feat_q, policy_inputs):
 
     with Context(IMAGE=0):
-      img, big_img = update_both_imgs(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm)
+      img = shift_and_sample(img_buf, frame_prepare(frame, tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
+      big_img = shift_and_sample(big_img_buf, frame_prepare(big_frame, big_tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
 
     vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
 
-    feat_q.assign(feat_q[:, 1:].cat(vision_out[:, vision_features_slice].reshape(1, 1, -1), dim=1).contiguous())
-    feat_buf = feat_q[:, frame_skip - 1::frame_skip]
+    new_feat = vision_out[:, vision_features_slice].reshape(1, -1).unsqueeze(0)
+    feat_buf = shift_and_sample(feat_q, new_feat, sample_skip)
 
     inputs = {k: v.to(Device.DEFAULT) for k, v in policy_inputs.items()}
     inputs['features_buffer'] = feat_buf
@@ -175,8 +163,8 @@ def compile_modeld(cam_w, cam_h):
   # warmup inputs
   img_buf = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()
   big_img_buf = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()
-  fb = policy_input_shapes['features_buffer']
-  feat_q = Tensor.zeros(fb[0], fb[1] * frame_skip, fb[2]).contiguous().realize()
+  fb = policy_input_shapes['features_buffer']  # (1, 25, 512)
+  feat_q = Tensor.zeros(frame_skip * (fb[1] - 1) + 1, fb[0], fb[2]).contiguous().realize()
   numpy_inputs = {k: np.zeros(policy_input_shapes[k], dtype=np.float32) for k in ['desire_pulse', 'traffic_convention']}
   policy_inputs = {k: Tensor(v, device='NPY').realize() for k, v in numpy_inputs.items()}
   tfm = Tensor(np.zeros((3, 3), dtype=np.float32), device='NPY').realize()

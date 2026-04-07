@@ -45,8 +45,8 @@ LAT_SMOOTH_SECONDS = 0.0
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 
-IMG_QUEUE_SHAPE = (6*(ModelConstants.MODEL_RUN_FREQ//ModelConstants.MODEL_CONTEXT_FREQ + 1), 128, 256)
-assert IMG_QUEUE_SHAPE[0] == 30
+IMG_QUEUE_SHAPE = (ModelConstants.MODEL_RUN_FREQ//ModelConstants.MODEL_CONTEXT_FREQ + 1, 6, 128, 256)
+assert IMG_QUEUE_SHAPE[0] == 5
 
 
 def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
@@ -172,8 +172,8 @@ class ModelState:
     self.full_input_queues.reset()
 
     self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
-    fb = self.policy_input_shapes['features_buffer']
-    self.features_queue = Tensor.zeros(fb[0], fb[1] * self.frame_skip, fb[2]).contiguous().realize()
+    fb = self.policy_input_shapes['features_buffer']  # (1, 25, 512)
+    self.features_queue = Tensor.zeros(self.frame_skip * (fb[1] - 1) + 1, fb[0], fb[2]).contiguous().realize()
 
     self.img_queues = {'img': Tensor.zeros(IMG_QUEUE_SHAPE, dtype='uint8').contiguous().realize(),
                        'big_img': Tensor.zeros(IMG_QUEUE_SHAPE, dtype='uint8').contiguous().realize()}
