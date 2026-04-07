@@ -118,7 +118,7 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
     return buf[::frame_skip].contiguous().flatten(0, 1).unsqueeze(0)
 
   def run_policy(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
-                 feat_q, policy_inputs):
+                 feat_q, desire_pulse, traffic_convention):
 
     with Context(IMAGE=0):
       img = shift_and_sample(img_buf, frame_prepare(frame, tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
@@ -129,8 +129,7 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
     new_feat = vision_out[:, vision_features_slice].reshape(1, -1).unsqueeze(0)
     feat_buf = shift_and_sample(feat_q, new_feat, sample_skip)
 
-    inputs = {k: v.to(Device.DEFAULT) for k, v in policy_inputs.items()}
-    inputs['features_buffer'] = feat_buf
+    inputs = {'features_buffer': feat_buf, 'desire_pulse': desire_pulse.to(Device.DEFAULT), 'traffic_convention': traffic_convention.to(Device.DEFAULT)}
     on_policy_out = next(iter(on_policy_runner(inputs).values())).cast('float32')
     off_policy_out = next(iter(off_policy_runner(inputs).values())).cast('float32')
 
@@ -165,8 +164,8 @@ def compile_modeld(cam_w, cam_h):
   big_img_buf = Tensor.zeros(IMG_BUFFER_SHAPE, dtype='uint8').contiguous().realize()
   fb = policy_input_shapes['features_buffer']  # (1, 25, 512)
   feat_q = Tensor.zeros(frame_skip * (fb[1] - 1) + 1, fb[0], fb[2]).contiguous().realize()
-  numpy_inputs = {k: np.zeros(policy_input_shapes[k], dtype=np.float32) for k in ['desire_pulse', 'traffic_convention']}
-  policy_inputs = {k: Tensor(v, device='NPY').realize() for k, v in numpy_inputs.items()}
+  desire_pulse = Tensor(np.zeros(policy_input_shapes['desire_pulse'], dtype=np.float32), device='NPY').realize()
+  traffic_convention = Tensor(np.zeros(policy_input_shapes['traffic_convention'], dtype=np.float32), device='NPY').realize()
   tfm = Tensor(np.zeros((3, 3), dtype=np.float32), device='NPY').realize()
   big_tfm = Tensor(np.zeros((3, 3), dtype=np.float32), device='NPY').realize()
 
@@ -178,7 +177,7 @@ def compile_modeld(cam_w, cam_h):
     st = time.perf_counter()
     with Context(OPENPILOT_HACKS=1):
       outs = run_policy_jit(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm,
-                            feat_q, policy_inputs)
+                            feat_q, desire_pulse, traffic_convention)
     mt = time.perf_counter()
     Device.default.synchronize()
     et = time.perf_counter()
@@ -190,7 +189,7 @@ def compile_modeld(cam_w, cam_h):
   print(f"  Saved to {pkl_path}")
 
   jit = pickle.load(open(pkl_path, "rb"))
-  jit(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm, feat_q, policy_inputs)
+  jit(img_buf, frame, tfm, big_img_buf, big_frame, big_tfm, feat_q, desire_pulse, traffic_convention)
 
 
 def compile_dm_warp(cam_w, cam_h):
