@@ -1,7 +1,22 @@
 import numpy as np
 
 from openpilot.selfdrive.modeld.constants import ModelConstants
-from xx.common.action_grid import ACCEL_BINS, ACTION_GRID_ACCEL, ACTION_GRID_T_IDXS
+
+
+ACTION_GRID_ACCEL = 1
+ACTION_GRID_MAX_ABS_ACCEL = 5.0
+ACTION_GRID_T_IDXS = np.asarray(ModelConstants.T_IDXS[:ModelConstants.ACTION_GRID_LEN], dtype=np.float32)
+
+
+def _quadratic_bins(max_abs: float, n_bins: int) -> np.ndarray:
+  half = (n_bins - 1) // 2
+  idxs = np.arange(-half, half + 1, dtype=np.float64)
+  bins = np.sign(idxs) * max_abs * (np.abs(idxs) / half) ** 2
+  bins[half] = 0.0
+  return bins.astype(np.float32)
+
+
+ACCEL_BINS = _quadratic_bins(ACTION_GRID_MAX_ABS_ACCEL, ModelConstants.ACTION_GRID_WIDTH)
 
 
 STOP_ACCEL_BIN_MASK = ACCEL_BINS <= 0.0
