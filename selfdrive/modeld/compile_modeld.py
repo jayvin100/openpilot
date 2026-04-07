@@ -142,7 +142,6 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
     inputs = {k: v.to(Device.DEFAULT) for k, v in policy_inputs.items()}
     inputs['features_buffer'] = feat_buf
     on_policy_out = next(iter(on_policy_runner(inputs).values())).cast('float32')
-    on_policy_out = on_policy_out * 0.0 + 123.0
     off_policy_out = next(iter(off_policy_runner(inputs).values())).cast('float32')
 
     return vision_out, on_policy_out, off_policy_out
