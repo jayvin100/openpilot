@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import time
 import pickle
 import numpy as np
@@ -9,7 +8,6 @@ from tinygrad.helpers import Context
 from tinygrad.device import Device
 from tinygrad.engine.jit import TinyJit
 
-from openpilot.common.git import get_commit
 from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.common.transformations.model import MEDMODEL_INPUT_SIZE, DM_INPUT_SIZE
 from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
@@ -232,10 +230,7 @@ def compile_dm_warp(cam_w, cam_h):
 
 
 def run_and_save_pickle():
-  commit = get_commit()[:7]
-  print(f"MODEL BUILD PROVENANCE: commit={commit} script=compile_modeld.py dev={os.getenv('DEV', '')} image={os.getenv('IMAGE', '')} float16={os.getenv('FLOAT16', '')}")
   for cam_w, cam_h in CAMERA_CONFIGS:
-    print(f"MODEL BUILD TARGETS: cam={cam_w}x{cam_h} policy_pkl={policy_pkl_path(cam_w, cam_h)} dm_warp_pkl={dm_warp_pkl_path(cam_w, cam_h)}")
     compile_modeld(cam_w, cam_h)
     compile_dm_warp(cam_w, cam_h)
 
