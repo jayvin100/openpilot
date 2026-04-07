@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import time
 import pickle
 import numpy as np
@@ -164,6 +165,11 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
 
 
 def compile_modeld(cam_w, cam_h):
+  # force rebuild: clear stale cached pkl files for this resolution
+  import glob
+  for stale in glob.glob(str(MODELS_DIR / f'driving_{cam_w}x{cam_h}_tinygrad.pkl*')):
+    os.remove(stale)
+
   from tinygrad.nn.onnx import OnnxRunner
   from openpilot.selfdrive.modeld.constants import ModelConstants
 
