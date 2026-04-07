@@ -161,6 +161,29 @@ void fill_panda_can_state(cereal::PandaState::PandaCanState::Builder &cs, const 
   cs.setCanCoreResetCnt(can_health.can_core_reset_cnt);
 }
 
+static bool is_body_platform(const std::string &params_string) {
+  if (params_string.empty()) {
+    return false;
+  }
+
+  try {
+    AlignedBuffer aligned_buf;
+    capnp::FlatArrayMessageReader cmsg(aligned_buf.align(params_string.data(), params_string.size()));
+    cereal::CarParams::Reader car_params = cmsg.getRoot<cereal::CarParams>();
+    return car_params.getBrand() == "body";
+  } catch (...) {
+    LOGE("Failed to parse CarParams while checking body init state");
+  }
+  return false;
+}
+
+static bool should_keep_body_ignition_high(Params &params, bool is_onroad) {
+  if (!is_onroad || !params.getBool("FirmwareQueryDone") || params.getBool("ControlsReady")) {
+    return false;
+  }
+  return is_body_platform(params.get("CarParams"));
+}
+
 std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroad, bool spoofing_started) {
   // build msg
   MessageBuilder msg;
@@ -188,9 +211,10 @@ std::optional<bool> send_panda_states(PubMaster *pm, Panda *panda, bool is_onroa
   }
 
   static Params params;
-  if (params.getBool("BodyFirmwareFlashing")) {
+  if (should_keep_body_ignition_high(params, is_onroad)) {
     health.ignition_line_pkt = 1;
     health.safety_mode_pkt = (uint8_t)(cereal::CarParams::SafetyModel::BODY);
+    panda->set_safety_model(cereal::CarParams::SafetyModel::BODY);
   }
 
   bool ignition_local = ((health.ignition_line_pkt != 0) || (health.ignition_can_pkt != 0));
