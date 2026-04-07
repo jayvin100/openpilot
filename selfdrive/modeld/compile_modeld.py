@@ -144,7 +144,6 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
     return buf.reshape(-1, frame_skip, *buf.shape[1:]).max(1).flatten(0, 1).unsqueeze(0)
 
   def run_policy(img_buf, big_img_buf, feat_q, desire_q, desire, traffic_convention, tfm, big_tfm, frame, big_frame):
-
     # with Context(IMAGE=0): TODO check if needed
     img = shift_and_sample(img_buf, frame_prepare(frame, tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
     big_img = shift_and_sample(big_img_buf, frame_prepare(big_frame, big_tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
@@ -153,7 +152,6 @@ def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, c
 
     new_feat = vision_out[:, vision_features_slice].reshape(1, -1).unsqueeze(0)
     feat_buf = shift_and_sample(feat_q, new_feat, sample_skip)
-
     desire_buf = shift_and_sample(desire_q, desire.to(Device.DEFAULT).reshape(1, 1, -1), sample_desire)
 
     inputs = {'features_buffer': feat_buf, 'desire_pulse': desire_buf, 'traffic_convention': traffic_convention.to(Device.DEFAULT)}
@@ -220,7 +218,6 @@ def compile_modeld(cam_w, cam_h):
 
 
 def test_vs_compile(run, inputs: dict[str, Tensor], test_val: list[np.ndarray]):
-
   # run 20 times
   for i in range(20):
     st = time.perf_counter()
@@ -233,11 +230,12 @@ def test_vs_compile(run, inputs: dict[str, Tensor], test_val: list[np.ndarray]):
     if test_val is not None and i == 0:  # check output matches before buffers get mutated by the jit
       np.testing.assert_equal(test_val, val)
 
-  # test that changing the numpy changes the model outputs
+  # test that changing the inputs changes the model outputs
   inputs_2x = {k: Tensor(v.numpy()*2, device=v.device) for k,v in inputs.items()}
   out = run(**inputs_2x)
   changed_val = [v.numpy() for v in out]
-  assert any(not np.array_equal(a, b) for a, b in zip(val, changed_val)), "changing inputs should change outputs"
+  for v, cv in zip(val, changed_val):
+    assert not np.array_equal(v, cv), f"output with shape {v.shape} didn't change when inputs were doubled"
   print('test_vs_compile OK')
 
 
