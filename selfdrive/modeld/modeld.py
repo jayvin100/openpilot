@@ -157,7 +157,7 @@ def _make_run_policy(vision_runner, policy_runner, cam_w, cam_h,
 
   def update_bufs(frame, img_q, tfm):
     new = frame_warp(frame, tfm).to(Device.DEFAULT)
-    img_q.assign(img_q[6:].cat(new, dim=0))
+    img_q.assign(img_q[6:].cat(new, dim=0).contiguous()) # TODO risk of reading the buffer while it's being written?
     img_pair = Tensor.cat(img_q[:6], img_q[-6:], dim=0).reshape(1, 12, model_h//2, model_w//2).contiguous()
     return img_pair
 
@@ -172,16 +172,16 @@ def _make_run_policy(vision_runner, policy_runner, cam_w, cam_h,
     vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
 
     des_buf, traf = des_buf.to(Device.DEFAULT), traf.to(Device.DEFAULT)
-    feat_q = feat_q[:, 1:].cat(vision_out[:, vision_features_slice].reshape(1, 1, -1), dim=1).contiguous()
+    feat_q.assign(feat_q[:, 1:].cat(vision_out[:, vision_features_slice].reshape(1, 1, -1), dim=1).contiguous())
     feat_buf = feat_q[:, frame_skip - 1::frame_skip]
 
     policy_out = next(iter(policy_runner({
       'features_buffer': feat_buf, 'desire_pulse': des_buf, 'traffic_convention': traf,
     }).values())).cast('float32')
 
-    # only return vision output without hidden features (they stay on device in feat_q)
-    # TODO make it so we don't assume hidden state is at the end
-    return img_q, big_img_q, feat_q, vision_out[:, :vision_features_slice.start].contiguous(), policy_out
+    # img_q, big_img_q, feat_q updated in-place via assign — don't return them
+    # (returning them would trigger JIT read-after-write hazard copies: GPU→CPU→GPU round trips)
+    return vision_out[:, :vision_features_slice.start].contiguous(), policy_out
   return run_policy
 
 
@@ -218,13 +218,11 @@ def compile_policy(cam_w, cam_h):
       model.desire_tensor, model.traffic_tensor,
     )
     t_enqueue = time.perf_counter()
-    model.img_queues['img'], model.img_queues['big_img'] = outs[0], outs[1]
-    model.features_queue = outs[2]
     Device.default.synchronize()
     t_jit = time.perf_counter()
-    vision_output = outs[3].uop.base.buffer.numpy().flatten()
+    vision_output = outs[0].uop.base.buffer.numpy().flatten()
     t_vis = time.perf_counter()
-    policy_output = outs[4].uop.base.buffer.numpy().flatten()
+    policy_output = outs[1].uop.base.buffer.numpy().flatten()
     t_pol = time.perf_counter()
     print(f"  [{i+1}/10] enqueue {(t_enqueue-st)*1e3:.1f} ms warp+vision+policy {(t_jit-st)*1e3:.1f} ms vision copy out {(t_vis-t_jit)*1e3:.1f} ms  policy copy out {(t_pol-t_vis)*1e3:.1f} ms  total {(t_pol-st)*1e3:.1f} ms")
   return run_policy
@@ -243,7 +241,7 @@ def test_vs_compile_vs_onnx(run_policy, cam_w, cam_h):
               m.transforms['img'], m.transforms['big_img'],
               m.features_queue, m.desire_tensor, m.traffic_tensor)
     Device.default.synchronize()
-    return np.copy(outs[3].uop.base.buffer.numpy().flatten()), np.copy(outs[4].uop.base.buffer.numpy().flatten())
+    return np.copy(outs[0].uop.base.buffer.numpy().flatten()), np.copy(outs[1].uop.base.buffer.numpy().flatten())
 
   # test consistency
   test_val = run_test(run_policy)
@@ -374,9 +372,7 @@ class ModelState:
       self.features_queue,
       self.desire_tensor, self.traffic_tensor,
     )
-    self.img_queues['img'], self.img_queues['big_img'] = outs[0], outs[1]
-    self.features_queue = outs[2]
-    vision_output, policy_output = outs[3], outs[4]
+    vision_output, policy_output = outs[0], outs[1]
 
     # parse outputs
     self.vision_output = vision_output.uop.base.buffer.numpy().flatten()
@@ -582,7 +578,7 @@ if __name__ == "__main__":
       jit = compile_policy(cam_w, cam_h)
       pkl_path = policy_pkl_path(cam_w, cam_h)
       print(f"saving pkl to {pkl_path}")
-      with open(pkl_path, 'wb') as f: pickle.dump(jit, f)
+      # with open(pkl_path, 'wb') as f: pickle.dump(jit, f)
       # test_vs_compile_vs_onnx(jit, cam_w, cam_h)
   else:
     try:
