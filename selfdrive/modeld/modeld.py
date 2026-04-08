@@ -195,7 +195,7 @@ def compile_policy(cam_w, cam_h):
   model = ModelState()
   _run = _make_run_policy(vision_runner, policy_runner, cam_w, cam_h,
                           model.vision_features_slice, model.frame_skip)
-  run_policy = TinyJit(_run, prune=True, optimize=True)
+  run_policy = TinyJit(_run, prune=True)
 
   _, _, _, yuv_size = get_nv12_info(cam_w, cam_h)
 
