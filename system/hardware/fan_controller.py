@@ -13,13 +13,21 @@ POWER_FF_FAN = [0, 30, 60, 90]
 PRESPIN_TEMP_BP = [40.0, 55.0, 70.0]
 PRESPIN_FAN_BP = [30.0, 50.0, 80.0]
 
-# Thermal model parameters, fitted from 748 hot-tail fleet data points
-# (200 dongles, intake 50-80C, SoM power basis)
+# Thermal model parameters, fitted from fleet data (SoM power basis):
+#
+# R_passive: 815k ES offroad STATUS_PACKETs at 0% fan → R = (maxTempC - intake) / somPowerW = 5.9 K/W
+# k_fan:     ES comparison: 0% fan (R=5.9) vs 90-100% fan (R=3.3) → k_fan = R_nat/R_max - 1 = 0.78
+# tau_heat:  29 heating ramps from 2101 rlogs at 8.7Hz, 63% method → median 16.5s
+# tau_cool:  7 cooling ramps from rlogs, 63% method → median 85.0s (5x slower, thermal mass retains heat)
+#
+# Fan effect: huge from 0→30% (R drops 5.9→3.3), diminishing above 30% (3.3→3.0).
+# Confirmed by 3.4k rlog steady-state points: R_th ≈ 3.3 K/W for fan 30-100%.
+# The biggest win is preventing 0% fan offroad in hot ambient (the offroad fan floor fix).
 MODEL_PARAMS = {
-  'tau_heat': 60.0,    # heating time constant (s)
-  'tau_cool': 120.0,   # cooling time constant (s)
-  'R_passive': 5.1,    # passive thermal resistance (C/W, fan off, SoM power basis)
-  'k_fan': 0.26,       # fan effectiveness — low: 0%->100% only reduces R by ~25%
+  'tau_heat': 16.5,    # s — heats fast
+  'tau_cool': 85.0,    # s — cools 5x slower
+  'R_passive': 5.9,    # K/W at 0% fan (offroad, from ES)
+  'k_fan': 0.78,       # R_total = R_passive / (1 + k_fan * fan%/100)
 }
 
 

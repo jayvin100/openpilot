@@ -112,7 +112,7 @@ class TransitionRecord:
 
     ts = np.array([s.t for s in self.samples])
     temps = np.array([s.max_temp_c for s in self.samples])
-    powers = np.array([s.power_draw_w for s in self.samples])
+    powers = np.array([s.som_power_draw_w if s.som_power_draw_w > 0 else s.power_draw_w for s in self.samples])
     fan_pcts = np.array([s.fan_pct_desired for s in self.samples])
     intakes = np.array([s.intake_temp_c for s in self.samples])
 
@@ -201,7 +201,7 @@ def extract_from_route(route_id: str, data_dir: str | None = None) -> list[Trans
           'cpuUsagePercent': list(ds.cpuUsagePercent),
           'gpuUsagePercent': int(ds.gpuUsagePercent),
           'started': bool(ds.started),
-          'thermalStatus': int(ds.thermalStatus),
+          'thermalStatus': ds.thermalStatus.raw,
         }))
       elif which == 'peripheralState':
         ps = msg.peripheralState
@@ -224,11 +224,17 @@ def extract_from_route(route_id: str, data_dir: str | None = None) -> list[Trans
     if not prev_started and curr_started:
       transitions.append(device_states[i][0])  # mono time of transition
 
-  if not transitions:
-    print(f"    No offroad→onroad transitions found")
+  # If no explicit transition found, treat start of route as the transition.
+  # Routes are created when 'started' becomes True, so seg 0 IS the onroad entry.
+  # The thermal ramp (initial temp → peak) is the transient we want to capture.
+  if not transitions and device_states and device_states[0][1]['started']:
+    transitions.append(device_states[0][0])
+    print(f"    Using route start as transition (started=True from seg 0)")
+  elif transitions:
+    print(f"    Found {len(transitions)} explicit transition(s)")
+  else:
+    print(f"    No transitions found and route not started")
     return []
-
-  print(f"    Found {len(transitions)} transition(s)")
 
   # Extract windows around each transition
   records = []

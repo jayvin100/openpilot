@@ -76,13 +76,16 @@ def fit_model(transitions, initial_guess=None):
   from scipy.optimize import minimize, differential_evolution
 
   if initial_guess is None:
-    initial_guess = [60.0, 120.0, 10.0, 3.0]
+    # R_passive FIXED at 5.9 from 815k ES offroad datapoints at 0% fan.
+    # k_fan=0.78 from comparing offroad 0% (R=5.9) vs onroad 90-100% (R=3.3).
+    # Only fit tau_heat, tau_cool, and allow k_fan to refine within tight bounds.
+    initial_guess = [45.0, 90.0, 5.9, 0.78]
 
   bounds = [
-    (5.0, 300.0),    # tau_heat: 5-300s
-    (10.0, 600.0),   # tau_cool: 10-600s
-    (2.0, 30.0),     # R_passive: 2-30 °C/W
-    (0.5, 20.0),     # k_fan: 0.5-20
+    (10.0, 200.0),   # tau_heat: 10-200s
+    (20.0, 400.0),   # tau_cool: 20-400s
+    (5.0, 7.0),      # R_passive: tight around ES-measured 5.9 K/W
+    (0.5, 1.5),      # k_fan: tight around ES-derived 0.78
   ]
 
   # First: global search with differential evolution
@@ -397,6 +400,12 @@ def main():
   args = parser.parse_args()
 
   print(f"Loading fleet data from {args.input}...")
+  # Import data classes into __main__ so pickle can resolve them
+  sys.path.insert(0, str(Path(__file__).parent))
+  from thermal_fleet_extract import TransitionRecord, ThermalSample  # noqa: F401
+  import __main__
+  __main__.TransitionRecord = TransitionRecord
+  __main__.ThermalSample = ThermalSample
   with open(args.input, 'rb') as f:
     records = pickle.load(f)
   print(f"Loaded {len(records)} transition records")
