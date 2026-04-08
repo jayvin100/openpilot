@@ -284,8 +284,9 @@ def hardware_thread(end_event, hw_queue) -> None:
     all_comp_temp = all_temp_filter.update(max(temp_sources))
     msg.deviceState.maxTempC = all_comp_temp
 
+    intake_temp = msg.deviceState.intakeTempC
     msg.deviceState.fanSpeedPercentDesired = fan_controller.update(all_comp_temp, onroad_conditions["ignition"],
-                                                                    power_draw_w=last_power_draw)
+                                                                    power_draw_w=last_power_draw, t_amb=intake_temp)
 
     is_offroad_for_5_min = (started_ts is None) and ((not started_seen) or (off_ts is None) or (time.monotonic() - off_ts > 60 * 5))
     if is_offroad_for_5_min and offroad_comp_temp > OFFROAD_DANGER_TEMP:

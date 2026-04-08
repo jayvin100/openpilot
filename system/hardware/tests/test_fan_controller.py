@@ -81,3 +81,33 @@ class TestFanController:
     controller = make_controller(controller_class)
     fan_pct = controller.update(70, True)
     assert 0 <= fan_pct <= 100
+
+  @pytest.mark.parametrize("controller_class", ALL_CONTROLLERS)
+  def test_ambient_hot(self, controller_class):
+    """Hot ambient should produce more fan than reference ambient at same power."""
+    ctrl_ref = make_controller(controller_class)
+    ctrl_hot = make_controller(controller_class)
+    for _ in range(10):
+      fan_ref = ctrl_ref.update(65, True, power_draw_w=6.0, t_amb=35.0)
+      fan_hot = ctrl_hot.update(65, True, power_draw_w=6.0, t_amb=50.0)
+    assert fan_hot > fan_ref
+
+  @pytest.mark.parametrize("controller_class", ALL_CONTROLLERS)
+  def test_ambient_cool(self, controller_class):
+    """Cool ambient should produce less fan than reference ambient at same power."""
+    ctrl_ref = make_controller(controller_class)
+    ctrl_cool = make_controller(controller_class)
+    for _ in range(10):
+      fan_ref = ctrl_ref.update(65, True, power_draw_w=6.0, t_amb=35.0)
+      fan_cool = ctrl_cool.update(65, True, power_draw_w=6.0, t_amb=25.0)
+    assert fan_cool < fan_ref
+
+  @pytest.mark.parametrize("controller_class", ALL_CONTROLLERS)
+  def test_ambient_missing(self, controller_class):
+    """t_amb=0 should behave identically to not passing t_amb."""
+    ctrl_default = make_controller(controller_class)
+    ctrl_zero = make_controller(controller_class)
+    for _ in range(10):
+      fan_default = ctrl_default.update(65, True, power_draw_w=6.0)
+      fan_zero = ctrl_zero.update(65, True, power_draw_w=6.0, t_amb=0.0)
+    assert fan_default == fan_zero

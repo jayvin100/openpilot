@@ -76,7 +76,7 @@ class NewFanController:
     self.prespin_temp_bp = prespin_temp_bp or [40.0, 55.0, 70.0]
     self.prespin_fan_bp = prespin_fan_bp or [30.0, 50.0, 80.0]
 
-  def update(self, cur_temp: float, ignition: bool, power_draw_w: float = 0.0) -> int:
+  def update(self, cur_temp: float, ignition: bool, power_draw_w: float = 0.0, t_amb: float = 0.0) -> int:
     pos_limit = 100 if ignition else 30
     neg_limit = 30 if ignition else 0
 
@@ -97,6 +97,8 @@ class NewFanController:
     # Integral with anti-windup
     ff_temp = float(np.interp(cur_temp, [60.0, 100.0], [0, 100]))
     ff_power = float(np.interp(power_draw_w, self.power_bp, self.power_ff)) if ignition else 0
+    if t_amb > 0:
+      ff_power *= (75.0 - 35.0) / max(75.0 - t_amb, 5.0)
     feedforward = max(ff_temp, ff_power)
 
     i = self.i + self.k_i * self.i_dt * error
@@ -180,7 +182,7 @@ def simulate_transition(rec, model_params, power_bp=None, power_ff=None,
   new_fans = np.zeros(len(ts))
   for i in range(len(ts)):
     ignition = bool(started[i])
-    new_fans[i] = new_ctrl.update(temps_actual[i], ignition, powers[i])
+    new_fans[i] = new_ctrl.update(temps_actual[i], ignition, powers[i], t_amb=T_amb)
 
   # Now predict what temperature WOULD have been with new fan commands
   # using the thermal model

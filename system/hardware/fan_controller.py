@@ -12,7 +12,7 @@ class FanController:
     self.power_bp = [2.0, 4.0, 6.0, 8.0]
     self.power_ff = [0, 30, 60, 90]
 
-  def update(self, cur_temp: float, ignition: bool, power_draw_w: float = 0.0) -> int:
+  def update(self, cur_temp: float, ignition: bool, power_draw_w: float = 0.0, t_amb: float = 0.0) -> int:
     self.controller.pos_limit = 100 if ignition else 30
     self.controller.neg_limit = 30 if ignition else 0
 
@@ -33,6 +33,10 @@ class FanController:
     # Power-based feedforward: power draw spikes 30-60s before temperature rises,
     # giving the fan a head start on cooling.
     ff_power = np.interp(power_draw_w, self.power_bp, self.power_ff) if ignition else 0
+    # Ambient-aware scaling: breakpoints assume ~35C ambient. At hotter ambient,
+    # less thermal headroom means we need more fan for the same power draw.
+    if t_amb > 0:
+      ff_power *= (75.0 - 35.0) / max(75.0 - t_amb, 5.0)
     feedforward = max(ff_temp, ff_power)
 
     return int(self.controller.update(
