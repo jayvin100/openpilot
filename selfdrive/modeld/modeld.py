@@ -157,17 +157,17 @@ def _make_run_policy(vision_runner, policy_runner, cam_w, cam_h,
 
   def update_bufs(frame, img_q, tfm):
     new = frame_warp(frame, tfm).to(Device.DEFAULT)
-    new_img_q = img_q[6:].cat(new, dim=0)
+    img_q.assign(img_q[6:].cat(new, dim=0))
     img_pair = Tensor.cat(img_q[:6], img_q[-6:], dim=0).reshape(1, 12, model_h//2, model_w//2).contiguous()
-    return new_img_q, img_pair
+    return img_pair
 
   def run_policy(img_q, big_img_q, frame, big_frame, tfm, big_tfm,
                  feat_q, des_buf, traf):
     tfm, big_tfm = tfm.to(WARP_DEVICE), big_tfm.to(WARP_DEVICE)
 
     # warp + copy in + enqueue + sample queue
-    img_q, img = update_bufs(frame, img_q, tfm)
-    big_img_q, big_img = update_bufs(big_frame, big_img_q, big_tfm)
+    img = update_bufs(frame, img_q, tfm)
+    big_img = update_bufs(big_frame, big_img_q, big_tfm)
 
     vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
 
