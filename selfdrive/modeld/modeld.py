@@ -157,8 +157,9 @@ def _make_run_policy(vision_runner, policy_runner, cam_w, cam_h,
 
   def update_bufs(frame, img_q, tfm):
     new = frame_warp(frame, tfm).to(Device.DEFAULT)
-    img_q.assign(img_q[6:].cat(new, dim=0).contiguous()) # TODO risk of reading the buffer while it's being written?
-    img_pair = Tensor.cat(img_q[:6], img_q[-6:], dim=0).reshape(1, 12, model_h//2, model_w//2).contiguous()
+    new_q = img_q[6:].cat(new, dim=0).contiguous()
+    img_pair = Tensor.cat(new_q[:6], new_q[-6:], dim=0).reshape(1, 12, model_h//2, model_w//2).contiguous()
+    img_q.assign(new_q)
     return img_pair
 
   def run_policy(img_q, big_img_q, frame, big_frame, tfm, big_tfm,
@@ -172,8 +173,9 @@ def _make_run_policy(vision_runner, policy_runner, cam_w, cam_h,
     vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
 
     des_buf, traf = des_buf.to(Device.DEFAULT), traf.to(Device.DEFAULT)
-    feat_q.assign(feat_q[:, 1:].cat(vision_out[:, vision_features_slice].reshape(1, 1, -1), dim=1).contiguous())
-    feat_buf = feat_q[:, frame_skip - 1::frame_skip]
+    new_feat = feat_q[:, 1:].cat(vision_out[:, vision_features_slice].reshape(1, 1, -1), dim=1).contiguous()
+    feat_buf = new_feat[:, frame_skip - 1::frame_skip]
+    feat_q.assign(new_feat)
 
     policy_out = next(iter(policy_runner({
       'features_buffer': feat_buf, 'desire_pulse': des_buf, 'traffic_convention': traf,
