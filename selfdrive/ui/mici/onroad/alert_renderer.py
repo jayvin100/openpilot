@@ -35,10 +35,11 @@ ALERT_COLORS = {
 TURN_SIGNAL_BLINK_PERIOD = 1 / (80 / 60)  # Mazda heartbeat turn signal BPM
 CRITICAL_BG_TRANSITION_RC = 0.16
 CRITICAL_PULSE_RC = 0.04
-CRITICAL_PULSE_START_DELAY = 0.18
-RED_BLINK_ON = 0.28
-RED_BLINK_OFF = 0.28
+CRITICAL_PULSE_START_DELAY = 0.19
+RED_BLINK_ON = 0.30
+RED_BLINK_OFF = 0.30
 RED_BLINK_CYCLE = RED_BLINK_ON + RED_BLINK_OFF
+RED_BG_BREATH_CYCLE = RED_BLINK_CYCLE * 4.0  # 2x slower again
 
 DEBUG = False
 # Test override: when enabled, blinker/lane-change alerts show blindspot icons.
@@ -49,6 +50,11 @@ TEST_USE_BLINDSPOT_ICON_FOR_BLINKERS = False
 class IconSide(StrEnum):
   left = 'left'
   right = 'right'
+
+
+class CriticalAlertStyle(StrEnum):
+  non_disengaging = 'non_disengaging'
+  disengaging_or_no_entry = 'disengaging_or_no_entry'
 
 
 class IconLayout(NamedTuple):
@@ -95,6 +101,13 @@ ALERT_CRITICAL_REBOOT = Alert(
   status=AlertStatus.critical,
 )
 
+DISENGAGING_OR_NO_ENTRY_EVENT_TYPES = frozenset((
+  'noEntry',
+  'userDisable',
+  'softDisable',
+  'immediateDisable',
+))
+
 
 class AlertRenderer(Widget):
   def __init__(self):
@@ -113,6 +126,8 @@ class AlertRenderer(Widget):
     # TODO: use 0.1 but with proper alert height calculation
     self._alert_y_filter = BounceFilter(0, 0.1, 1 / gui_app.target_fps)
     self._alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
+    self._content_alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
+    self._foreground_reenter_key: tuple[str, str, str, int, int, str] | None = None
 
     self._turn_signal_timer = 0.0
     self._turn_signal_alpha_filter = FirstOrderFilter(0.0, 0.3, 1 / gui_app.target_fps)
@@ -130,6 +145,8 @@ class AlertRenderer(Widget):
     self._txt_turn_signal_right = gui_app.texture('icons_mici/onroad/turn_signal_left.png', 104, 96, flip_x=True)
     self._txt_blind_spot_left = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 134, 150)
     self._txt_blind_spot_right = gui_app.texture('icons_mici/onroad/blind_spot_left.png', 134, 150, flip_x=True)
+    self._txt_red_warning = gui_app.texture('icons_mici/setup/red_warning.png', 106, 96)
+    self._txt_crossed_wheel = gui_app.texture('icons_mici/onroad/crossed_wheel.png', 96, 96)
 
   def get_alert(self, sm: messaging.SubMaster) -> Alert | None:
     """Generate the current alert based on selfdrive state."""
@@ -162,6 +179,16 @@ class AlertRenderer(Widget):
                 visual_alert=ss.alertHudVisual, alert_type=ss.alertType)
     self._prev_alert = ret
     return ret
+
+  def _critical_alert_style(self, alert: Alert) -> CriticalAlertStyle | None:
+    if alert.status != AlertStatus.critical:
+      return None
+
+    # alert_type format is "EventName/eventType" (e.g., "preLaneChangeLeft/warning")
+    event_type = alert.alert_type.split('/')[1] if '/' in alert.alert_type else ''
+    if event_type in DISENGAGING_OR_NO_ENTRY_EVENT_TYPES:
+      return CriticalAlertStyle.disengaging_or_no_entry
+    return CriticalAlertStyle.non_disengaging
 
   def will_render(self) -> tuple[Alert | None, bool]:
     alert = self.get_alert(ui_state.sm)
@@ -248,9 +275,21 @@ class AlertRenderer(Widget):
   def _render(self, rect: rl.Rectangle) -> bool:
     alert = self.get_alert(ui_state.sm)
 
+    # Foreground text/icon should animate in as a fresh notification for
+    # prominent warnings while background transition behavior stays unchanged.
+    foreground_reenter_key: tuple[str, str, str, int, int, str] | None = None
+    critical_style = self._critical_alert_style(alert) if alert is not None else None
+    if alert is not None and alert.status in (AlertStatus.userPrompt, AlertStatus.critical):
+      foreground_reenter_key = (alert.text1, alert.text2, alert.alert_type, alert.size, int(alert.status), str(critical_style))
+    if foreground_reenter_key is not None and foreground_reenter_key != self._foreground_reenter_key:
+      self._alert_y_filter.x = self._rect.y - 50
+      self._content_alpha_filter.x = 0.0
+    self._foreground_reenter_key = foreground_reenter_key
+
     # Animate fade and slide in/out
     self._alert_y_filter.update(self._rect.y - 50 if alert is None else self._rect.y)
     self._alpha_filter.update(0 if alert is None else 1)
+    self._content_alpha_filter.update(0 if alert is None else 1)
 
     if alert is None:
       # If still animating out, keep the previous alert
@@ -261,12 +300,32 @@ class AlertRenderer(Widget):
         return False
 
     self._draw_background(alert)
+    self._draw_critical_warning_icon(alert)
 
     alert_layout = self._icon_helper(alert)
     self._draw_text(alert, alert_layout)
     self._draw_icons(alert_layout)
 
     return True
+
+  def _draw_critical_warning_icon(self, alert: Alert) -> None:
+    if alert.status != AlertStatus.critical:
+      return
+
+    critical_style = self._critical_alert_style(alert)
+    if critical_style == CriticalAlertStyle.disengaging_or_no_entry:
+      icon_texture = self._txt_crossed_wheel
+      base_opacity = 0.65
+    else:
+      icon_texture = self._txt_red_warning
+      base_opacity = 1.0
+
+    icon_x = int(self._rect.x + 24)
+    # Match text slide-in movement while preserving icon's defined resting position.
+    y_offset = self._alert_y_filter.x - self._rect.y
+    icon_y = int(self._rect.y + self._rect.height - 28 - icon_texture.height + y_offset)
+    icon_color = rl.Color(255, 255, 255, int(255 * base_opacity * self._content_alpha_filter.x))
+    rl.draw_texture_ex(icon_texture, rl.Vector2(icon_x, icon_y), 0.0, 1.0, icon_color)
 
   def _draw_icons(self, alert_layout: AlertLayout) -> None:
     if alert_layout.icon is None:
@@ -289,7 +348,7 @@ class AlertRenderer(Widget):
       icon_alpha = int(min(self._turn_signal_alpha_filter.x, 255))
 
     rl.draw_texture_ex(alert_layout.icon.texture, rl.Vector2(pos_x, self._rect.y + alert_layout.icon.margin_y), 0.0, 1.0,
-                       rl.Color(255, 255, 255, int(icon_alpha * self._alpha_filter.x)))
+                       rl.Color(255, 255, 255, int(icon_alpha * self._content_alpha_filter.x)))
 
   def _draw_background(self, alert: Alert) -> None:
     small_alert_height = round(self._rect.height * 0.583) # 140px at mici height
@@ -309,8 +368,9 @@ class AlertRenderer(Widget):
     else:
       bg_height = int(self._rect.height)
 
-    critical_active = alert.status == AlertStatus.critical
-    if critical_active:
+    critical_style = self._critical_alert_style(alert)
+    use_red_critical_bg = critical_style == CriticalAlertStyle.non_disengaging
+    if use_red_critical_bg:
       critical_mix = self._critical_bg_mix_filter.update(1.0)
     else:
       # Avoid red carryover on the next non-critical alert.
@@ -338,10 +398,8 @@ class AlertRenderer(Widget):
       int(base_bottom.a + (critical_bottom.a - base_bottom.a) * critical_mix),
     )
 
-    # Critical background inherits the bar cadence:
-    # - SmoothWarning ON: breathing cadence
-    # - SmoothWarning OFF: steady on/off cadence
-    if critical_active and critical_mix > 0.0 and ui_state.params.get_bool("SmoothWarning"):
+    # Critical background breathes with a slower cadence.
+    if use_red_critical_bg and critical_mix > 0.0:
       if not self._critical_prev_active:
         self._critical_alert_started_at = time.monotonic()
         self._critical_pulse_phase = 0.0
@@ -352,7 +410,7 @@ class AlertRenderer(Widget):
         target_pulse = 1.0
       else:
         dt = 1 / gui_app.target_fps
-        self._critical_pulse_phase = (self._critical_pulse_phase + dt / RED_BLINK_CYCLE) % 1.0
+        self._critical_pulse_phase = (self._critical_pulse_phase + dt / RED_BG_BREATH_CYCLE) % 1.0
         target_pulse = 0.5 * (1.0 + math.cos(self._critical_pulse_phase * 2.0 * math.pi))
 
       pulse = self._critical_pulse_filter.update(target_pulse)
@@ -360,7 +418,7 @@ class AlertRenderer(Widget):
     else:
       self._critical_pulse_filter.x = 1.0
 
-    self._critical_prev_active = critical_active
+    self._critical_prev_active = use_red_critical_bg
 
     rl.draw_rectangle_gradient_v(int(self._rect.x), int(self._rect.y), int(self._rect.width), int(bg_height), top, bottom)
 
@@ -383,7 +441,7 @@ class AlertRenderer(Widget):
     if icon_side is not None:
       font_size -= 10
 
-    color = rl.Color(255, 255, 255, int(255 * 0.9 * self._alpha_filter.x))
+    color = rl.Color(255, 255, 255, int(255 * 0.9 * self._content_alpha_filter.x))
 
     text1_y_offset = 11 if font_size >= 70 else 4
     text_rect1 = rl.Rectangle(
@@ -422,7 +480,7 @@ class AlertRenderer(Widget):
         alert_layout.text_rect.width,
         alert_layout.text_rect.height - last_line_h
       )
-      color = rl.Color(255, 255, 255, int(255 * 0.65 * self._alpha_filter.x))
+      color = rl.Color(255, 255, 255, int(255 * 0.65 * self._content_alpha_filter.x))
 
       self._alert_text2_label.set_text(alert_text2)
       self._alert_text2_label.set_text_color(color)

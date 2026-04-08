@@ -9,17 +9,16 @@ from openpilot.common.filter_simple import FirstOrderFilter
 
 MORPH_DURATION = 0.2  # seconds
 MORPH_RC = MORPH_DURATION / 3.0
-BLINK_GROW_DELAY = 0.3
-BLINK_OFF_1 = 0.12
-BLINK_ON_1 = 0.12
-BLINK_OFF_2 = 0.12
-BLINK_ON_2 = 0.6
+BLINK_GROW_DELAY = 0.375
+BLINK_OFF_1 = 0.15
+BLINK_ON_1 = 0.15
+BLINK_OFF_2 = 0.15
+BLINK_ON_2 = 0.75
 BLINK_CYCLE = BLINK_OFF_1 + BLINK_ON_1 + BLINK_OFF_2 + BLINK_ON_2
-RED_BLINK_ON = 0.28
-RED_BLINK_OFF = 0.28
+RED_BLINK_ON = 0.30
+RED_BLINK_OFF = 0.30
 RED_BLINK_CYCLE = RED_BLINK_ON + RED_BLINK_OFF
-SMOOTH_WARNING_START_SPEED = 0.5  # relative to red cadence
-SMOOTH_WARNING_ACCEL_DURATION = 6.0  # seconds to reach max cadence
+PREWARNING_BREATH_CYCLE = 1.2  # smooth preDriverDistracted breathing cadence
 BLINK_DIM_ALPHA = 0.15
 BLINK_ALPHA_RC = 0.035
 # Test override to match alert icon test mode in alert_renderer.py.
@@ -60,7 +59,6 @@ class ConfidenceBall(Widget):
     self._orange_alert_started_at = -1.0
     self._orange_alert_prev_active = False
     self._orange_breath_phase = 0.0
-    self._ball_anim_started_at = rl.get_time()
     self._ball_breath_phase = 0.0
     self._ball_anim_prev_active = False
 
@@ -123,17 +121,6 @@ class ConfidenceBall(Widget):
     if elapsed < BLINK_GROW_DELAY:
       return 1.0
 
-    # Alternate animation mode: breathing pulse that accelerates over time.
-    if ui_state.params.get_bool("SmoothWarning"):
-      post_delay_elapsed = elapsed - BLINK_GROW_DELAY
-      progress = min(max(post_delay_elapsed / SMOOTH_WARNING_ACCEL_DURATION, 0.0), 1.0)
-      start_cycle = RED_BLINK_CYCLE / SMOOTH_WARNING_START_SPEED
-      current_cycle = self._lerp(start_cycle, RED_BLINK_CYCLE, progress)
-      dt = 1 / gui_app.target_fps
-      self._orange_breath_phase = (self._orange_breath_phase + dt / max(current_cycle, 1e-3)) % 1.0
-      wave = 0.5 * (1.0 + math.cos(self._orange_breath_phase * 2.0 * math.pi))
-      return BLINK_DIM_ALPHA + (1.0 - BLINK_DIM_ALPHA) * wave
-
     phase = (elapsed - BLINK_GROW_DELAY) % BLINK_CYCLE
     if phase < BLINK_OFF_1:
       return BLINK_DIM_ALPHA
@@ -144,7 +131,7 @@ class ConfidenceBall(Widget):
     return 1.0
 
   def _red_blink_target_alpha(self) -> float:
-    """Default (non-smooth) red cadence for the side bar."""
+    """Red cadence for the side bar."""
     if self._orange_alert_started_at < 0:
       return 1.0
 
@@ -155,23 +142,10 @@ class ConfidenceBall(Widget):
     phase = (elapsed - BLINK_GROW_DELAY) % RED_BLINK_CYCLE
     return 1.0 if phase < RED_BLINK_ON else BLINK_DIM_ALPHA
 
-  def _ball_blink_target_alpha(self) -> float:
-    """Default-mode confidence ball cadence: same pattern as orange alert."""
-    elapsed = rl.get_time() - self._ball_anim_started_at
-    phase = elapsed % BLINK_CYCLE
-    if phase < BLINK_OFF_1:
-      return BLINK_DIM_ALPHA
-    if phase < BLINK_OFF_1 + BLINK_ON_1:
-      return 1.0
-    if phase < BLINK_OFF_1 + BLINK_ON_1 + BLINK_OFF_2:
-      return BLINK_DIM_ALPHA
-    return 1.0
-
   def _ball_breath_target_alpha(self) -> float:
-    """Smooth-mode confidence ball cadence: breathe at orange starting speed."""
-    start_cycle = RED_BLINK_CYCLE / SMOOTH_WARNING_START_SPEED
+    """Pre-warning confidence ball cadence: smooth breathing."""
     dt = 1 / gui_app.target_fps
-    self._ball_breath_phase = (self._ball_breath_phase + dt / max(start_cycle, 1e-3)) % 1.0
+    self._ball_breath_phase = (self._ball_breath_phase + dt / max(PREWARNING_BREATH_CYCLE, 1e-3)) % 1.0
     wave = 0.5 * (1.0 + math.cos(self._ball_breath_phase * 2.0 * math.pi))
     return BLINK_DIM_ALPHA + (1.0 - BLINK_DIM_ALPHA) * wave
 
@@ -284,12 +258,7 @@ class ConfidenceBall(Widget):
     self._orange_alert_prev_active = alert_active
     self._alert_morph_filter.update(1.0 if alert_active else 0.0)
     if red_active:
-      if ui_state.params.get_bool("SmoothWarning"):
-        # Smooth mode: keep red side bar solid; cadence is on background.
-        target_alpha = 1.0
-      else:
-        # Non-smooth mode: red cadence stays on side bar.
-        target_alpha = self._red_blink_target_alpha()
+      target_alpha = self._red_blink_target_alpha()
     elif orange_active:
       target_alpha = self._orange_blink_target_alpha()
     else:
@@ -304,15 +273,12 @@ class ConfidenceBall(Widget):
     # Animate the regular confidence ball ONLY during first-level "Pay Attention" warning.
     ball_anim_active = (not alert_active) and self._is_first_pay_attention_warning_active()
     if ball_anim_active and not self._ball_anim_prev_active:
-      self._ball_anim_started_at = rl.get_time()
       self._ball_breath_phase = 0.0
     self._ball_anim_prev_active = ball_anim_active
 
     if ball_anim_active:
-      if ui_state.params.get_bool("SmoothWarning"):
-        self._ball_alpha_filter.update(self._ball_breath_target_alpha())
-      else:
-        self._ball_alpha_filter.update(self._ball_blink_target_alpha())
+      # Unified behavior for preDriverDistracted: always use smooth breathing.
+      self._ball_alpha_filter.update(self._ball_breath_target_alpha())
     else:
       self._ball_alpha_filter.update(1.0)
     # Hide the base confidence dot whenever the orange alert bar is active,

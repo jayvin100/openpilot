@@ -32,11 +32,12 @@ def cycle_alerts(duration=200, is_metric=False):
     # DM sequence
     (EventName.preDriverDistracted, ET.WARNING),
     (EventName.promptDriverDistracted, ET.WARNING),
-    (EventName.driverDistracted, ET.WARNING),
+    (EventName.driverDistracted, ET.PERMANENT),
+    (EventName.driverUnresponsive, ET.PERMANENT),
   ]
 
   # debug alerts
-  alerts = [
+  alerts += [
     #(EventName.highCpuUsage, ET.NO_ENTRY),
     #(EventName.lowMemory, ET.PERMANENT),
     #(EventName.overheat, ET.PERMANENT),
