@@ -7,7 +7,6 @@ os.environ['DEV'] = WARP_DEVICE
 USBGPU = "USBGPU" in os.environ
 if USBGPU:
   os.environ['DEV'] = 'USB+AMD:LLVM'
-  os.environ['AMD_IFACE'] = 'USB'
   os.environ['GMMU'] = '0'
   # perf/compile
   os.environ['FLOAT16'] = '1'
