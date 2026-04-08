@@ -181,6 +181,18 @@ def compile_modeld(cam_w, cam_h):
 
   frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
 
+  # DEBUG: log what we're baking into the JIT
+  import hashlib
+  for name, path in [('vision', MODELS_DIR / 'driving_vision.onnx'), ('on_policy', MODELS_DIR / 'driving_on_policy.onnx'),
+                     ('off_policy', MODELS_DIR / 'driving_off_policy.onnx')]:
+    sz = path.stat().st_size
+    md5 = hashlib.md5(path.read_bytes()).hexdigest()[:12]
+    print(f"  COMPILE_DEBUG onnx {name}: size={sz} md5={md5}")
+  print(f"  COMPILE_DEBUG vision_features_slice={vision_features_slice} vision_output_size={vision_metadata['output_shapes']['outputs'][1]}")
+  print(f"  COMPILE_DEBUG vision_slices={list(vision_metadata['output_slices'].keys())}")
+  print(f"  COMPILE_DEBUG policy_input_shapes={policy_input_shapes}")
+  print(f"  COMPILE_DEBUG frame_skip={frame_skip}")
+
   _run = make_run_policy(vision_runner, on_policy_runner, off_policy_runner,
                          cam_w, cam_h, vision_features_slice, frame_skip)
   run_policy_jit = TinyJit(_run, prune=True)
@@ -210,7 +222,8 @@ def compile_modeld(cam_w, cam_h):
   pkl_path = policy_pkl_path(cam_w, cam_h)
   with open(pkl_path, "wb") as f:
     pickle.dump(run_policy_jit, f)
-  print(f"  Saved to {pkl_path}")
+  pkl_md5 = hashlib.md5(pkl_path.read_bytes()).hexdigest()[:12]
+  print(f"  Saved to {pkl_path} (size={pkl_path.stat().st_size} md5={pkl_md5})")
   return test_inputs, test_val
 
 

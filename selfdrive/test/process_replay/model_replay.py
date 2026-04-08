@@ -144,7 +144,51 @@ def trim_logs(logs, start_frame, end_frame, frs_types, include_all_types):
   return all_msgs
 
 
+def _debug_dump_model_files():
+  """Dump all model files so we can diff local vs CI."""
+  import hashlib, glob
+  from pathlib import Path
+  models_dir = Path(__file__).parents[2] / 'modeld' / 'models'
+  print("=" * 60)
+  print("MODEL_REPLAY_DEBUG: model files inventory")
+  print("=" * 60)
+  for p in sorted(models_dir.glob('*')):
+    if p.is_file():
+      sz = p.stat().st_size
+      md5 = hashlib.md5(p.read_bytes()).hexdigest()[:12]
+      tag = ""
+      # flag files that look stale (from master-era build)
+      if p.name in ('driving_vision_tinygrad.pkl', 'driving_policy_tinygrad.pkl',
+                     'driving_policy_metadata.pkl', 'warp_1928x1208_tinygrad.pkl', 'warp_1344x760_tinygrad.pkl'):
+        tag = " *** STALE FROM MASTER? ***"
+      # flag LFS pointer files (< 200 bytes = not fetched)
+      if p.suffix == '.onnx' and sz < 200:
+        tag = " *** LFS POINTER NOT FETCHED ***"
+      print(f"  {p.name:50s}  {sz:>12,}  {md5}{tag}")
+  print("=" * 60)
+
+  # also dump metadata content
+  import pickle
+  for name in ['driving_vision', 'driving_on_policy', 'driving_off_policy']:
+    mp = models_dir / f'{name}_metadata.pkl'
+    if mp.exists():
+      m = pickle.load(open(mp, 'rb'))
+      slices = {k: f"({v.start},{v.stop})" for k, v in m.get('output_slices', {}).items()}
+      print(f"  META {name}: output_size={m.get('output_shapes',{}).get('outputs',('?','?'))[1]} slices={slices}")
+      print(f"  META {name}: input_shapes={m.get('input_shapes',{})}")
+    else:
+      print(f"  META {name}: *** MISSING ***")
+  # check for stale master-era metadata
+  stale = models_dir / 'driving_policy_metadata.pkl'
+  if stale.exists():
+    m = pickle.load(open(stale, 'rb'))
+    print(f"  META driving_policy (STALE): slices={list(m.get('output_slices',{}).keys())}")
+  print("=" * 60)
+
+
 def model_replay(lr, frs):
+  _debug_dump_model_files()
+
   # modeld is using frame pairs
   modeld_logs = trim_logs(lr, START_FRAME, END_FRAME, {"roadCameraState", "wideRoadCameraState"},
                                                                          {"roadEncodeIdx", "wideRoadEncodeIdx", "carParams", "carState", "carControl", "can"})
@@ -165,6 +209,20 @@ def model_replay(lr, frs):
   dmonitoringmodeld = get_process_config("dmonitoringmodeld")
 
   modeld_msgs = replay_process(modeld, modeld_logs, frs)
+
+  # debug: dump first N frames of modeld output
+  mv2_msgs = [m.modelV2 for m in modeld_msgs if m.which() == 'modelV2']
+  print(f"MODEL_REPLAY_DEBUG: got {len(mv2_msgs)} modelV2 messages (expected ~{END_FRAME - START_FRAME})")
+  for i, mv in enumerate(mv2_msgs[:15]):
+    vel = mv.velocity.x[0] if len(mv.velocity.x) > 0 else float('nan')
+    lead = mv.leadsV3[0].x[0] if len(mv.leadsV3) > 0 and len(mv.leadsV3[0].x) > 0 else float('nan')
+    lane = mv.laneLines[1].y[0] if len(mv.laneLines) > 1 and len(mv.laneLines[1].y) > 0 else float('nan')
+    gas = mv.meta.disengagePredictions.gasPressProbs[1] if len(mv.meta.disengagePredictions.gasPressProbs) > 1 else float('nan')
+    ds = list(mv.meta.desireState)
+    accel = mv.action.desiredAcceleration
+    curv = mv.action.desiredCurvature
+    print(f"  frame {i:2d}: vel_x0={vel:7.2f}  lead_x0={lead:7.1f}  lane_y0={lane:6.2f}  gas_p1={gas:.4f}  accel={accel:6.3f}  curv={curv:.6f}  desire={[f'{d:.4f}' for d in ds[:5]]}")
+
   dmonitoringmodeld_msgs = replay_process(dmonitoringmodeld, dmodeld_logs, frs)
 
   msgs = modeld_msgs + dmonitoringmodeld_msgs

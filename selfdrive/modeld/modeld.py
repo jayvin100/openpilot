@@ -170,7 +170,52 @@ class ModelState:
 
     self.parser = Parser()
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
-    self.run_policy = pickle.loads(read_file_chunked(str(policy_pkl_path(cam_w, cam_h))))
+    pkl_path = policy_pkl_path(cam_w, cam_h)
+    self.run_policy = pickle.loads(read_file_chunked(str(pkl_path)))
+    self._run_count = 0
+
+    # ===== DEBUG: dump everything that could be stale =====
+    import hashlib
+    def _fhash(p):
+      try:
+        return hashlib.md5(open(p,'rb').read()).hexdigest()[:12]
+      except FileNotFoundError:
+        return "MISSING"
+    def _fsize(p):
+      try:
+        return Path(p).stat().st_size
+      except FileNotFoundError:
+        return -1
+
+    cloudlog.warning("MODELD_DEBUG ====== INIT ======")
+    # onnx file hashes — catches LFS pointer vs real file
+    for name in ['driving_vision', 'driving_on_policy', 'driving_off_policy']:
+      p = MODELS_DIR / f'{name}.onnx'
+      cloudlog.warning(f"MODELD_DEBUG onnx {name}: size={_fsize(p)} md5={_fhash(p)}")
+    # metadata file hashes — catches stale metadata
+    for name in ['driving_vision', 'driving_on_policy', 'driving_off_policy', 'driving_policy']:
+      p = MODELS_DIR / f'{name}_metadata.pkl'
+      cloudlog.warning(f"MODELD_DEBUG meta {name}: size={_fsize(p)} md5={_fhash(p)}")
+    # compiled pkl hash
+    cloudlog.warning(f"MODELD_DEBUG pkl: path={pkl_path} size={_fsize(pkl_path)} md5={_fhash(pkl_path)}")
+    # stale master-era files that should NOT exist
+    for stale_name in ['driving_vision_tinygrad.pkl', 'driving_policy_tinygrad.pkl',
+                       'warp_1928x1208_tinygrad.pkl', 'warp_1344x760_tinygrad.pkl',
+                       'driving_policy_metadata.pkl']:
+      p = MODELS_DIR / stale_name
+      if p.exists():
+        cloudlog.warning(f"MODELD_DEBUG STALE FILE EXISTS: {p} size={_fsize(p)}")
+
+    # metadata content
+    hs = self.vision_output_slices.get('hidden_state', None)
+    cloudlog.warning(f"MODELD_DEBUG vision: output_size={vision_output_size} hidden_state_slice={hs} all_slices={list(self.vision_output_slices.keys())}")
+    cloudlog.warning(f"MODELD_DEBUG on_policy: slices={list(self.policy_output_slices.keys())} input_shapes={self.policy_input_shapes}")
+    cloudlog.warning(f"MODELD_DEBUG off_policy: slices={list(self.off_policy_output_slices.keys())} input_shapes={self.off_policy_input_shapes}")
+    # buffer shapes
+    for k, v in self.bufs.items():
+      cloudlog.warning(f"MODELD_DEBUG buf '{k}': shape={v.shape} dtype={v.dtype} device={v.device}")
+    cloudlog.warning(f"MODELD_DEBUG cam={cam_w}x{cam_h} frame_skip={self.frame_skip}")
+    cloudlog.warning("MODELD_DEBUG ====== END INIT ======")
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
@@ -203,7 +248,55 @@ class ModelState:
 
     vision_output = vision_output.uop.base.buffer.numpy().flatten()
     on_policy_output = on_policy_output.uop.base.buffer.numpy().flatten()
-    off_policy_output = off_policy_output.uop.base.buffer.numpy()
+    off_policy_output = off_policy_output.uop.base.buffer.numpy().flatten()
+
+    if self._run_count < 10 or self._run_count % 10 == 0:
+      n = self._run_count
+      hs = self.vision_output_slices.get('hidden_state', None)
+      feats = vision_output[hs] if hs else np.array([])
+      cloudlog.warning(f"MODELD_DEBUG frame {n}: output_lens v={len(vision_output)} on={len(on_policy_output)} off={len(off_policy_output)}")
+      cloudlog.warning(f"MODELD_DEBUG frame {n}: tfm={self.npy['tfm'].tolist()} big_tfm_diag=[{self.npy['big_tfm'][0,0]:.4f},{self.npy['big_tfm'][1,1]:.4f},{self.npy['big_tfm'][2,2]:.4f}]")
+      cloudlog.warning(f"MODELD_DEBUG frame {n}: feats len={len(feats)} mean={feats.mean():.4f} std={feats.std():.4f} min={feats.min():.4f} max={feats.max():.4f}")
+      cloudlog.warning(f"MODELD_DEBUG frame {n}: vision_out mean={vision_output.mean():.4f} std={vision_output.std():.4f}")
+      cloudlog.warning(f"MODELD_DEBUG frame {n}: on_policy_out[:8]={on_policy_output[:8].tolist()}")
+      cloudlog.warning(f"MODELD_DEBUG frame {n}: off_policy_out[:8]={off_policy_output[:8].tolist()}")
+      cloudlog.warning(f"MODELD_DEBUG frame {n}: desire={self.npy['desire'].tolist()} traffic_conv={self.npy['traffic_convention'].tolist()}")
+      # parse plan velocity for quick sanity check
+      plan_mu = on_policy_output[:495].reshape(33, 15)
+      cloudlog.warning(f"MODELD_DEBUG frame {n}: plan_vel_x=[{plan_mu[0,3]:.2f},{plan_mu[5,3]:.2f},{plan_mu[10,3]:.2f}] plan_pos_x=[{plan_mu[0,0]:.2f},{plan_mu[5,0]:.2f},{plan_mu[10,0]:.2f}]")
+      # lead from off_policy
+      lead_start = self.off_policy_output_slices.get('lead', slice(0,0)).start
+      if lead_start > 0:
+        lead_mu = off_policy_output[lead_start:lead_start+72].reshape(3, 6, 4)
+        cloudlog.warning(f"MODELD_DEBUG frame {n}: lead0=[x={lead_mu[0,0,0]:.1f} y={lead_mu[0,0,1]:.2f} v={lead_mu[0,0,2]:.2f} a={lead_mu[0,0,3]:.2f}]")
+      # KEY CHECK: verify the JIT's baked-in hidden_state slice matches the metadata.
+      # The JIT extracts features internally and feeds them to the policy model.
+      # If the JIT was compiled with a STALE hidden_state slice, the features it uses
+      # internally would differ from what the metadata says hidden_state should be.
+      # We can't peek inside the JIT, but we CAN check: the feat_q buffer is updated
+      # by the JIT with the extracted features. Read back the newest entry and compare
+      # to what the metadata says hidden_state is.
+      feat_q_np = self.bufs['feat_q'].numpy()
+      newest_feat_in_q = feat_q_np[-1].flatten()  # last row = most recently appended feature
+      metadata_feats = feats.flatten() if len(feats) > 0 else np.array([])
+      if len(newest_feat_in_q) > 0 and len(metadata_feats) > 0 and len(newest_feat_in_q) == len(metadata_feats):
+        feat_match = np.allclose(newest_feat_in_q, metadata_feats, atol=1e-5)
+        feat_diff = np.abs(newest_feat_in_q - metadata_feats).max()
+        cloudlog.warning(f"MODELD_DEBUG frame {n}: FEAT_Q vs METADATA hidden_state: match={feat_match} max_diff={feat_diff:.6f}")
+        if not feat_match:
+          cloudlog.error(f"MODELD_DEBUG frame {n}: *** JIT BAKED-IN SLICE MISMATCH! JIT uses different hidden_state slice than metadata ***")
+          cloudlog.error(f"MODELD_DEBUG frame {n}: feat_q[-1][:5]={newest_feat_in_q[:5].tolist()} metadata_hs[:5]={metadata_feats[:5].tolist()}")
+      else:
+        cloudlog.warning(f"MODELD_DEBUG frame {n}: feat_q[-1] len={len(newest_feat_in_q)} metadata_hs len={len(metadata_feats)} (size mismatch?)")
+      # frame pixel sanity: check the raw frame isn't all zeros
+      for fkey in ('img', 'big_img'):
+        if fkey in self.full_frames:
+          frame_np = self.full_frames[fkey].numpy()
+          cloudlog.warning(f"MODELD_DEBUG frame {n}: {fkey} pixels: len={len(frame_np)} mean={frame_np.mean():.1f} std={frame_np.std():.1f} zeros%={100*(frame_np==0).mean():.1f}")
+      if prepare_only:
+        cloudlog.warning(f"MODELD_DEBUG frame {n}: PREPARE_ONLY=True (should have returned None)")
+    self._run_count += 1
+
     vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(vision_output, self.vision_output_slices))
     policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(on_policy_output, self.policy_output_slices))
     off_policy_outputs_dict = self.parser.parse_off_policy_outputs(self.slice_outputs(off_policy_output, self.off_policy_output_slices))
@@ -326,12 +419,17 @@ def main(demo=False):
     frame_id = sm["roadCameraState"].frameId
     v_ego = max(sm["carState"].vEgo, 0.)
     lat_delay = sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    if run_count <= 3:
+      cloudlog.warning(f"MODELD_DEBUG main loop {run_count}: sm.updated['liveCalibration']={sm.updated['liveCalibration']} "
+                       f"sm.seen['roadCameraState']={sm.seen['roadCameraState']} sm.seen['deviceState']={sm.seen['deviceState']} "
+                       f"live_calib_seen={live_calib_seen} vipc_frame_id={meta_main.frame_id} last_vipc_frame_id={last_vipc_frame_id}")
     if sm.updated["liveCalibration"] and sm.seen['roadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["liveCalibration"].rpyCalib, dtype=np.float32)
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['roadCameraState'].sensor))]
       model_transform_main = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics if main_wide_camera else dc.fcam.intrinsics, False).astype(np.float32)
       model_transform_extra = get_warp_matrix(device_from_calib_euler, dc.ecam.intrinsics, True).astype(np.float32)
       live_calib_seen = True
+      cloudlog.warning(f"MODELD_DEBUG calibration applied! euler={device_from_calib_euler.tolist()} tfm_main_diag={[model_transform_main[i,i] for i in range(3)]} det={np.linalg.det(model_transform_main):.6f}")
 
     traffic_convention = np.zeros(2)
     traffic_convention[int(is_rhd)] = 1
