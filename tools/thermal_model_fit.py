@@ -35,30 +35,20 @@ import numpy as np
 OPENPILOT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(OPENPILOT_ROOT))
 
+from openpilot.system.hardware.fan_controller import (
+  simulate_thermal, T_SETPOINT, TEMP_FF_BP, TEMP_FF_FAN,
+  POWER_FF_BP, POWER_FF_FAN, PRESPIN_TEMP_BP, PRESPIN_FAN_BP,
+)
 
-# ── Thermal model ──────────────────────────────────────────────────────────────
 
-def simulate_thermal(params, T_init, power_series, fan_series, T_amb, dt=0.5):
-  """
-  Simulate temperature evolution using lumped-capacitance model.
+# ── Thermal model fitting ─────────────────────────────────────────────────────
 
-  params: [tau_heat, tau_cool, R_passive, k_fan]
-  Returns: predicted temperature array
-  """
-  tau_heat, tau_cool, R_passive, k_fan = params
-  n = len(power_series)
-  T = np.zeros(n)
-  T[0] = T_init
-
-  for i in range(1, n):
-    R_total = R_passive / (1.0 + k_fan * fan_series[i - 1] / 100.0)
-    T_eq = T_amb + power_series[i - 1] * R_total
-    tau = tau_heat if T_eq > T[i - 1] else tau_cool
-    # Clamp tau to avoid division by zero or instability
-    tau = max(tau, 1.0)
-    T[i] = T[i - 1] + (dt / tau) * (T_eq - T[i - 1])
-
-  return T
+def _simulate_for_fit(params_tuple, T_init, power_series, fan_series, T_amb, dt=0.5):
+  """Wrapper: convert optimizer's param tuple to dict for simulate_thermal."""
+  tau_heat, tau_cool, R_passive, k_fan = params_tuple
+  return simulate_thermal(T_init, T_amb, power_series, fan_series,
+                          {'tau_heat': tau_heat, 'tau_cool': tau_cool,
+                           'R_passive': R_passive, 'k_fan': k_fan}, dt)
 
 
 def cost_function(params, transitions, dt=0.5):
@@ -70,7 +60,7 @@ def cost_function(params, transitions, dt=0.5):
   total_n = 0
 
   for T_init, T_amb, power, fan, temp_actual in transitions:
-    T_pred = simulate_thermal(params, T_init, power, fan, T_amb, dt)
+    T_pred = _simulate_for_fit(params, T_init, power, fan, T_amb, dt)
     err = np.sum((T_pred - temp_actual) ** 2)
     total_err += err
     total_n += len(temp_actual)
@@ -175,7 +165,7 @@ def prepare_transitions(records, use_post_only=True):
 
 # ── Derive fan curve breakpoints ───────────────────────────────────────────────
 
-def derive_fan_curve(params, T_setpoint=75.0, T_amb_range=(20, 45)):
+def derive_fan_curve(params, T_setpoint=T_SETPOINT, T_amb_range=(20, 45)):
   """
   From fitted model, derive the ideal fan % as a function of power draw.
 
@@ -283,7 +273,7 @@ def plot_model_fit(params, transitions, records, output_dir="."):
 
   for i in range(n_show):
     T_init, T_amb, power, fan, temp_actual = transitions[i]
-    T_pred = simulate_thermal(params, T_init, power, fan, T_amb)
+    T_pred = _simulate_for_fit(params, T_init, power, fan, T_amb)
     t = np.arange(len(temp_actual)) * 0.5
 
     ax = axes[i]
@@ -314,7 +304,7 @@ def plot_model_fit(params, transitions, records, output_dir="."):
   all_residuals = []
   all_times = []
   for T_init, T_amb, power, fan, temp_actual in transitions:
-    T_pred = simulate_thermal(params, T_init, power, fan, T_amb)
+    T_pred = _simulate_for_fit(params, T_init, power, fan, T_amb)
     residuals = T_pred - temp_actual
     t = np.arange(len(temp_actual)) * 0.5
     all_residuals.extend(residuals)
@@ -360,7 +350,7 @@ def plot_model_fit(params, transitions, records, output_dir="."):
     powers = np.arange(0.5, 10, 0.1)
     fans = []
     for P in powers:
-      delta_T = 75.0 - T_amb
+      delta_T = T_SETPOINT - T_amb
       if delta_T <= 0:
         fans.append(100)
       else:
@@ -377,7 +367,7 @@ def plot_model_fit(params, transitions, records, output_dir="."):
   ax = axes[1]
   ax.set_title('Current vs Model-Based Feedforward')
   temps = np.arange(40, 110)
-  current_ff = np.interp(temps, [60, 100], [0, 100])
+  current_ff = np.interp(temps, TEMP_FF_BP, TEMP_FF_FAN)
   ax.plot(temps, current_ff, 'r-', linewidth=2, label='Current (temp-only)')
   ax.axhline(30, color='gray', linestyle=':', label='Onroad minimum (30%)')
   ax.set_xlabel('Temperature (°C)')
@@ -400,12 +390,33 @@ def main():
   parser.add_argument('--plot', action='store_true', help='Generate validation plots')
   parser.add_argument('--plot-dir', type=str, default='.', help='Directory for plots')
   parser.add_argument('--validation-split', type=float, default=0.2, help='Fraction of data for validation')
+  parser.add_argument('--min-ambient', type=float, default=0, help='Only fit transitions with ambient temp >= this (C)')
+  parser.add_argument('--min-overshoot', type=float, default=0, help='Only fit transitions with overshoot >= this (C)')
+  parser.add_argument('--top-percentile', type=float, default=0,
+                      help='Only fit the hottest N%% of transitions by peak temp (e.g. 20 = top 20%%)')
   args = parser.parse_args()
 
   print(f"Loading fleet data from {args.input}...")
   with open(args.input, 'rb') as f:
     records = pickle.load(f)
   print(f"Loaded {len(records)} transition records")
+
+  # Filter to hot tail if requested
+  n_before = len(records)
+  if args.min_ambient > 0:
+    records = [r for r in records if r.t_ambient >= args.min_ambient]
+    print(f"  --min-ambient {args.min_ambient}: {n_before} -> {len(records)} records")
+  if args.min_overshoot > 0:
+    n_before = len(records)
+    records = [r for r in records if r.overshoot >= args.min_overshoot]
+    print(f"  --min-overshoot {args.min_overshoot}: {n_before} -> {len(records)} records")
+  if args.top_percentile > 0:
+    n_before = len(records)
+    peaks = sorted([r.t_peak for r in records])
+    if peaks:
+      cutoff = peaks[max(0, int(len(peaks) * (1 - args.top_percentile / 100)))]
+      records = [r for r in records if r.t_peak >= cutoff]
+    print(f"  --top-percentile {args.top_percentile}: {n_before} -> {len(records)} records (peak >= {cutoff:.1f}C)")
 
   # Prepare data
   print("\nPreparing transition data...")
@@ -511,8 +522,8 @@ def main():
     'controller_params': {
       'k_p': 2.0,
       'k_i': 4e-3,
-      'setpoint_c': 75.0,
-      'temp_feedforward_bp': [60.0, 100.0],
+      'setpoint_c': T_SETPOINT,
+      'temp_feedforward_bp': list(TEMP_FF_BP),
       'temp_feedforward_fan': [0, 100],
     },
   }
@@ -521,39 +532,14 @@ def main():
     json.dump(model, f, indent=2)
   print(f"\nSaved model to {args.output}")
 
-  # Print code snippet for fan_controller.py
+  # Print update instructions
   print(f"\n{'=' * 60}")
-  print("CODE SNIPPET for fan_controller.py:")
+  print("TO APPLY: update these constants in fan_controller.py:")
   print(f"{'=' * 60}")
-  print(f"""
-class FanController:
-  def __init__(self, rate: int) -> None:
-    self.last_ignition = False
-    self.controller = PIDController(k_p=2.0, k_i=4e-3, rate=rate)
-    # Power feedforward breakpoints (from fleet thermal model fit)
-    self.power_bp = {simple_power_bp}
-    self.power_ff = {simple_fan_bp}
-
-  def update(self, cur_temp: float, ignition: bool, power_draw_w: float = 0.0) -> int:
-    self.controller.pos_limit = 100 if ignition else 30
-    self.controller.neg_limit = 30 if ignition else 0
-
-    if ignition and not self.last_ignition:
-      # Pre-spin: seed integrator for immediate fan response on ignition
-      ff_at_temp = np.interp(cur_temp, [60.0, 100.0], [0, 100])
-      prespin = np.interp(cur_temp, {[round(t, 1) for t in prespin_temp_bp]}, {[round(f, 1) for f in prespin_fan_bp]})
-      self.controller.i = max(0, prespin - ff_at_temp)
-    self.last_ignition = ignition
-
-    ff_temp = np.interp(cur_temp, [60.0, 100.0], [0, 100])
-    ff_power = np.interp(power_draw_w, self.power_bp, self.power_ff) if ignition else 0
-    feedforward = max(ff_temp, ff_power)
-
-    return int(self.controller.update(
-                 error=(cur_temp - 75),
-                 feedforward=feedforward
-              ))
-""")
+  print(f"  POWER_FF_BP  = {simple_power_bp}")
+  print(f"  POWER_FF_FAN = {simple_fan_bp}")
+  print(f"  PRESPIN_TEMP_BP = {[round(t, 1) for t in prespin_temp_bp]}")
+  print(f"  PRESPIN_FAN_BP  = {[round(f, 1) for f in prespin_fan_bp]}")
 
   if args.plot:
     print("\nGenerating plots...")
