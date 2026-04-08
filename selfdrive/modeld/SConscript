@@ -21,9 +21,6 @@ tg_flags = {
 }.get(arch, 'DEV=CPU:LLVM THREADS=0')
 
 # Get model metadata
-# nuke stale metadata before regenerating (CI checkout can keep gitignored files from prior builds)
-for stale in glob.glob(os.path.join(Dir("#selfdrive/modeld").abspath, "models", "*_metadata.pkl")):
-  os.remove(stale)
 for model_name in ['driving_vision', 'driving_off_policy', 'driving_on_policy', 'dmonitoring_model']:
   fn = File(f"models/{model_name}").abspath
   script_files = [File(Dir("#selfdrive/modeld").File("get_model_metadata.py").abspath)]
