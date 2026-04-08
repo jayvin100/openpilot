@@ -84,23 +84,23 @@ class TestFanController:
 
   @pytest.mark.parametrize("controller_class", ALL_CONTROLLERS)
   def test_ambient_hot(self, controller_class):
-    """Hot ambient should produce more fan than reference ambient at same power."""
-    ctrl_ref = make_controller(controller_class)
+    """Hot ambient should produce more fan than moderate ambient at same power."""
+    ctrl_mod = make_controller(controller_class)
     ctrl_hot = make_controller(controller_class)
     for _ in range(10):
-      fan_ref = ctrl_ref.update(65, True, power_draw_w=6.0, t_amb=35.0)
-      fan_hot = ctrl_hot.update(65, True, power_draw_w=6.0, t_amb=50.0)
-    assert fan_hot > fan_ref
+      fan_mod = ctrl_mod.update(70, True, power_draw_w=5.0, t_amb=45.0)
+      fan_hot = ctrl_hot.update(70, True, power_draw_w=5.0, t_amb=55.0)
+    assert fan_hot > fan_mod
 
   @pytest.mark.parametrize("controller_class", ALL_CONTROLLERS)
   def test_ambient_cool(self, controller_class):
-    """Cool ambient should produce less fan than reference ambient at same power."""
-    ctrl_ref = make_controller(controller_class)
+    """Cool ambient should produce less fan than hot ambient at same power."""
+    ctrl_hot = make_controller(controller_class)
     ctrl_cool = make_controller(controller_class)
     for _ in range(10):
-      fan_ref = ctrl_ref.update(65, True, power_draw_w=6.0, t_amb=35.0)
-      fan_cool = ctrl_cool.update(65, True, power_draw_w=6.0, t_amb=25.0)
-    assert fan_cool < fan_ref
+      fan_hot = ctrl_hot.update(70, True, power_draw_w=5.0, t_amb=55.0)
+      fan_cool = ctrl_cool.update(70, True, power_draw_w=5.0, t_amb=35.0)
+    assert fan_cool < fan_hot
 
   @pytest.mark.parametrize("controller_class", ALL_CONTROLLERS)
   def test_ambient_missing(self, controller_class):

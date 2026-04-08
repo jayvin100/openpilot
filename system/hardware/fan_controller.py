@@ -13,6 +13,15 @@ POWER_FF_FAN = [0, 30, 60, 90]
 PRESPIN_TEMP_BP = [40.0, 55.0, 70.0]
 PRESPIN_FAN_BP = [30.0, 50.0, 80.0]
 
+# Thermal model parameters, fitted from 748 hot-tail fleet data points
+# (200 dongles, intake 50-80C, SoM power basis)
+MODEL_PARAMS = {
+  'tau_heat': 60.0,    # heating time constant (s)
+  'tau_cool': 120.0,   # cooling time constant (s)
+  'R_passive': 5.1,    # passive thermal resistance (C/W, fan off, SoM power basis)
+  'k_fan': 0.26,       # fan effectiveness — low: 0%->100% only reduces R by ~25%
+}
+
 
 def simulate_thermal(T_init, T_amb, power_series, fan_series, params, dt=0.5):
   """Lumped-capacitance thermal model. Used by fitting and simulation tools.
@@ -40,25 +49,60 @@ class FanController:
   def __init__(self, rate: int) -> None:
     self.last_ignition = False
     self.controller = PIDController(k_p=2.0, k_i=4e-3, rate=rate)
+    self.dt = 1.0 / rate
+    self.R_passive = MODEL_PARAMS['R_passive']
+    self.k_fan = MODEL_PARAMS['k_fan']
+    self.tau_heat = MODEL_PARAMS['tau_heat']
+    # Lookup table fallback when no ambient sensor available
     self.power_bp = list(POWER_FF_BP)
     self.power_ff = list(POWER_FF_FAN)
+
+  def _model_feedforward(self, power_draw_w: float, t_amb: float) -> float:
+    """Steady-state inversion: compute fan% to hold T_SETPOINT given power and ambient.
+
+    From: T_setpoint = T_amb + P * R_passive / (1 + k_fan * fan/100)
+    Solve: fan = 100/k_fan * (P * R_passive / (T_setpoint - T_amb) - 1)
+    """
+    delta_t = max(T_SETPOINT - t_amb, 5.0)
+    fan = 100.0 / self.k_fan * (power_draw_w * self.R_passive / delta_t - 1.0)
+    return max(0.0, fan)
+
+  def _predict_overshoot(self, cur_temp: float, power_draw_w: float, t_amb: float, fan_pct: float) -> float:
+    """Forward-simulate 10s to detect impending temperature overshoot."""
+    T = cur_temp
+    R_total = self.R_passive / (1.0 + self.k_fan * fan_pct / 100.0)
+    T_eq = t_amb + power_draw_w * R_total
+    for _ in range(int(10.0 / self.dt)):
+      T += (self.dt / max(self.tau_heat, 1.0)) * (T_eq - T)
+    return max(0.0, T - T_SETPOINT)
 
   def update(self, cur_temp: float, ignition: bool, power_draw_w: float = 0.0, t_amb: float = 0.0) -> int:
     self.controller.pos_limit = 100 if ignition else 30
     self.controller.neg_limit = 30 if ignition else 0
 
     if ignition and not self.last_ignition:
-      # Pre-spin: seed integrator so fan starts immediately on ignition.
       ff_at_temp = np.interp(cur_temp, TEMP_FF_BP, TEMP_FF_FAN)
       prespin = np.interp(cur_temp, PRESPIN_TEMP_BP, PRESPIN_FAN_BP)
       self.controller.i = max(0, prespin - ff_at_temp)
 
     self.last_ignition = ignition
 
+    # Temperature feedforward (safety floor — always active)
     ff_temp = np.interp(cur_temp, TEMP_FF_BP, TEMP_FF_FAN)
-    ff_power = np.interp(power_draw_w, self.power_bp, self.power_ff) if ignition else 0
-    if t_amb > 0:
-      ff_power *= (T_SETPOINT - T_REF_AMB) / max(T_SETPOINT - t_amb, 5.0)
+
+    if ignition and power_draw_w > 0:
+      if t_amb > 0:
+        # Model-based: compute exact fan% from physics
+        ff_power = self._model_feedforward(power_draw_w, t_amb)
+        # Predictive bump: if forward sim shows overshoot, add more fan now
+        overshoot = self._predict_overshoot(cur_temp, power_draw_w, t_amb, ff_power)
+        ff_power += overshoot * 2.0  # 2% per degree of predicted overshoot
+      else:
+        # No ambient sensor: fall back to lookup table
+        ff_power = np.interp(power_draw_w, self.power_bp, self.power_ff)
+    else:
+      ff_power = 0
+
     feedforward = max(ff_temp, ff_power)
 
     return int(self.controller.update(
