@@ -248,14 +248,14 @@ def main(demo=False):
   if use_extra_client:
     cloudlog.warning(f"connected extra cam with buffer size: {vipc_client_extra.buffer_len} ({vipc_client_extra.width} x {vipc_client_extra.height})")
 
-  # messaging - create SubMaster before model loading so we don't miss early liveCalibration messages
-  pm = PubMaster(["modelV2", "drivingModelData", "cameraOdometry"])
-  sm = SubMaster(["deviceState", "carState", "roadCameraState", "liveCalibration", "driverMonitoringState", "carControl", "liveDelay"])
-
   st = time.monotonic()
   cloudlog.warning("loading model")
   model = ModelState(vipc_client_main.width, vipc_client_main.height)
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
+
+  # messaging
+  pm = PubMaster(["modelV2", "drivingModelData", "cameraOdometry"])
+  sm = SubMaster(["deviceState", "carState", "roadCameraState", "liveCalibration", "driverMonitoringState", "carControl", "liveDelay"])
 
   publish_state = PublishState()
   params = Params()
