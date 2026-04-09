@@ -74,6 +74,9 @@ class MiciMainLayout(Scroller):
     self._scroller.scroll_to(layout_x, smooth=True)
 
   def _render(self, _):
+    if ui_state.is_body != self._is_body and ui_state.is_body:
+      self._onroad_layout = BodyLayout()
+
     if not self._setup:
       if self._alerts_layout.active_alerts() > 0:
         self._scroller.scroll_to(self._alerts_layout.rect.x)

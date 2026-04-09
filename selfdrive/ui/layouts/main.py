@@ -49,6 +49,10 @@ class MainLayout(Widget):
       gui_app.push_widget(self._onboarding_window)
 
   def _render(self, _):
+    if ui_state.is_body != self._is_body and ui_state.is_body:
+      self._onroad_layout = BodyLayout()
+      self._sidebar = BodySidebar()
+
     self._handle_onroad_transition()
     self._render_main_content()
 
