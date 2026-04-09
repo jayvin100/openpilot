@@ -99,13 +99,8 @@ class BodyLayout(Widget):
       return
 
     steer = sm['testJoystick'].axes[1] if len(sm['testJoystick'].axes) > 1 else 0
-    is_v2 = sm['carParams'].carFingerprint == CAR.COMMA_BODY_V2
-    if is_v2:
-      self._turning_left = steer <= -0.05
-      self._turning_right = steer >= 0.05
-    else:
-      self._turning_left = steer >= 0.05
-      self._turning_right = steer <= -0.05
+    self._turning_left = steer >= 0.05
+    self._turning_right = steer <= -0.05
 
   # play animation on screen tap
   def _handle_mouse_release(self, mouse_pos):
