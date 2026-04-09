@@ -465,7 +465,7 @@ class AlertRenderer(Widget):
         self._text_gen_time = time.monotonic()
       alert_text2 = self._alert_text2_gen or alert_text2
 
-    if can_draw_second_line and alert_text2:
+    if alert.status != AlertStatus.critical and can_draw_second_line and alert_text2:
       last_line_h = self._alert_text1_label.rect.y + self._alert_text1_label.get_content_height(int(alert_layout.text_rect.width))
       last_line_h -= 4
       if len(alert_text2) > 18:

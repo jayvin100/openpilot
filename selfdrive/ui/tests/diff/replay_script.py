@@ -205,7 +205,7 @@ def test_onroad_alerts(script: Script, pm: PubMaster) -> None:
   # Medium alert (userPrompt)
   script.set_send(make_alert_setup(pm, AlertSize.mid, "Medium Alert", "This is a medium alert", AlertStatus.userPrompt))
   # Full alert (critical)
-  script.set_send(make_alert_setup(pm, AlertSize.full, "DISENGAGE NOW!", "Driver Distracted", AlertStatus.critical))
+  script.set_send(make_alert_setup(pm, AlertSize.full, "DISENGAGE IMMEDIATELY", "Driver Distracted", AlertStatus.critical))
   # Full alert multiline
   script.set_send(make_alert_setup(pm, AlertSize.full, "Reverse\nGear", "", AlertStatus.normal))
   # Full alert long text
