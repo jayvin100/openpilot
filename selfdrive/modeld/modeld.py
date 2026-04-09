@@ -196,14 +196,15 @@ class ModelState:
     self.npy['traffic_convention'][:] = inputs['traffic_convention']
     self.npy['tfm'][:,:] = transforms['img'][:,:]
     self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
-
     vision_output, on_policy_output, off_policy_output = self.run_policy(
       **self.bufs, frame=self.full_frames['img'], big_frame=self.full_frames['big_img']
     )
 
-    vision_output = vision_output.uop.base.buffer.numpy().flatten()
-    on_policy_output = on_policy_output.uop.base.buffer.numpy().flatten()
-    off_policy_output = off_policy_output.uop.base.buffer.numpy()
+    # The returned tensors can carry a larger graph than the final realized output buffer.
+    # Reading through uop.base.buffer can observe the wrong storage; realize first.
+    vision_output = vision_output.realize().numpy().flatten()
+    on_policy_output = on_policy_output.realize().numpy().flatten()
+    off_policy_output = off_policy_output.realize().numpy().flatten()
     vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(vision_output, self.vision_output_slices))
     policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(on_policy_output, self.policy_output_slices))
     off_policy_outputs_dict = self.parser.parse_off_policy_outputs(self.slice_outputs(off_policy_output, self.off_policy_output_slices))
