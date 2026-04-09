@@ -200,8 +200,6 @@ class ModelState:
       **self.bufs, frame=self.full_frames['img'], big_frame=self.full_frames['big_img']
     )
 
-    # The returned tensors can carry a larger graph than the final realized output buffer.
-    # Reading through uop.base.buffer can observe the wrong storage; realize first.
     vision_output = vision_output.realize().numpy().flatten()
     on_policy_output = on_policy_output.realize().numpy().flatten()
     off_policy_output = off_policy_output.realize().numpy().flatten()
