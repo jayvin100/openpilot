@@ -85,13 +85,6 @@ class BodyLayout(Widget):
 
   # play animation on screen tap
   def _handle_mouse_release(self, mouse_pos):
-    if gui_app.big_ui():
-      # allow pairing button to work
-      pair_rect = self.pairing_button.rect
-      if rl.check_collision_point_rec(mouse_pos, pair_rect):
-        self.pairing_button._click_callback()
-        return
-
     super()._handle_mouse_release(mouse_pos)
     if not self._was_active:
       self._animator.set_animation(SLEEPY)
