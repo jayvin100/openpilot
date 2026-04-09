@@ -35,8 +35,6 @@ from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 PROCESS_NAME = "selfdrive.modeld.modeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 
-MODELS_DIR = Path(__file__).parent / 'models'
-# DRIVING_PKL_PATH = MODELS_DIR / 'driving_tinygrad.pkl'
 VISION_METADATA_PATH = MODELS_DIR / 'driving_vision_metadata.pkl'
 ON_POLICY_METADATA_PATH = MODELS_DIR / 'driving_on_policy_metadata.pkl'
 OFF_POLICY_METADATA_PATH = MODELS_DIR / 'driving_off_policy_metadata.pkl'
