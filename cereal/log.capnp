@@ -2622,8 +2622,6 @@ struct Event {
     userBookmark @93 :UserBookmark;
     bookmarkButton @148 :UserBookmark;
     audioFeedback @149 :AudioFeedback;
-    soundRequest @150 :SoundRequest;
-    webrtcAudioData @151 :AudioData;
 
     lateralManeuverPlan @150 :LateralManeuverPlan;
 
@@ -2638,6 +2636,9 @@ struct Event {
     livestreamRoadEncodeData @120 :EncodeData;
     livestreamWideRoadEncodeData @121 :EncodeData;
     livestreamDriverEncodeData @122 :EncodeData;
+
+    soundRequest @151 :SoundRequest;
+    webrtcAudioData @152 :AudioData;
 
     # *********** Custom: reserved for forks ***********
 
