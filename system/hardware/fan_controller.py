@@ -56,7 +56,7 @@ def simulate_thermal(T_init, T_amb, power_series, fan_series, params, dt=0.5):
 class FanController:
   def __init__(self, rate: int) -> None:
     self.last_ignition = False
-    self.controller = PIDController(k_p=2.0, k_i=4e-3, rate=rate)
+    self.controller = PIDController(k_p=0, k_i=4e-3, rate=rate)
     self.dt = 1.0 / rate
     self.R_passive = MODEL_PARAMS['R_passive']
     self.k_fan = MODEL_PARAMS['k_fan']
@@ -64,6 +64,11 @@ class FanController:
     # Lookup table fallback when no ambient sensor available
     self.power_bp = list(POWER_FF_BP)
     self.power_ff = list(POWER_FF_FAN)
+    # Feedforward filter to prevent audible fan oscillation.
+    # Root cause: model feedforward gain is ~38%/W at hot ambient (55C).
+    # Power draw fluctuates ±1-2W from modeld/CPU governor cycling.
+    # Without filtering: ±40% fan swings every second. With tau=10s: ±2%.
+    self._ff_filter = None
 
   def _model_feedforward(self, power_draw_w: float, t_amb: float) -> float:
     """Steady-state inversion: compute fan% to hold T_SETPOINT given power and ambient.
@@ -92,11 +97,13 @@ class FanController:
       ff_at_temp = np.interp(cur_temp, TEMP_FF_BP, TEMP_FF_FAN)
       prespin = np.interp(cur_temp, PRESPIN_TEMP_BP, PRESPIN_FAN_BP)
       self.controller.i = max(0, prespin - ff_at_temp)
+      # Reset filters on ignition so prespin isn't sluggish
+      self._ff_filter = None
 
     self.last_ignition = ignition
 
     # Temperature feedforward (safety floor — always active)
-    ff_temp = np.interp(cur_temp, TEMP_FF_BP, TEMP_FF_FAN)
+    ff_temp = float(np.interp(cur_temp, TEMP_FF_BP, TEMP_FF_FAN))
 
     if ignition and power_draw_w > 0:
       if t_amb > 0:
@@ -107,11 +114,24 @@ class FanController:
         ff_power += overshoot * 2.0  # 2% per degree of predicted overshoot
       else:
         # No ambient sensor: fall back to lookup table
-        ff_power = np.interp(power_draw_w, self.power_bp, self.power_ff)
+        ff_power = float(np.interp(power_draw_w, self.power_bp, self.power_ff))
     else:
-      ff_power = 0
+      ff_power = 0.0
 
-    feedforward = max(ff_temp, ff_power)
+    feedforward_raw = max(ff_temp, ff_power)
+
+    # Low-pass filter the feedforward to prevent audible fan oscillation.
+    # Power draw fluctuates ±1W at 2Hz, which through the model equation
+    # (high gain at hot ambient) causes ±20-40% fan swings every second.
+    # tau=10s smooths this without meaningfully slowing thermal response
+    # (thermal mass tau_heat=16.5s is already slower).
+    if self._ff_filter is None:
+      self._ff_filter = feedforward_raw
+    else:
+      alpha = self.dt / (30.0 + self.dt)  # tau=30s — must be >> power fluctuation period (~15s)
+      self._ff_filter += alpha * (feedforward_raw - self._ff_filter)
+
+    feedforward = self._ff_filter
 
     return int(self.controller.update(
                  error=(cur_temp - T_SETPOINT),

@@ -97,6 +97,20 @@ def percentile(vals, pct):
     return float(s[-1])
   return float(s[f] + (k - f) * (s[c] - s[f]))
 
+# ── Stop openpilot ────────────────────────────────────────────────────────────
+
+def stop_openpilot():
+  """Stop openpilot so we own the fan and CPU exclusively."""
+  os.system("sudo systemctl stop comma 2>/dev/null")
+  os.system("tmux kill-session -t comma 2>/dev/null")
+  time.sleep(2)
+  os.system("pkill -9 -f manager.py 2>/dev/null; pkill -9 -f pandad 2>/dev/null; "
+            "pkill -9 -f hardwared 2>/dev/null; pkill -9 -f modeld 2>/dev/null; "
+            "pkill -9 -f camerad 2>/dev/null")
+  time.sleep(2)
+  print("  Openpilot stopped (comma.service killed)")
+
+
 # ── Panda fan control ──────────────────────────────────────────────────────────
 
 def get_panda():
@@ -207,6 +221,31 @@ def read_power_draw() -> float:
     return 0.0
 
 
+# ── LMH throttle detection ──────────────────────────────────────────────────
+
+LMH_SILVER_PATH = "/sys/devices/platform/soc/17d41000.qcom,cpucc/17d41000.qcom,cpucc:qcom,limits-dcvs@0/lmh_freq_limit"
+LMH_GOLD_PATH = "/sys/devices/platform/soc/17d41000.qcom,cpucc/17d41000.qcom,cpucc:qcom,limits-dcvs@1/lmh_freq_limit"
+LMH_SILVER_MAX = 1766400  # unthrottled max
+LMH_GOLD_MAX = 2803200
+
+
+def read_lmh_state() -> dict:
+  """Read LMH throttle state. Returns dict with limits and throttle flag."""
+  try:
+    silver = int(Path(LMH_SILVER_PATH).read_text().strip())
+  except (OSError, ValueError):
+    silver = LMH_SILVER_MAX
+  try:
+    gold = int(Path(LMH_GOLD_PATH).read_text().strip())
+  except (OSError, ValueError):
+    gold = LMH_GOLD_MAX
+  return {
+    'lmh_silver_limit': silver,
+    'lmh_gold_limit': gold,
+    'lmh_throttled': silver < LMH_SILVER_MAX or gold < LMH_GOLD_MAX,
+  }
+
+
 # ── CPU power state control ───────────────────────────────────────────────────
 
 def sudo_write(val: str, path: str):
@@ -223,10 +262,13 @@ def set_onroad_cpu():
   """Simulate onroad: big cores online, performance governor."""
   for i in range(4, 8):
     sudo_write('1', f'/sys/devices/system/cpu/cpu{i}/online')
-  time.sleep(0.1)
+  time.sleep(0.3)
   for n in ('0', '4'):
     sudo_write('performance', f'/sys/devices/system/cpu/cpufreq/policy{n}/scaling_governor')
-  print("  CPU → onroad (all cores online, performance)")
+  # Verify
+  online = sum(1 for i in range(4, 8)
+               if Path(f'/sys/devices/system/cpu/cpu{i}/online').read_text().strip() == '1')
+  print(f"  CPU → onroad ({online}/4 big cores online, performance)")
 
 
 def set_offroad_cpu():
@@ -246,11 +288,14 @@ def start_stress():
   global _stress_proc
   stop_stress()
   # 8 CPU workers + 2 matrix workers = full core saturation for thermal stress
+  # --temp-path /tmp: stress-ng needs writable dir for temp files
   _stress_proc = subprocess.Popen(
-    ["stress-ng", "--cpu", "8", "--cpu-method", "matrixprod",
+    ["stress-ng", "--temp-path", "/tmp", "--cpu", "8", "--cpu-method", "matrixprod",
      "--matrix", "2", "--timeout", "0"],
-    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    cwd="/tmp"
   )
+  time.sleep(0.5)
   print(f"  stress-ng started (pid={_stress_proc.pid})")
 
 
@@ -372,6 +417,61 @@ class TransitionStats:
 
 # ── Main benchmark ────────────────────────────────────────────────────────────
 
+def auto_retune(csv_path, transitions):
+  """Analyze collected data and print retuned parameters.
+
+  Fits R_th = (T_comp - T_intake) / P_som from steady-state load samples.
+  Reports LMH throttle events and fan oscillation.
+  """
+  rows = []
+  with open(csv_path) as f:
+    for row in csv.DictReader(f):
+      rows.append(row)
+
+  # Extract steady-state: load phase, >60s into cycle
+  ss = []
+  for r in rows:
+    if r['phase'] != 'load':
+      continue
+    try:
+      t_phase = float(r['phase_elapsed_s'])
+      comp = float(r['temp_max_comp_C'])
+      intake = float(r.get('temp_intake_C', 0))
+      power = float(r['power_draw_W'])
+      fan = int(r['fan_desired_pct'])
+    except (ValueError, KeyError):
+      continue
+    if t_phase > 60 and comp > 30 and power > 0.5:
+      ss.append((comp, intake, power, fan))
+
+  if len(ss) < 10:
+    print(f"    Only {len(ss)} steady-state points, skipping retune")
+    return
+
+  # Fit R_th
+  R_th_values = [(c - i) / p for c, i, p, f in ss if p > 0.5 and i > 0]
+  if R_th_values:
+    R_th_med = sorted(R_th_values)[len(R_th_values) // 2]
+    print(f"    R_th (measured): {R_th_med:.2f} K/W from {len(R_th_values)} points")
+  else:
+    print(f"    No valid R_th points (intake=0?)")
+    R_th_med = 3.0
+
+  # Peak temps
+  peaks_stock = [t.t_peak for t in transitions if t.controller == 'stock' and t.t_peak > 0]
+  if peaks_stock:
+    print(f"    Stock peaks: {[round(p,1) for p in peaks_stock]}")
+
+  # LMH events
+  lmh_count = sum(1 for r in rows if r.get('lmh_throttled') == '1')
+  total_load = sum(1 for r in rows if r['phase'] == 'load')
+  print(f"    LMH throttle: {lmh_count}/{total_load} load samples")
+
+  # Recommended NewFanController.R_TH
+  print(f"    → Recommended R_TH = {R_th_med:.2f} for NewFanController")
+  print(f"    → T_eq at P=5.5W, intake=55°C: {55 + 5.5*R_th_med:.1f}°C")
+
+
 def run_benchmark(args):
   timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
   csv_path = f"/data/thermal_benchmark_{timestamp}.csv"
@@ -387,6 +487,7 @@ def run_benchmark(args):
   print()
 
   # Init
+  stop_openpilot()
   _build_zone_map()
   panda = get_panda()
   panda.set_fan_power(0)
@@ -415,6 +516,7 @@ def run_benchmark(args):
     "temp_max_comp_C", "temp_max_cpu_C",
     *temp_headers,
     "power_draw_W", "fan_desired_pct", "fan_rpm",
+    "lmh_silver_limit", "lmh_gold_limit", "lmh_throttled",
   ]
 
   csvfile = open(csv_path, 'w', newline='')
@@ -506,6 +608,7 @@ def run_benchmark(args):
               "power_draw_W": round(power, 3),
               "fan_desired_pct": fan_pct,
               "fan_rpm": fan_rpm,
+              **read_lmh_state(),
             }
             writer.writerow(row)
             csvfile.flush()
@@ -590,13 +693,16 @@ def run_benchmark(args):
             "power_draw_W": round(power, 3),
             "fan_desired_pct": fan_pct,
             "fan_rpm": fan_rpm,
+            **read_lmh_state(),
           }
           writer.writerow(row)
           csvfile.flush()
 
+          lmh = read_lmh_state()
           # Print progress every 30s
           if int(elapsed) % 30 == 0 and abs(elapsed - int(elapsed)) < sample_interval:
-            print(f"    t={elapsed:.0f}s: T={comp_temp:.1f}°C, fan={fan_pct}%, P={power:.1f}W, RPM={fan_rpm}")
+            lmh_str = " LMH!" if lmh['lmh_throttled'] else ""
+            print(f"    t={elapsed:.0f}s: T={comp_temp:.1f}°C, fan={fan_pct}%, P={power:.1f}W, RPM={fan_rpm}{lmh_str}")
 
           time.sleep(sample_interval)
 
@@ -668,10 +774,15 @@ def run_benchmark(args):
             "power_draw_W": round(power, 3),
             "fan_desired_pct": fan_pct,
             "fan_rpm": 0,
+            **read_lmh_state(),
           }
           writer.writerow(row)
           csvfile.flush()
           time.sleep(sample_interval)
+
+        # Auto-retune: analyze stock data and update new controller R_th
+        print(f"\n  === AUTO-RETUNE: analyzing stock baseline data ===")
+        auto_retune(csv_path, all_transitions)
 
   finally:
     # Clean up

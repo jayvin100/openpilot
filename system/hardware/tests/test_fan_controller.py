@@ -44,7 +44,7 @@ class TestFanController:
   def test_windup_speed(self, controller_class):
     controller = make_controller(controller_class)
     self.wind_down(controller, True)
-    for _ in range(10):
+    for _ in range(200):  # enough for 30s LP filter to settle
       controller.update(90, True)
     assert controller.update(90, True) >= 60
 
@@ -87,7 +87,7 @@ class TestFanController:
     """Hot ambient should produce more fan than moderate ambient at same power."""
     ctrl_mod = make_controller(controller_class)
     ctrl_hot = make_controller(controller_class)
-    for _ in range(10):
+    for _ in range(100):  # enough time for slew rate limit to settle
       fan_mod = ctrl_mod.update(70, True, power_draw_w=5.0, t_amb=45.0)
       fan_hot = ctrl_hot.update(70, True, power_draw_w=5.0, t_amb=55.0)
     assert fan_hot > fan_mod
@@ -97,7 +97,7 @@ class TestFanController:
     """Cool ambient should produce less fan than hot ambient at same power."""
     ctrl_hot = make_controller(controller_class)
     ctrl_cool = make_controller(controller_class)
-    for _ in range(10):
+    for _ in range(100):  # enough time for slew rate limit to settle
       fan_hot = ctrl_hot.update(70, True, power_draw_w=5.0, t_amb=55.0)
       fan_cool = ctrl_cool.update(70, True, power_draw_w=5.0, t_amb=35.0)
     assert fan_cool < fan_hot
