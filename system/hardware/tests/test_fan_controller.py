@@ -58,3 +58,22 @@ class TestFanController:
     controller = controller_class(2)
     self.wind_down(controller)
     assert controller.update(10, False) == 0
+
+  @pytest.mark.parametrize("controller_class", ALL_CONTROLLERS)
+  def test_fast_ramp_high_temp(self, controller_class):
+    controller = controller_class(2)
+    self.wind_down(controller, True)
+    # 85°C should produce immediate proportional response, not wait for integrator
+    fan = controller.update(85, True)
+    assert fan >= 50
+
+  @pytest.mark.parametrize("controller_class", ALL_CONTROLLERS)
+  def test_power_noise_filtered(self, controller_class):
+    controller = controller_class(2)
+    # feed noisy power at steady temp — fan should not swing wildly
+    fans = []
+    for i in range(60):
+      noisy_power = 6.0 + 1.5 * (1 if i % 2 else -1)
+      fans.append(controller.update(72, True, power_draw_w=noisy_power))
+    # last 20 samples should vary less than 5% peak-to-peak
+    assert max(fans[-20:]) - min(fans[-20:]) < 5
