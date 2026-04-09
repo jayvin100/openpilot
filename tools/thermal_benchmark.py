@@ -288,9 +288,9 @@ def start_stress():
   global _stress_proc
   stop_stress()
   # 8 CPU workers + 2 matrix workers = full core saturation for thermal stress
-  # --temp-path /tmp: stress-ng needs writable dir for temp files
+  # cwd=/tmp: stress-ng writes temp files to CWD, which must be writable
   _stress_proc = subprocess.Popen(
-    ["stress-ng", "--temp-path", "/tmp", "--cpu", "8", "--cpu-method", "matrixprod",
+    ["stress-ng", "--cpu", "8", "--cpu-method", "matrixprod",
      "--matrix", "2", "--timeout", "0"],
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     cwd="/tmp"
@@ -416,61 +416,6 @@ class TransitionStats:
 
 
 # ── Main benchmark ────────────────────────────────────────────────────────────
-
-def auto_retune(csv_path, transitions):
-  """Analyze collected data and print retuned parameters.
-
-  Fits R_th = (T_comp - T_intake) / P_som from steady-state load samples.
-  Reports LMH throttle events and fan oscillation.
-  """
-  rows = []
-  with open(csv_path) as f:
-    for row in csv.DictReader(f):
-      rows.append(row)
-
-  # Extract steady-state: load phase, >60s into cycle
-  ss = []
-  for r in rows:
-    if r['phase'] != 'load':
-      continue
-    try:
-      t_phase = float(r['phase_elapsed_s'])
-      comp = float(r['temp_max_comp_C'])
-      intake = float(r.get('temp_intake_C', 0))
-      power = float(r['power_draw_W'])
-      fan = int(r['fan_desired_pct'])
-    except (ValueError, KeyError):
-      continue
-    if t_phase > 60 and comp > 30 and power > 0.5:
-      ss.append((comp, intake, power, fan))
-
-  if len(ss) < 10:
-    print(f"    Only {len(ss)} steady-state points, skipping retune")
-    return
-
-  # Fit R_th
-  R_th_values = [(c - i) / p for c, i, p, f in ss if p > 0.5 and i > 0]
-  if R_th_values:
-    R_th_med = sorted(R_th_values)[len(R_th_values) // 2]
-    print(f"    R_th (measured): {R_th_med:.2f} K/W from {len(R_th_values)} points")
-  else:
-    print(f"    No valid R_th points (intake=0?)")
-    R_th_med = 3.0
-
-  # Peak temps
-  peaks_stock = [t.t_peak for t in transitions if t.controller == 'stock' and t.t_peak > 0]
-  if peaks_stock:
-    print(f"    Stock peaks: {[round(p,1) for p in peaks_stock]}")
-
-  # LMH events
-  lmh_count = sum(1 for r in rows if r.get('lmh_throttled') == '1')
-  total_load = sum(1 for r in rows if r['phase'] == 'load')
-  print(f"    LMH throttle: {lmh_count}/{total_load} load samples")
-
-  # Recommended NewFanController.R_TH
-  print(f"    → Recommended R_TH = {R_th_med:.2f} for NewFanController")
-  print(f"    → T_eq at P=5.5W, intake=55°C: {55 + 5.5*R_th_med:.1f}°C")
-
 
 def run_benchmark(args):
   timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -779,10 +724,6 @@ def run_benchmark(args):
           writer.writerow(row)
           csvfile.flush()
           time.sleep(sample_interval)
-
-        # Auto-retune: analyze stock data and update new controller R_th
-        print(f"\n  === AUTO-RETUNE: analyzing stock baseline data ===")
-        auto_retune(csv_path, all_transitions)
 
   finally:
     # Clean up
