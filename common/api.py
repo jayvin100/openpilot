@@ -7,10 +7,6 @@ from openpilot.system.version import get_version
 
 API_HOST = os.getenv('API_HOST', 'https://api.commadotai.com')
 
-CONNECT_HOST = os.getenv('CONNECT_HOST', 'https://connect.comma.ai')
-CONNECT_HOST_DISPLAY = CONNECT_HOST.removeprefix("https://").removeprefix("http://")
-CONNECT_CLIENT = os.getenv('CONNECT_CLIENT', 'no domain name set')
-
 # name: jwt signature algorithm
 KEYS = {"id_rsa": "RS256",
         "id_ecdsa": "ES256"}

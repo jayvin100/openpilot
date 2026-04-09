@@ -1,28 +1,35 @@
 import pyray as rl
-from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
-from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.system.ui.widgets.button import Button, ButtonStyle
-from openpilot.selfdrive.ui.body.widgets.pairing_dialog import OneTimeConnectPanel
+from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.system.ui.lib.application import FontWeight
+from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.selfdrive.ui.mici.layouts.home import MiciHomeLayout
 
-PAIR_BTN_FONT_SIZE = 36
-PAIR_BTN_MARGIN = 8
+PAIR_MESSAGE_FONT_SIZE = 24
+PAIR_MESSAGE_MARGIN = 16
+PAIR_MESSAGE_WIDTH = 260
 
 
 class MiciBodyHomeLayout(MiciHomeLayout):
   def __init__(self):
     super().__init__()
     self._branch_label.set_visible(False)
-    self._pair_button = self._child(Button("CONNECT", font_size=PAIR_BTN_FONT_SIZE, font_weight=FontWeight.BOLD,
-                                           click_callback=lambda: gui_app.push_widget(OneTimeConnectPanel()),
-                                           button_style=ButtonStyle.ACTION))
+    self._pair_message = self._child(UnifiedLabel("", font_size=PAIR_MESSAGE_FONT_SIZE, font_weight=FontWeight.SEMI_BOLD,
+                                                  text_color=rl.Color(255, 255, 255, int(255 * 0.9)),
+                                                  alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT,
+                                                  alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_BOTTOM,
+                                                  text_padding=0, elide=False, wrap_text=True, line_height=0.95))
+
+  def _get_pair_message(self) -> str:
+    if not ui_state.prime_state.is_paired():
+      return "pair to this device in settings"
+    if ui_state.ignition:
+      return "use at: connect.comma.ai"
+    return "turn on ignition to use"
 
   def _render(self, rect: rl.Rectangle):
     super()._render(rect)
-    font_bold = gui_app.font(FontWeight.BOLD)
-    text_size = measure_text_cached(font_bold, "CONNECT", PAIR_BTN_FONT_SIZE)
-    btn_w = int(text_size.x + 100)
-    btn_h = 124
-    btn_x = self._rect.x + self._rect.width - btn_w - PAIR_BTN_MARGIN
-    btn_y = self._rect.y + self._rect.height - btn_h - 5 - PAIR_BTN_MARGIN
-    self._pair_button.render(rl.Rectangle(btn_x, btn_y, btn_w, btn_h))
+    self._pair_message.set_text(self._get_pair_message())
+    msg_h = int(self._pair_message.get_content_height(PAIR_MESSAGE_WIDTH) + 6)
+    msg_x = self._rect.x + self._rect.width - PAIR_MESSAGE_WIDTH - PAIR_MESSAGE_MARGIN
+    msg_y = self._rect.y + self._rect.height - msg_h - PAIR_MESSAGE_MARGIN
+    self._pair_message.render(rl.Rectangle(msg_x, msg_y, PAIR_MESSAGE_WIDTH, msg_h))

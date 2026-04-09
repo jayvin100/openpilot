@@ -4,14 +4,9 @@ import time
 
 import pyray as rl
 from openpilot.system.ui.lib.application import gui_app, FontWeight
-from openpilot.system.ui.lib.multilang import tr, tr_noop
-from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.widgets.button import Button, ButtonStyle
-from openpilot.selfdrive.ui.body.widgets.pairing_dialog import BodyPairingScreen
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.body.animations import FaceAnimator, ASLEEP, INQUISITIVE, NORMAL, SLEEPY
-from opendbc.car.body.values import CAR
 
 GRID_COLS = 16
 GRID_ROWS = 8
@@ -36,10 +31,6 @@ class BodyLayout(Widget):
     self._font_bold = gui_app.font(FontWeight.BOLD)
     self._prev_joystick_debug_mode = False
 
-    self.pairing_button = Button("CONNECT", font_size=PAIR_BTN_FONT_SIZE, font_weight=FontWeight.BOLD,
-                        click_callback=lambda: gui_app.push_widget(BodyPairingScreen()),
-                        button_style=ButtonStyle.ACTION)
-
   def set_settings_callback(self, callback):
     pass
 
@@ -62,16 +53,6 @@ class BodyLayout(Widget):
       x = int(offset_x + col * spacing)
       y = int(offset_y + row * spacing)
       rl.draw_circle(x, y, RADIUS, color)
-
-  def _draw_pair_button(self, rect: rl.Rectangle):
-    text = tr(tr_noop("CONNECT"))
-    text_size = measure_text_cached(self._font_bold, text, PAIR_BTN_FONT_SIZE)
-    btn_w = int(text_size.x + 200)
-    btn_h = 200
-    btn_x = int(rect.x + rect.width - btn_w - PAIR_BTN_MARGIN)
-    btn_y = int(rect.y + rect.height - btn_h - PAIR_BTN_MARGIN)
-
-    self.pairing_button.render(rl.Rectangle(btn_x, btn_y, btn_w, btn_h))
 
   def _update_state(self):
     sm = ui_state.sm
@@ -125,11 +106,3 @@ class BodyLayout(Widget):
       remove_set = set(animation.right_turn_remove)
       dots = [d for d in dots if d not in remove_set]
     self.draw_dot_grid(rect, dots)
-    if gui_app.big_ui():
-      if ui_state.joystick_debug_mode:
-        for widget in gui_app._nav_stack:
-          if isinstance(widget, BodyPairingScreen):
-            gui_app.pop_widget()
-            break
-      else:
-        self._draw_pair_button(rect)
