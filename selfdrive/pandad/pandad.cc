@@ -302,7 +302,6 @@ void process_peripheral_state(Panda *panda, PubMaster *pm, bool no_fan_control) 
 
   {
     sm.update(0);
-
     if (sm.updated("deviceState") && !no_fan_control) {
       // Fan speed
       uint16_t fan_speed = sm["deviceState"].getDeviceState().getFanSpeedPercentDesired();
@@ -341,17 +340,18 @@ void process_peripheral_state(Panda *panda, PubMaster *pm, bool no_fan_control) 
       ir_pwr = 0;
     }
 
-    if (ir_pwr != prev_ir_pwr || sm.frame % 100 == 0) {
-      std::string cp_bytes = params.get("CarParams");
-      if (cp_bytes.size() > 0) {
-        AlignedBuffer aligned_buf;
-        capnp::FlatArrayMessageReader cmsg(aligned_buf.align(cp_bytes.data(), cp_bytes.size()));
-        cereal::CarParams::Reader CP = cmsg.getRoot<cereal::CarParams>();
-        if (CP.getNotCar()) {
-          ir_pwr = 0;
-        }
+    // turn off IR leds if body
+    std::string cp_bytes = params.get("CarParams");
+    if (cp_bytes.size() > 0) {
+      AlignedBuffer aligned_buf;
+      capnp::FlatArrayMessageReader cmsg(aligned_buf.align(cp_bytes.data(), cp_bytes.size()));
+      cereal::CarParams::Reader CP = cmsg.getRoot<cereal::CarParams>();
+      if (CP.getNotCar()) {
+        ir_pwr = 0;
       }
+    }
 
+    if (ir_pwr != prev_ir_pwr || sm.frame % 100 == 0) {
       int16_t ir_panda = util::map_val(ir_pwr, 0, 100, 0, MAX_IR_PANDA_VAL);
       panda->set_ir_pwr(ir_panda);
       Hardware::set_ir_power(ir_pwr);
