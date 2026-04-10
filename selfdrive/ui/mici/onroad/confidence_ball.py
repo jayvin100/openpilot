@@ -30,13 +30,22 @@ class ConfidenceBall(Widget):
   def update_filter(self, value: float):
     self._confidence_filter.update(value)
 
+  def _should_keep_disengaged_ball_visible(self) -> bool:
+    # Style-specific behavior for quickly iterating on engage/disengage visuals.
+    return ui_state.engage_style == "black"
+
+  def _disengaged_target_confidence(self) -> float:
+    # For black style, the ball should rest at the bottom edge (still visible).
+    # Other styles keep the legacy behavior where it drops below the screen.
+    return 0.0 if self._should_keep_disengaged_ball_visible() else -0.5
+
   def _update_state(self):
     if self._demo:
       return
 
     # animate status dot in from bottom
     if ui_state.status == UIStatus.DISENGAGED:
-      self._confidence_filter.update(-0.5)
+      self._confidence_filter.update(self._disengaged_target_confidence())
     else:
       self._confidence_filter.update((1 - max(ui_state.sm['modelV2'].meta.disengagePredictions.brakeDisengageProbs or [1])) *
                                                         (1 - max(ui_state.sm['modelV2'].meta.disengagePredictions.steerOverrideProbs or [1])))
@@ -52,6 +61,11 @@ class ConfidenceBall(Widget):
     status_dot_radius = 24
     dot_height = (1 - self._confidence_filter.x) * (content_rect.height - 2 * status_dot_radius) + status_dot_radius
     dot_height = self._rect.y + dot_height
+
+    # Safety clamp: black style should never render below the bottom edge.
+    if ui_state.status == UIStatus.DISENGAGED and self._should_keep_disengaged_ball_visible():
+      bottom_visible_dot_height = self._rect.y + self._rect.height - status_dot_radius
+      dot_height = min(dot_height, bottom_visible_dot_height)
 
     # confidence zones
     if ui_state.status == UIStatus.ENGAGED or self._demo:
@@ -70,8 +84,8 @@ class ConfidenceBall(Widget):
       bottom_dot_color = rl.Color(82, 82, 82, 255)
 
     else:
-      top_dot_color = rl.Color(50, 50, 50, 255)
-      bottom_dot_color = rl.Color(13, 13, 13, 255)
+      top_dot_color = rl.Color(102, 102, 102, 255)
+      bottom_dot_color = rl.Color(26, 26, 26, 255)
 
     draw_circle_gradient(content_rect.x + content_rect.width - status_dot_radius,
                          dot_height, status_dot_radius,

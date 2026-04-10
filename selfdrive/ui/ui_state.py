@@ -80,6 +80,7 @@ class UIState:
     self.CP: car.CarParams | None = None
     self.light_sensor: float = -1.0
     self._param_update_time: float = 0.0
+    self.engage_style: str = "white"
 
     # Callbacks
     self._offroad_transition_callbacks: list[Callable[[], None]] = []
@@ -92,6 +93,9 @@ class UIState:
 
   def add_engaged_transition_callback(self, callback: Callable[[], None]):
     self._engaged_transition_callbacks.append(callback)
+
+  def set_engage_style(self, style: str) -> None:
+    self.engage_style = style
 
   @property
   def engaged(self) -> bool:

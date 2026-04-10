@@ -124,6 +124,7 @@ class HudRenderer(Widget):
 
     self._wheel_alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
     self._wheel_y_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
+    self._wheel_rotation_filter = FirstOrderFilter(0, 0.08, 1 / gui_app.target_fps)
 
     self._set_speed_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
 
@@ -186,7 +187,13 @@ class HudRenderer(Widget):
       self._wheel_alpha_filter.update(255)
       self._wheel_y_filter.update(0)
     else:
-      if ui_state.status == UIStatus.DISENGAGED:
+      if ui_state.engage_style in ("white", "green"):
+        # White/green styles: always show the wheel in the same position,
+        # but fade it when disengaged.
+        target_alpha = 255 * 0.35 if ui_state.status == UIStatus.DISENGAGED else 255 * 0.9
+        self._wheel_alpha_filter.update(target_alpha)
+        self._wheel_y_filter.update(0)
+      elif ui_state.status == UIStatus.DISENGAGED:
         self._wheel_alpha_filter.update(0)
         self._wheel_y_filter.update(wheel_txt.height / 2)
       else:
@@ -196,7 +203,14 @@ class HudRenderer(Widget):
     # pos
     pos_x = int(rect.x + 21 + wheel_txt.width / 2)
     pos_y = int(rect.y + rect.height - 14 - wheel_txt.height / 2 + self._wheel_y_filter.x)
-    rotation = -ui_state.sm['carState'].steeringAngleDeg
+    live_rotation = -ui_state.sm['carState'].steeringAngleDeg
+    if ui_state.engage_style == "white":
+      target_rotation = 0 if ui_state.status == UIStatus.DISENGAGED else live_rotation
+      rotation = self._wheel_rotation_filter.update(target_rotation)
+    else:
+      # Preserve legacy behavior for non-white styles.
+      self._wheel_rotation_filter.x = live_rotation
+      rotation = live_rotation
 
     turn_intent_margin = 25
     self._turn_intent.render(rl.Rectangle(
@@ -211,7 +225,11 @@ class HudRenderer(Widget):
     origin = (wheel_txt.width / 2, wheel_txt.height / 2)
 
     # color and draw
-    color = rl.Color(255, 255, 255, int(self._wheel_alpha_filter.x))
+    if (not self._show_wheel_critical and ui_state.engage_style == "green" and
+        self._engaged):
+      color = rl.Color(0, 255, 64, int(self._wheel_alpha_filter.x))
+    else:
+      color = rl.Color(255, 255, 255, int(self._wheel_alpha_filter.x))
     rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, rotation, color)
 
     if self._show_wheel_critical:

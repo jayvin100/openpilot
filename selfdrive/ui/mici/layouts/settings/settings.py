@@ -1,12 +1,13 @@
 from openpilot.common.params import Params
 from openpilot.system.ui.widgets.scroller import NavScroller
-from openpilot.selfdrive.ui.mici.widgets.button import BigButton
+from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigMultiToggle
 from openpilot.selfdrive.ui.mici.layouts.settings.toggles import TogglesLayoutMici
 from openpilot.selfdrive.ui.mici.layouts.settings.network.network_layout import NetworkLayoutMici
 from openpilot.selfdrive.ui.mici.layouts.settings.device import DeviceLayoutMici, PairBigButton
 from openpilot.selfdrive.ui.mici.layouts.settings.developer import DeveloperLayoutMici
 from openpilot.selfdrive.ui.mici.layouts.settings.firehose import FirehoseLayout
 from openpilot.system.ui.lib.application import gui_app, FontWeight
+from openpilot.selfdrive.ui.ui_state import ui_state
 
 
 class SettingsBigButton(BigButton):
@@ -18,6 +19,8 @@ class SettingsLayout(NavScroller):
   def __init__(self):
     super().__init__()
     self._params = Params()
+    engage_style_toggle = BigMultiToggle("engage style", ["white", "green", "black"],
+                                         select_callback=ui_state.set_engage_style)
 
     toggles_panel = TogglesLayoutMici()
     toggles_btn = SettingsBigButton("toggles", "", gui_app.texture("icons_mici/settings.png", 64, 64))
@@ -40,6 +43,7 @@ class SettingsLayout(NavScroller):
     firehose_btn.set_click_callback(lambda: gui_app.push_widget(firehose_panel))
 
     self._scroller.add_widgets([
+      engage_style_toggle,
       toggles_btn,
       network_btn,
       device_btn,
