@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import numpy as np
 
-# Fan curve fitted from 98k onroad samples across 824 seg-0 fleet transitions.
-# LMH-DCVS trips at 95°C with 30°C hysteresis (release at 65°C), so fan must
-# hit 100% before 90°C to avoid the throttle cliff.
-TEMP_BP = [65.0, 72.0, 78.0, 85.0, 90.0]
-FAN_BP  = [  0.0, 30.0, 75.0, 90.0, 100.0]
+# Lumped-parameter thermal model: T_eq = T_ambient + P * R_th
+# R_th = 3.5 °C/W - flat above 30% fan, fitted from fleet data
+# T_LMH = 90 °C - LMH-DCVS trips at 95°C, 5°C safety margin
+# Fan is mapped from thermal headroom: how far current temp is from the LMH limit.
+R_TH = 3.5   # °C/W
+T_LMH = 90.0 # 5°C safety margin from 95°C LMH-DCVS trip point
+HEADROOM_BP = [0, 5, 12, 18, 25]
+FAN_BP      = [100, 90, 75, 30, 0]
 
 
 class FanController:
@@ -14,5 +17,5 @@ class FanController:
 
   def update(self, cur_temp: float, ignition: bool) -> int:
     if not ignition:
-      return int(np.clip(np.interp(cur_temp, TEMP_BP, FAN_BP), 0, 30))
-    return int(np.clip(np.interp(cur_temp, TEMP_BP, FAN_BP), 30, 100))
+      return int(np.clip(np.interp(T_LMH - cur_temp, HEADROOM_BP, FAN_BP), 0, 30))
+    return int(np.clip(np.interp(T_LMH - cur_temp, HEADROOM_BP, FAN_BP), 30, 100))
