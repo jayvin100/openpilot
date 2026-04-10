@@ -3,8 +3,11 @@
 import argparse
 import asyncio
 import json
-import uuid
 import logging
+import os
+import ssl
+import subprocess
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
@@ -224,6 +227,33 @@ async def get_schema(request: 'web.Request'):
   schema_dict = {s: generate_field(log.Event.schema.fields[s]) for s in services}
   return web.json_response(schema_dict)
 
+
+TRUST_HTML = """<!DOCTYPE html>
+<html><head><title>comma body</title>
+<style>
+  body { background: #111; color: #fff; font-family: -apple-system, system-ui, sans-serif;
+         display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+  .card { text-align: center; max-width: 400px; padding: 40px; }
+  h1 { font-size: 24px; margin-bottom: 8px; }
+  p { color: #aaa; font-size: 14px; }
+  .check { font-size: 64px; margin-bottom: 16px; }
+</style></head>
+<body><div class="card">
+  <h1>SSL Certificate Accepted</h1>
+  <p>You can close this tab and return to the connect app.</p>
+  <script>
+    if (window.opener) {
+      window.opener.postMessage({ type: 'ssl_cert_accepted' }, '*');
+    }
+    setTimeout(() => window.close(), 100);
+  </script>
+</div></body></html>"""
+
+
+async def get_trust(request: 'web.Request'):
+  return web.Response(content_type="text/html", text=TRUST_HTML)
+
+
 async def post_notify(request: 'web.Request'):
   try:
     payload = await request.json()
@@ -245,22 +275,79 @@ async def on_shutdown(app: 'web.Application'):
   del app['streams']
 
 
-def webrtcd_thread(host: str, port: int, debug: bool):
-  logging.basicConfig(level=logging.CRITICAL, handlers=[logging.StreamHandler()])
-  logging_level = logging.DEBUG if debug else logging.INFO
-  logging.getLogger("WebRTCStream").setLevel(logging_level)
-  logging.getLogger("webrtcd").setLevel(logging_level)
+CERT_PATH = "/data/webrtc_cert.pem"
+KEY_PATH = "/data/webrtc_key.pem"
 
+
+def create_ssl_cert():
+  logger = logging.getLogger("webrtcd")
+  try:
+    subprocess.run([
+      "openssl", "req", "-x509", "-newkey", "rsa:4096", "-nodes",
+      "-out", CERT_PATH, "-keyout", KEY_PATH,
+      "-days", "365", "-subj", "/C=US/ST=California/O=commaai/OU=comma body",
+    ], capture_output=True, text=True, check=True)
+  except subprocess.CalledProcessError as ex:
+    raise ValueError(f"Error creating SSL certificate:\n[stdout]\n{ex.stdout}\n[stderr]\n{ex.stderr}") from ex
+  logger.info("SSL certificate created")
+
+
+def create_ssl_context():
+  logger = logging.getLogger("webrtcd")
+  if not os.path.exists(CERT_PATH) or not os.path.exists(KEY_PATH):
+    logger.info("Creating SSL certificate...")
+    create_ssl_cert()
+  else:
+    logger.info("SSL certificate exists")
+  ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+  ssl_ctx.load_cert_chain(CERT_PATH, KEY_PATH)
+  return ssl_ctx
+
+
+def create_app(debug: bool) -> web.Application:
   app = web.Application()
-
   app['streams'] = dict()
   app['debug'] = debug
   app.on_shutdown.append(on_shutdown)
   app.router.add_post("/stream", get_stream)
   app.router.add_post("/notify", post_notify)
   app.router.add_get("/schema", get_schema)
+  app.router.add_get("/trust", get_trust)
+  return app
 
-  web.run_app(app, host=host, port=port)
+
+def webrtcd_thread(host: str, port: int, debug: bool):
+  logging.basicConfig(level=logging.CRITICAL, handlers=[logging.StreamHandler()])
+  logging_level = logging.DEBUG if debug else logging.INFO
+  logging.getLogger("WebRTCStream").setLevel(logging_level)
+  logging.getLogger("webrtcd").setLevel(logging_level)
+  logger = logging.getLogger("webrtcd")
+
+  app = create_app(debug)
+  https_port = port + 1
+
+  loop = asyncio.new_event_loop()
+  asyncio.set_event_loop(loop)
+
+  runner = web.AppRunner(app)
+
+  async def start():
+    await runner.setup()
+
+    http_site = web.TCPSite(runner, host, port)
+    await http_site.start()
+    logger.info("HTTP server running on %s:%d", host, port)
+
+    https_site = web.TCPSite(runner, host, https_port, ssl_context=create_ssl_context())
+    await https_site.start()
+    logger.info("HTTPS server running on %s:%d", host, https_port)
+
+  try:
+    loop.run_until_complete(start())
+    loop.run_forever()
+  finally:
+    loop.run_until_complete(runner.cleanup())
+    loop.close()
 
 
 def main():
