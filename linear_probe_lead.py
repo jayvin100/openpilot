@@ -39,7 +39,7 @@ FEATURE_SLICE = slice(117, 629)
 
 LEXUS_TRAIN = [
   '7830b8e854d6713c/000000f9--a736138536/5:',
-  # '7830b8e854d6713c/000000c9--e769ceac34/7:21',
+  '7830b8e854d6713c/000000c9--e769ceac34/7:21',
   # '7830b8e854d6713c/000000d1--9f7385daf2',
   # '7830b8e854d6713c/000000d4--ac4ec365b4',
   # '7830b8e854d6713c/000000cb--8d6a2f4626',
@@ -230,11 +230,9 @@ def train_temporal_probe(train_seqs, train_lead, train_prob, val_seqs, val_lead,
         else:
           val_x_mae, val_v_mae = 0, 0
         val_prob_acc = ((val_prob_pred > 0) == (val_p > 0.5)).float().mean().item()
-        n_lead_train = int(train_has.sum())
-        n_lead_val = int(has_lead.sum())
       print(f"  epoch {epoch:>3d}: loss={total_loss/len(train_x):.3f} | "
-            f"train dRel={tr_x_mae:.2f}m vLead={tr_v_mae:.2f}m/s ({n_lead_train} lead) | "
-            f"val dRel={val_x_mae:.2f}m vLead={val_v_mae:.2f}m/s ({n_lead_val} lead) prob_acc={val_prob_acc:.2f}")
+            f"train dRel={tr_x_mae:.2f}m vLead={tr_v_mae:.2f}m/s | "
+            f"val dRel={val_x_mae:.2f}m vLead={val_v_mae:.2f}m/s prob_acc={val_prob_acc:.2f}")
 
   model.eval()
   return model
@@ -314,7 +312,7 @@ def phase1_existing_logs():
     print(f"\nRoute: {sr.route_name} segs: {sr.seg_idxs[:3]}...")
     for s in sr.seg_idxs:
       try:
-        logs = list(LogReader(f'{sr.route_name}/{s}'))
+        logs = list(LogReader(f'{sr.route_name}/{s}', sort_by_time=True))
         model_data, radar_data, car_data = extract_from_logs(logs)
         aligned = align_data(model_data, radar_data, car_data)
         if aligned:
@@ -411,7 +409,7 @@ def process_segment(route_name, seg, camera_path, ecamera_path):
       return pickle.load(f)
 
   t0 = time.time()
-  logs = list(LogReader(f'{route_name}/{seg}'))
+  logs = list(LogReader(f'{route_name}/{seg}', sort_by_time=True))
   fr_road = FrameReader(camera_path, pix_fmt='nv12')
   fr_wide = FrameReader(ecamera_path, pix_fmt='nv12')
   w, h = fr_road.w, fr_road.h
@@ -528,7 +526,7 @@ def process_segment(route_name, seg, camera_path, ecamera_path):
 
 def align_with_radar(route_name, seg, cached_features):
   """Align cached features with radar ground truth from logs."""
-  logs = list(LogReader(f'{route_name}/{seg}'))
+  logs = list(LogReader(f'{route_name}/{seg}', sort_by_time=True))
   radar_data = []
   car_data = []
   for msg in logs:
@@ -615,7 +613,10 @@ def phase2_temporal_probe():
   print(f"\n--- Training Temporal Probe (1L transformer, 8 heads, 512 dim, 9 frames @ 5Hz) ---")
   train_seqs, train_lead, train_prob, train_vego, train_t = make_temporal_sequences(train_split)
   val_seqs, val_lead, val_prob, val_vego, val_t = make_temporal_sequences(val_split)
-  print(f"  Train sequences: {train_seqs.shape}, Val sequences: {val_seqs.shape}")
+  n_train_lead = int((train_prob > 0.5).sum())
+  n_val_lead = int((val_prob > 0.5).sum())
+  print(f"  Train: {train_seqs.shape[0]} sequences ({n_train_lead} with lead)")
+  print(f"  Val:   {val_seqs.shape[0]} sequences ({n_val_lead} with lead)")
 
   temporal_model = train_temporal_probe(train_seqs, train_lead, train_prob, val_seqs, val_lead, val_prob)
 
@@ -674,7 +675,7 @@ def phase2_temporal_probe():
     sr = SegmentRange(seg_range_str)
     model_t, model_vlead, model_drel, model_prob = [], [], [], []
     for s in sr.seg_idxs:
-      for msg in LogReader(f'{sr.route_name}/{s}'):
+      for msg in LogReader(f'{sr.route_name}/{s}', sort_by_time=True):
         if msg.which() == 'modelV2':
           lead = msg.modelV2.leadsV3[0]
           model_t.append(msg.logMonoTime * 1e-9)
@@ -797,7 +798,7 @@ def get_tesla_features():
   route = Route(sr.route_name)
   model = ModelState()
 
-  logs = list(LogReader(TESLA_ROUTE))
+  logs = list(LogReader(TESLA_ROUTE, sort_by_time=True))
   fr_road = FrameReader(route.camera_paths()[seg_idx], pix_fmt='nv12')
   fr_wide = FrameReader(route.ecamera_paths()[seg_idx], pix_fmt='nv12')
   w, h = fr_road.w, fr_road.h
@@ -868,7 +869,7 @@ def plot_tesla_braking(temporal_model=None):
   print(f"TESLA BRAKING EVENT: {TESLA_ROUTE}")
   print(f"{'=' * 60}")
 
-  logs = list(LogReader(TESLA_ROUTE))
+  logs = list(LogReader(TESLA_ROUTE, sort_by_time=True))
   model_data, radar_data, car_data = extract_from_logs(logs)
 
   t0 = model_data[0]['t']
@@ -907,7 +908,7 @@ def plot_tesla_braking(temporal_model=None):
   giga_path = '/tmp/giga_model_seg4_merged.zst'
   if os.path.exists(giga_path):
     print("Loading giga model comparison...")
-    giga_logs = list(LogReader(giga_path))
+    giga_logs = list(LogReader(giga_path, sort_by_time=True))
     giga_model, _, _ = extract_from_logs(giga_logs)
     if giga_model:
       giga_t = np.array([m['t'] for m in giga_model]) - t0
