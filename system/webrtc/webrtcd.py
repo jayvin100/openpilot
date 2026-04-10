@@ -240,6 +240,27 @@ class StreamSession:
         self.video_track.switch_camera(camera)
       self.logger.info("Switched livestream camera to %s", camera)
 
+  def _handle_play_sound(self, payload: dict):
+    data = payload.get("data")
+    if not isinstance(data, dict):
+      self.logger.warning("Ignoring malformed playSound request")
+      return
+
+    try:
+      sound_name = validate_body_sound_name(data.get("sound"))
+    except ValueError:
+      self.logger.warning("Ignoring invalid playSound request: %s", data.get("sound"))
+      return
+
+    if self.audio_output is None:
+      self.logger.warning("Ignoring playSound request; body audio output unavailable")
+      return
+
+    try:
+      self.audio_output.play_sound(sound_name)
+    except Exception:
+      self.logger.exception("Failed to play body sound")
+
   async def message_handler(self, message: bytes):
     try:
       payload = json.loads(message) if isinstance(message, (bytes, str)) else None
@@ -254,6 +275,9 @@ class StreamSession:
         if hasattr(self.video_track, 'timing_sei_enabled'):
           self.video_track.timing_sei_enabled = enabled
           self.logger.info("Timing SEI %s", "enabled" if enabled else "disabled")
+        return
+      if isinstance(payload, dict) and payload.get("type") == "playSound":
+        self._handle_play_sound(payload)
         return
       if self.incoming_bridge is not None:
         self.incoming_bridge.send(message)
@@ -310,11 +334,6 @@ class StreamRequestBody:
   cameras: list[str]
   bridge_services_in: list[str] = field(default_factory=list)
   bridge_services_out: list[str] = field(default_factory=list)
-
-
-@dataclass
-class SoundRequestBody:
-  sound: str
 
 def _add_cors_headers(request: 'web.Request', response: 'web.Response'):
   response.headers["Access-Control-Allow-Origin"] = "*"
@@ -404,30 +423,6 @@ async def get_stream(request: 'web.Request'):
     raise
 
 
-async def post_sound(request: 'web.Request'):
-  try:
-    raw_body = await request.json()
-    body = SoundRequestBody(**raw_body)
-    sound_name = validate_body_sound_name(body.sound)
-  except web.HTTPException:
-    raise
-  except (TypeError, ValueError, json.JSONDecodeError) as err:
-    raise web.HTTPBadRequest(
-      text=json.dumps({"error": "invalid_sound", "message": str(err)}),
-      content_type="application/json",
-    ) from err
-
-  audio_output = request.app['body_audio_output']
-  if audio_output is None:
-    raise web.HTTPServiceUnavailable(
-      text=json.dumps({"error": "audio_unavailable", "message": "Body audio output is unavailable"}),
-      content_type="application/json",
-    )
-
-  audio_output.play_sound(sound_name)
-  return web.Response(status=200, text="OK")
-
-
 async def get_schema(request: 'web.Request'):
   services = request.query["services"].split(",")
   services = [s for s in services if s]
@@ -514,13 +509,8 @@ def create_ssl_context():
   return ssl_ctx
 
 
-def webrtcd_thread(host: str, port: int, debug: bool):
+def create_app(debug: bool) -> web.Application:
   from openpilot.system.webrtc.device.audio import WebToDeviceAudioTrack
-
-  logging.basicConfig(level=logging.CRITICAL, handlers=[logging.StreamHandler()])
-  logging_level = logging.DEBUG if debug else logging.INFO
-  logging.getLogger("WebRTCStream").setLevel(logging_level)
-  logging.getLogger("webrtcd").setLevel(logging_level)
 
   logger = logging.getLogger("webrtcd")
 
@@ -534,12 +524,21 @@ def webrtcd_thread(host: str, port: int, debug: bool):
     app['body_audio_output'] = None
   app.on_shutdown.append(on_shutdown)
   app.router.add_route("OPTIONS", "/stream", stream_options)
-  app.router.add_route("OPTIONS", "/sound", stream_options)
   app.router.add_post("/stream", get_stream)
-  app.router.add_post("/sound", post_sound)
   app.router.add_post("/notify", post_notify)
   app.router.add_get("/schema", get_schema)
   app.router.add_get("/trust", get_trust)
+  return app
+
+
+def webrtcd_thread(host: str, port: int, debug: bool):
+  logging.basicConfig(level=logging.CRITICAL, handlers=[logging.StreamHandler()])
+  logging_level = logging.DEBUG if debug else logging.INFO
+  logging.getLogger("WebRTCStream").setLevel(logging_level)
+  logging.getLogger("webrtcd").setLevel(logging_level)
+  logger = logging.getLogger("webrtcd")
+
+  app = create_app(debug)
 
   https_port = port + 1
 
