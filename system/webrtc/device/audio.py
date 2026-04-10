@@ -6,7 +6,7 @@ import time
 from collections import deque
 
 import numpy as np
-from av import AudioFrame
+from av import AudioFrame, AudioResampler
 from aiortc.mediastreams import AudioStreamTrack, MediaStreamError
 
 from cereal import car, messaging
@@ -14,6 +14,7 @@ from cereal import car, messaging
 AUDIO_PTIME = 0.020
 MIC_SAMPLE_RATE = 16000
 SPEAKER_SAMPLE_RATE = 48000
+LOGGER = logging.getLogger("webrtcd")
 
 AudibleAlert = car.CarControl.HUDControl.AudibleAlert
 BODY_SOUND_ALERTS = {
@@ -62,7 +63,7 @@ class PcmBuffer:
     return out
 
 
-class BodyMicAudioTrack(AudioStreamTrack):
+class DeviceToWebAudioTrack(AudioStreamTrack):
   def __init__(self):
     super().__init__()
     self._loop = asyncio.get_running_loop()
@@ -70,64 +71,76 @@ class BodyMicAudioTrack(AudioStreamTrack):
     self._buffer_event = asyncio.Event()
     self._sample_rate = MIC_SAMPLE_RATE
     self._samples_per_frame = int(self._sample_rate * AUDIO_PTIME)
-    self._lock = threading.Lock()
+    self._time_base = fractions.Fraction(1, self._sample_rate)
     self._running = True
     self._thread = threading.Thread(target=self._poll_cereal, daemon=True)
     self._thread.start()
+
+  def _push_samples(self, samples: np.ndarray):
+    self._buffer.push(samples)
+    self._buffer_event.set()
 
   def _poll_cereal(self):
     sm = messaging.SubMaster(['rawAudioData'])
     while self._running:
       sm.update(20)
-      if sm.updated['rawAudioData']:
-        raw_bytes = sm['rawAudioData'].data
-        if len(raw_bytes) > 0:
-          # .copy() required: frombuffer is a view over the cereal message buffer, invalidated by next sm.update()
-          pcm_int16 = np.frombuffer(raw_bytes, dtype=np.int16).copy()
+      if not sm.updated['rawAudioData']:
+        continue
 
-          def _push(samples=pcm_int16):
-            with self._lock:
-              self._buffer.push(samples)
-            self._buffer_event.set()
+      raw_bytes = sm['rawAudioData'].data
+      if not raw_bytes:
+        continue
 
-          self._loop.call_soon_threadsafe(_push)
+      # .copy() required: frombuffer is a view over the cereal message buffer, invalidated by next sm.update()
+      samples = np.frombuffer(raw_bytes, dtype=np.int16).copy()
+      self._loop.call_soon_threadsafe(self._push_samples, samples)
+
+  async def _next_frame_samples(self) -> np.ndarray:
+    while self.readyState == "live":
+      if self._buffer.available() >= self._samples_per_frame:
+        return self._buffer.pop(self._samples_per_frame)
+
+      await self._buffer_event.wait()
+      self._buffer_event.clear()
+
+    raise MediaStreamError
+
+  async def _next_timestamp(self) -> int:
+    if not hasattr(self, "_timestamp"):
+      self._start = time.monotonic()
+      self._timestamp = 0
+      return self._timestamp
+
+    self._timestamp += self._samples_per_frame
+    wait = self._start + (self._timestamp / self._sample_rate) - time.monotonic()
+    if wait > 0:
+      await asyncio.sleep(wait)
+    return self._timestamp
 
   async def recv(self):
     if self.readyState != "live":
       raise MediaStreamError
 
-    while True:
-      with self._lock:
-        if self._buffer.available() >= self._samples_per_frame:
-          frame_samples = self._buffer.pop(self._samples_per_frame)
-          break
-        self._buffer_event.clear()
-      if self.readyState != "live":
-        raise MediaStreamError
-      await self._buffer_event.wait()
-
-    if hasattr(self, "_timestamp"):
-      self._timestamp += self._samples_per_frame
-      wait = self._start + (self._timestamp / self._sample_rate) - time.monotonic()
-      await asyncio.sleep(wait)
-    else:
-      self._start = time.monotonic()
-      self._timestamp = 0
+    frame_samples = await self._next_frame_samples()
+    timestamp = await self._next_timestamp()
 
     frame = AudioFrame(format="s16", layout="mono", samples=self._samples_per_frame)
     frame.planes[0].update(frame_samples.tobytes())
-    frame.pts = self._timestamp
+    frame.pts = timestamp
     frame.sample_rate = self._sample_rate
-    frame.time_base = fractions.Fraction(1, self._sample_rate)
+    frame.time_base = self._time_base
     return frame
 
   def stop(self):
     super().stop()
     self._running = False
-    self._buffer_event.set()
+    try:
+      self._loop.call_soon_threadsafe(self._buffer_event.set)
+    except RuntimeError:
+      self._buffer_event.set()
 
 
-class BodySpeaker:
+class WebToDeviceAudioTrack:
   def __init__(self):
     self._pm = messaging.PubMaster(['soundRequest', 'webrtcAudioData'])
     self._task: asyncio.Task | None = None
@@ -138,27 +151,27 @@ class BodySpeaker:
     self._pm.send('soundRequest', msg)
 
   def start_track(self, track):
-    self._task = asyncio.ensure_future(self._consume_track(track))
+    self._task = asyncio.create_task(self._consume_track(track))
+
+  def _send_audio_data(self, data: bytes):
+    msg = messaging.new_message('webrtcAudioData')
+    msg.webrtcAudioData.data = data
+    msg.webrtcAudioData.sampleRate = SPEAKER_SAMPLE_RATE
+    self._pm.send('webrtcAudioData', msg)
 
   async def _consume_track(self, track):
-    from av import AudioResampler
-
-    logger = logging.getLogger("webrtcd")
     resampler = AudioResampler(format='s16', layout='mono', rate=SPEAKER_SAMPLE_RATE)
     try:
       while True:
         frame = await track.recv()
         for resampled in resampler.resample(frame):
-          msg = messaging.new_message('webrtcAudioData')
-          msg.webrtcAudioData.data = resampled.planes[0].to_bytes()
-          msg.webrtcAudioData.sampleRate = SPEAKER_SAMPLE_RATE
-          self._pm.send('webrtcAudioData', msg)
+          self._send_audio_data(resampled.planes[0].to_bytes())
     except MediaStreamError:
-      logger.info("Incoming browser audio track ended")
+      LOGGER.info("Incoming browser audio track ended")
     except asyncio.CancelledError:
       raise
     except Exception:
-      logger.exception("BodySpeaker track consumption error")
+      LOGGER.exception("BodySpeaker track consumption error")
 
   async def stop(self):
     if self._task is not None and not self._task.done():
@@ -168,3 +181,8 @@ class BodySpeaker:
       except asyncio.CancelledError:
         pass
     self._task = None
+
+
+# Backwards-compatible aliases while older call sites are updated.
+BodyMicAudioTrack = DeviceToWebAudioTrack
+BodySpeaker = WebToDeviceAudioTrack

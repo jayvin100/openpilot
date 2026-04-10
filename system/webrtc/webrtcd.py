@@ -133,7 +133,7 @@ class StreamSession:
   def __init__(self, sdp: str, cameras: list[str], incoming_services: list[str], outgoing_services: list[str],
                audio_output=None, debug_mode: bool = False):
     from aiortc.mediastreams import AudioStreamTrack, VideoStreamTrack
-    from openpilot.system.webrtc.device.audio import BodyMicAudioTrack, BodySpeaker
+    from openpilot.system.webrtc.device.audio import DeviceToWebAudioTrack, WebToDeviceAudioTrack
     from openpilot.system.webrtc.device.video import LiveStreamVideoStreamTrack
     from teleoprtc import WebRTCAnswerBuilder
     from teleoprtc.info import parse_info_from_offer
@@ -149,21 +149,21 @@ class StreamSession:
     self.video_track = LiveStreamVideoStreamTrack(active_camera) if not debug_mode else VideoStreamTrack()
     builder.add_video_stream(active_camera, self.video_track)
 
-    self.outgoing_audio_track: BodyMicAudioTrack | None = None
+    self.outgoing_audio_track: DeviceToWebAudioTrack | None = None
     if config.expected_audio_track:
       try:
         if debug_mode:
           builder.add_audio_stream(AudioStreamTrack())
         else:
-          self.outgoing_audio_track = BodyMicAudioTrack()
+          self.outgoing_audio_track = DeviceToWebAudioTrack()
           builder.add_audio_stream(self.outgoing_audio_track)
       except Exception:
         self.logger.exception("Failed to initialize body microphone track")
 
-    self.audio_output: BodySpeaker | None = audio_output if (config.incoming_audio_track or config.incoming_datachannel) else None
+    self.audio_output: WebToDeviceAudioTrack | None = audio_output if (config.incoming_audio_track or config.incoming_datachannel) else None
     if self.audio_output is None and (config.incoming_audio_track or config.incoming_datachannel):
       try:
-        self.audio_output = BodySpeaker()
+        self.audio_output = WebToDeviceAudioTrack()
       except Exception:
         self.logger.exception("Failed to initialize body speaker output")
     if config.incoming_audio_track:
@@ -515,7 +515,7 @@ def create_ssl_context():
 
 
 def webrtcd_thread(host: str, port: int, debug: bool):
-  from openpilot.system.webrtc.device.audio import BodySpeaker
+  from openpilot.system.webrtc.device.audio import WebToDeviceAudioTrack
 
   logging.basicConfig(level=logging.CRITICAL, handlers=[logging.StreamHandler()])
   logging_level = logging.DEBUG if debug else logging.INFO
@@ -528,7 +528,7 @@ def webrtcd_thread(host: str, port: int, debug: bool):
   app['streams'] = dict()
   app['debug'] = debug
   try:
-    app['body_audio_output'] = BodySpeaker()
+    app['body_audio_output'] = WebToDeviceAudioTrack()
   except Exception:
     logger.exception("Failed to initialize shared body audio output")
     app['body_audio_output'] = None

@@ -8,7 +8,7 @@ from teleoprtc.tracks import TiciVideoStreamTrack
 from cereal import messaging
 from openpilot.common.realtime import DT_MDL, DT_DMON
 
-# 16-byte UUID identifying openpilot frame-timing SEI messages
+# arbitrary 16-byte UUID identifying openpilot frame-timing SEI messages
 TIMING_SEI_UUID = bytes([
   0xa5, 0xe0, 0xc4, 0xa4, 0x5b, 0x6e, 0x4e, 0x1e,
   0x9c, 0x7e, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc,
@@ -16,7 +16,10 @@ TIMING_SEI_UUID = bytes([
 
 
 def _escape_rbsp(data: bytes) -> bytearray:
-  """Insert H.264 emulation-prevention bytes (0x03) where required."""
+  """
+  Prevents frame bytes that might escape into NAL start code.
+  Adds 0x03 after two consecutive 0x00 0x00 to escape this.
+  """
   out = bytearray()
   zeros = 0
   for b in data:
@@ -42,52 +45,58 @@ def create_timing_sei(capture_ms: float, encode_ms: float, send_delay_ms: float,
 
 
 class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
-  camera_to_sock_mapping = {
-    "driver": "livestreamDriverEncodeData",
-    "wideRoad": "livestreamWideRoadEncodeData",
+  camera_config = {
+    "driver": (DT_DMON, "livestreamDriverEncodeData"),
+    "wideRoad": (DT_MDL, "livestreamWideRoadEncodeData"),
   }
 
   def __init__(self, camera_type: str):
-    dt = DT_DMON if camera_type == "driver" else DT_MDL
+    dt, _ = self.camera_config[camera_type]
     super().__init__(camera_type, dt)
 
-    self._camera_type = camera_type
-    self._sock = messaging.sub_sock(self.camera_to_sock_mapping[camera_type], conflate=True)
-    self._pts = 0
+    self._camera_type = ""
+    self._sock = None
+    self._set_camera(camera_type)
     self._t0_ns = time.monotonic_ns()
     self.timing_sei_enabled = False
 
-  def switch_camera(self, camera_type: str):
-    if camera_type not in self.camera_to_sock_mapping or camera_type == self._camera_type:
-      return
+  def _set_camera(self, camera_type: str):
     self._camera_type = camera_type
-    self._sock = messaging.sub_sock(self.camera_to_sock_mapping[camera_type], conflate=True)
+    _, sock_name = self.camera_config[camera_type]
+    self._sock = messaging.sub_sock(sock_name, conflate=True)
 
-  async def recv(self):
+  def switch_camera(self, camera_type: str):
+    if camera_type not in self.camera_config or camera_type == self._camera_type:
+      return
+    self._set_camera(camera_type)
+
+  async def _recv_message(self):
     while True:
       msg = messaging.recv_one_or_none(self._sock)
       if msg is not None:
-        break
+        return msg
       await asyncio.sleep(0.005)
 
-    evta = getattr(msg, msg.which())
+  def _build_frame_data(self, msg) -> bytes:
+    encode_data = getattr(msg, msg.which())
+    if not self.timing_sei_enabled:
+      return encode_data.header + encode_data.data
 
-    frame_data = evta.header + evta.data
-    if self.timing_sei_enabled:
-      capture_ms = (evta.idx.timestampEof - evta.idx.timestampSof) / 1e6
-      encode_ms = (msg.logMonoTime - evta.idx.timestampEof) / 1e6
-      send_delay_ms = (time.monotonic_ns() - msg.logMonoTime) / 1e6
-      send_wall_ms = time.time() * 1000  # noqa: TID251
-      sei_nal = create_timing_sei(capture_ms, encode_ms, send_delay_ms, send_wall_ms)
-      frame_data = evta.header + sei_nal + evta.data
+    capture_ms = (encode_data.idx.timestampEof - encode_data.idx.timestampSof) / 1e6
+    encode_ms = (msg.logMonoTime - encode_data.idx.timestampEof) / 1e6
+    send_delay_ms = (time.monotonic_ns() - msg.logMonoTime) / 1e6
+    send_wall_ms = time.time() * 1000  # noqa: TID251
+    sei_nal = create_timing_sei(capture_ms, encode_ms, send_delay_ms, send_wall_ms)
+    return encode_data.header + sei_nal + encode_data.data
 
-    packet = av.Packet(frame_data)
+  async def recv(self):
+    msg = await self._recv_message()
+    packet = av.Packet(self._build_frame_data(msg))
     packet.time_base = self._time_base
 
-    self._pts = ((time.monotonic_ns() - self._t0_ns) * self._clock_rate) // 1_000_000_000
-    packet.pts = self._pts
-    self.log_debug("track sending frame %d", self._pts)
-
+    pts = ((time.monotonic_ns() - self._t0_ns) * self._clock_rate) // 1_000_000_000
+    packet.pts = pts
+    self.log_debug("track sending frame %d", pts)
     return packet
 
   def codec_preference(self) -> str | None:
