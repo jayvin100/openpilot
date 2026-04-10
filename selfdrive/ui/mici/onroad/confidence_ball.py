@@ -84,8 +84,8 @@ class ConfidenceBall(Widget):
       bottom_dot_color = rl.Color(82, 82, 82, 255)
 
     else:
-      top_dot_color = rl.Color(102, 102, 102, 255)
-      bottom_dot_color = rl.Color(26, 26, 26, 255)
+      top_dot_color = rl.Color(50, 50, 50, 255)
+      bottom_dot_color = rl.Color(13, 13, 13, 255)
 
     draw_circle_gradient(content_rect.x + content_rect.width - status_dot_radius,
                          dot_height, status_dot_radius,
