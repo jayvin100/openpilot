@@ -3,7 +3,6 @@ import numpy as np
 import time
 import wave
 
-
 from cereal import car, messaging
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -116,7 +115,9 @@ class Soundd:
   def callback(self, data_out: np.ndarray, frames: int, time, status) -> None:
     if status:
       cloudlog.warning(f"soundd stream over/underflow: {status}")
-    data_out[:frames, 0] = self.get_sound_data(frames)
+    sound = self.get_sound_data(frames)
+    np.clip(sound, -1.0, 1.0, out=sound)
+    data_out[:frames, 0] = sound
 
   def update_alert(self, new_alert):
     current_alert_played_once = self.current_alert == AudibleAlert.none or self.current_sound_frame > len(self.loaded_sounds[self.current_alert])
@@ -128,6 +129,11 @@ class Soundd:
       self.current_sound_frame = 0
 
   def get_audible_alert(self, sm):
+    if sm.updated['soundRequest']:
+      new_alert = sm['soundRequest'].sound.raw
+      if new_alert != AudibleAlert.none:
+        self.update_alert(new_alert)
+
     if sm.updated['selfdriveState']:
       new_alert = sm['selfdriveState'].alertSound.raw
       self.update_alert(new_alert)
@@ -153,7 +159,7 @@ class Soundd:
     # sounddevice must be imported after forking processes
     import sounddevice as sd
 
-    sm = messaging.SubMaster(['selfdriveState', 'soundPressure'])
+    sm = messaging.SubMaster(['selfdriveState', 'soundPressure', 'soundRequest'])
 
     with self.get_stream(sd) as stream:
       rk = Ratekeeper(20)
