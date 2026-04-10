@@ -6,7 +6,7 @@ from collections.abc import Callable
 from enum import Enum
 from cereal import messaging, car, log
 from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.common.params import Params
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.lib.prime_state import PrimeState
 from openpilot.system.ui.lib.application import gui_app
@@ -81,6 +81,10 @@ class UIState:
     self.light_sensor: float = -1.0
     self._param_update_time: float = 0.0
     self.engage_style: str = "white"
+    try:
+      self.min_alert_volume: float = self.params.get("MinimumAlertVolume")
+    except UnknownKeyName:
+      self.min_alert_volume = 0.1
 
     # Callbacks
     self._offroad_transition_callbacks: list[Callable[[], None]] = []
@@ -96,6 +100,19 @@ class UIState:
 
   def set_engage_style(self, style: str) -> None:
     self.engage_style = style
+
+  def set_min_alert_volume(self, min_volume: float) -> None:
+    self.min_alert_volume = min(max(min_volume, 0.1), 0.3)
+    try:
+      self.params.put_nonblocking("MinimumAlertVolume", self.min_alert_volume)
+    except UnknownKeyName:
+      pass
+
+  def set_min_alert_volume_from_option(self, option: str) -> None:
+    try:
+      self.set_min_alert_volume(float(option))
+    except (TypeError, ValueError):
+      self.set_min_alert_volume(0.1)
 
   @property
   def engaged(self) -> bool:

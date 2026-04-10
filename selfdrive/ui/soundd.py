@@ -7,6 +7,7 @@ import wave
 from cereal import car, messaging
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.utils import retry
 from openpilot.common.swaglog import cloudlog
@@ -17,7 +18,8 @@ from openpilot.system.hardware import HARDWARE
 SAMPLE_RATE = 48000
 SAMPLE_BUFFER = 4096 # (approx 100ms)
 MAX_VOLUME = 1.0
-MIN_VOLUME = 0.1
+DEFAULT_MIN_VOLUME = 0.1
+MAX_MIN_VOLUME = 0.3
 SELFDRIVE_STATE_TIMEOUT = 5 # 5 seconds
 FILTER_DT = 1. / (micd.SAMPLE_RATE / micd.FFT_SAMPLES)
 
@@ -64,14 +66,28 @@ def check_selfdrive_timeout_alert(sm):
 class Soundd:
   def __init__(self):
     self.load_sounds()
+    self.params = Params()
 
     self.current_alert = AudibleAlert.none
-    self.current_volume = MIN_VOLUME
+    self.min_volume = DEFAULT_MIN_VOLUME
+    self.current_volume = self.min_volume
     self.current_sound_frame = 0
 
     self.selfdrive_timeout_alert = False
 
     self.spl_filter_weighted = FirstOrderFilter(0, 2.5, FILTER_DT, initialized=False)
+    self._last_min_volume_update_t = 0.0
+    self._warned_unknown_min_volume_key = False
+
+  def update_min_volume(self):
+    try:
+      min_volume = self.params.get("MinimumAlertVolume")
+      self.min_volume = float(np.clip(min_volume, DEFAULT_MIN_VOLUME, MAX_MIN_VOLUME))
+    except UnknownKeyName:
+      self.min_volume = DEFAULT_MIN_VOLUME
+      if not self._warned_unknown_min_volume_key:
+        cloudlog.warning("MinimumAlertVolume param not available yet; using default min volume")
+        self._warned_unknown_min_volume_key = True
 
   def load_sounds(self):
     self.loaded_sounds: dict[int, np.ndarray] = {}
@@ -132,8 +148,8 @@ class Soundd:
       self.selfdrive_timeout_alert = False
 
   def calculate_volume(self, weighted_db):
-    volume = ((weighted_db - AMBIENT_DB) / DB_SCALE) * (MAX_VOLUME - MIN_VOLUME) + MIN_VOLUME
-    return math.pow(VOLUME_BASE, (np.clip(volume, MIN_VOLUME, MAX_VOLUME) - 1))
+    volume = ((weighted_db - AMBIENT_DB) / DB_SCALE) * (MAX_VOLUME - self.min_volume) + self.min_volume
+    return math.pow(VOLUME_BASE, (np.clip(volume, self.min_volume, MAX_VOLUME) - 1))
 
   @retry(attempts=10, delay=3)
   def get_stream(self, sd):
@@ -154,6 +170,9 @@ class Soundd:
       cloudlog.info(f"soundd stream started: {stream.samplerate=} {stream.channels=} {stream.dtype=} {stream.device=}, {stream.blocksize=}")
       while True:
         sm.update(0)
+        if time.monotonic() - self._last_min_volume_update_t > 1.0:
+          self.update_min_volume()
+          self._last_min_volume_update_t = time.monotonic()
 
         if sm.updated['soundPressure'] and self.current_alert == AudibleAlert.none: # only update volume filter when not playing alert
           self.spl_filter_weighted.update(sm["soundPressure"].soundPressureWeightedDb)

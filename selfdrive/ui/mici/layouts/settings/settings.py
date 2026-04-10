@@ -21,6 +21,9 @@ class SettingsLayout(NavScroller):
     self._params = Params()
     engage_style_toggle = BigMultiToggle("engage style", ["white", "green", "black"],
                                          select_callback=ui_state.set_engage_style)
+    min_volume_toggle = BigMultiToggle("minimum volume", ["0.1", "0.2", "0.3"],
+                                       select_callback=ui_state.set_min_alert_volume_from_option)
+    min_volume_toggle.set_value(f"{ui_state.min_alert_volume:.1f}")
 
     toggles_panel = TogglesLayoutMici()
     toggles_btn = SettingsBigButton("toggles", "", gui_app.texture("icons_mici/settings.png", 64, 64))
@@ -44,6 +47,7 @@ class SettingsLayout(NavScroller):
 
     self._scroller.add_widgets([
       engage_style_toggle,
+      min_volume_toggle,
       toggles_btn,
       network_btn,
       device_btn,
