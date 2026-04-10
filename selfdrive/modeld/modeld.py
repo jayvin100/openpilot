@@ -8,6 +8,7 @@ if USBGPU:
   os.environ['DEV'] = 'AMD'
   os.environ['AMD_IFACE'] = 'USB'
 from tinygrad.tensor import Tensor
+from tinygrad.nn.onnx import OnnxRunner
 import time
 import pickle
 import numpy as np
@@ -26,7 +27,14 @@ from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_value, get_curvature_from_plan
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
-from openpilot.selfdrive.modeld.compile_modeld import policy_pkl_path, make_buffers
+from openpilot.selfdrive.modeld.compile_modeld import (
+  make_buffers,
+  make_policy_state,
+  policy_pkl_path,
+  run_policy_heads,
+  update_desire_pulse,
+  update_features_buffer,
+)
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState
 from openpilot.common.file_chunker import read_file_chunked
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
@@ -163,12 +171,16 @@ class ModelState:
 
     self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
     self.bufs, self.npy = make_buffers(self.vision_input_shapes, self.policy_input_shapes, self.frame_skip)
+    self.policy_state = make_policy_state(self.policy_input_shapes, self.frame_skip)
     self.full_frames : dict[str, Tensor] = {}
     self._blob_cache : dict[int, Tensor] = {}
 
     self.parser = Parser()
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
-    self.run_policy = pickle.loads(read_file_chunked(str(policy_pkl_path(cam_w, cam_h))))
+    self.vision_features_slice = self.vision_output_slices['hidden_state']
+    self.run_vision = pickle.loads(read_file_chunked(str(policy_pkl_path(cam_w, cam_h))))
+    self.on_policy_runner = OnnxRunner(MODELS_DIR / 'driving_on_policy.onnx')
+    self.off_policy_runner = OnnxRunner(MODELS_DIR / 'driving_off_policy.onnx')
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
@@ -190,15 +202,31 @@ class ModelState:
         self._blob_cache[cache_key] = Tensor.from_blob(ptr, (yuv_size,), dtype='uint8')
       self.full_frames[key] = self._blob_cache[cache_key]
 
-    self.npy['desire'][:] = new_desire
+    update_desire_pulse(self.policy_state, new_desire, self.npy['desire_pulse'], self.frame_skip)
     self.npy['traffic_convention'][:] = inputs['traffic_convention']
     self.npy['tfm'][:,:] = transforms['img'][:,:]
     self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
-    vision_output, on_policy_output, off_policy_output = self.run_policy(
-      **self.bufs, frame=self.full_frames['img'], big_frame=self.full_frames['big_img']
-    )
 
+    vision_output = self.run_vision(
+      img_buf=self.bufs['img_buf'],
+      big_img_buf=self.bufs['big_img_buf'],
+      tfm=self.bufs['tfm'],
+      big_tfm=self.bufs['big_tfm'],
+      frame=self.full_frames['img'],
+      big_frame=self.full_frames['big_img'],
+    )
     vision_output = vision_output.realize().numpy().flatten()
+    # Maintain recurrent policy inputs on the host side and feed the policy
+    # heads directly. This avoids the broken cross-step stateful outer JIT path.
+    update_features_buffer(self.policy_state, vision_output[self.vision_features_slice], self.npy['features_buffer'], self.frame_skip)
+
+    on_policy_output, off_policy_output = run_policy_heads(
+      self.on_policy_runner,
+      self.off_policy_runner,
+      self.bufs['features_buffer'],
+      self.bufs['desire_pulse'],
+      self.bufs['traffic_convention'],
+    )
     on_policy_output = on_policy_output.realize().numpy().flatten()
     off_policy_output = off_policy_output.realize().numpy().flatten()
     vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(vision_output, self.vision_output_slices))

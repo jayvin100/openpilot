@@ -100,7 +100,8 @@ def make_buffers(vision_input_shapes, policy_input_shapes, frame_skip):
   tc = policy_input_shapes['traffic_convention']  # (1, 2)
 
   npy = {
-    'desire': np.zeros(dp[2], dtype=np.float32),
+    'features_buffer': np.zeros(fb, dtype=np.float32),
+    'desire_pulse': np.zeros(dp, dtype=np.float32),
     'traffic_convention': np.zeros(tc, dtype=np.float32),
     'tfm': np.zeros((3, 3), dtype=np.float32),
     'big_tfm': np.zeros((3, 3), dtype=np.float32),
@@ -108,11 +109,43 @@ def make_buffers(vision_input_shapes, policy_input_shapes, frame_skip):
   bufs = {
     'img_buf': Tensor.zeros(img_buf_shape, dtype='uint8').contiguous().realize(),
     'big_img_buf': Tensor.zeros(img_buf_shape, dtype='uint8').contiguous().realize(),
-    'feat_q': Tensor.zeros(frame_skip * (fb[1] - 1) + 1, fb[0], fb[2]).contiguous().realize(),
-    'desire_q': Tensor.zeros(frame_skip * dp[1], dp[0], dp[2]).contiguous().realize(),
     **{k: Tensor(v, device='NPY').realize() for k, v in npy.items()},
   }
   return bufs, npy
+
+
+def make_policy_state(policy_input_shapes, frame_skip):
+  fb = policy_input_shapes['features_buffer']
+  dp = policy_input_shapes['desire_pulse']
+  # Keep recurrent queues on the host side. The loaded outer TinyJit was
+  # corrupting multi-step outputs when it owned these state transitions.
+  return {
+    'feat_q': np.zeros((frame_skip * (fb[1] - 1) + 1, fb[0], fb[2]), dtype=np.float32),
+    'desire_q': np.zeros((frame_skip * dp[1], dp[0], dp[2]), dtype=np.float32),
+  }
+
+
+def sample_skip_np(buf, frame_skip):
+  return np.ascontiguousarray(buf[::frame_skip].reshape(1, -1, buf.shape[-1]))
+
+
+def sample_desire_np(buf, frame_skip):
+  sampled = buf.reshape(-1, frame_skip, *buf.shape[1:]).max(axis=1)
+  return np.ascontiguousarray(sampled.reshape(1, -1, buf.shape[-1]))
+
+
+def update_features_buffer(policy_state, vision_features, features_buffer, frame_skip):
+  feat_q = policy_state['feat_q']
+  feat_q[:-1] = feat_q[1:]
+  feat_q[-1, :, :] = np.asarray(vision_features, dtype=np.float32).reshape(feat_q.shape[1], feat_q.shape[2])
+  features_buffer[:] = sample_skip_np(feat_q, frame_skip)
+
+
+def update_desire_pulse(policy_state, desire, desire_pulse, frame_skip):
+  desire_q = policy_state['desire_q']
+  desire_q[:-1] = desire_q[1:]
+  desire_q[-1, :, :] = np.asarray(desire, dtype=np.float32).reshape(desire_q.shape[1], desire_q.shape[2])
+  desire_pulse[:] = sample_desire_np(desire_q, frame_skip)
 
 
 def shift_and_sample(buf, new_val, sample_fn):
@@ -131,34 +164,30 @@ def make_warp_dm(cam_w, cam_h, dm_w, dm_h):
   return warp_dm
 
 
-def make_run_policy(vision_runner, on_policy_runner, off_policy_runner, cam_w, cam_h,
-                    vision_features_slice, frame_skip):
+def make_run_vision(vision_runner, cam_w, cam_h, frame_skip):
   model_w, model_h = MEDMODEL_INPUT_SIZE
   frame_prepare = make_frame_prepare(cam_w, cam_h, model_w, model_h)
 
   def sample_skip(buf):
     return buf[::frame_skip].contiguous().flatten(0, 1).unsqueeze(0)
 
-  def sample_desire(buf):
-    return buf.reshape(-1, frame_skip, *buf.shape[1:]).max(1).flatten(0, 1).unsqueeze(0)
-
-  def run_policy(img_buf, big_img_buf, feat_q, desire_q, desire, traffic_convention, tfm, big_tfm, frame, big_frame):
+  def run_vision(img_buf, big_img_buf, tfm, big_tfm, frame, big_frame):
     with Context(IMAGE=0):
       img = shift_and_sample(img_buf, frame_prepare(frame, tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
       big_img = shift_and_sample(big_img_buf, frame_prepare(big_frame, big_tfm.to(Device.DEFAULT)).unsqueeze(0), sample_skip)
+    return next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
+  return run_vision
 
-    vision_out = next(iter(vision_runner({'img': img, 'big_img': big_img}).values())).cast('float32')
 
-    new_feat = vision_out[:, vision_features_slice].reshape(1, -1).unsqueeze(0)
-    feat_buf = shift_and_sample(feat_q, new_feat, sample_skip)
-    desire_buf = shift_and_sample(desire_q, desire.to(Device.DEFAULT).reshape(1, 1, -1), sample_desire)
-
-    inputs = {'features_buffer': feat_buf, 'desire_pulse': desire_buf, 'traffic_convention': traffic_convention.to(Device.DEFAULT)}
-    on_policy_out = next(iter(on_policy_runner(inputs).values())).cast('float32')
-    off_policy_out = next(iter(off_policy_runner(inputs).values())).cast('float32')
-
-    return vision_out, on_policy_out, off_policy_out
-  return run_policy
+def run_policy_heads(on_policy_runner, off_policy_runner, features_buffer, desire_pulse, traffic_convention):
+  inputs = {
+    'features_buffer': features_buffer.to(Device.DEFAULT),
+    'desire_pulse': desire_pulse.to(Device.DEFAULT),
+    'traffic_convention': traffic_convention.to(Device.DEFAULT),
+  }
+  on_policy_out = next(iter(on_policy_runner(inputs).values())).cast('float32')
+  off_policy_out = next(iter(off_policy_runner(inputs).values())).cast('float32')
+  return on_policy_out, off_policy_out
 
 
 def compile_modeld(cam_w, cam_h):
@@ -166,61 +195,66 @@ def compile_modeld(cam_w, cam_h):
   from openpilot.selfdrive.modeld.constants import ModelConstants
 
   _, _, _, yuv_size = get_nv12_info(cam_w, cam_h)
-  print(f"Compiling combined policy JIT for {cam_w}x{cam_h}...")
+  print(f"Compiling vision JIT for {cam_w}x{cam_h}...")
 
   vision_runner = OnnxRunner(MODELS_DIR / 'driving_vision.onnx')
-  on_policy_runner = OnnxRunner(MODELS_DIR / 'driving_on_policy.onnx')
-  off_policy_runner = OnnxRunner(MODELS_DIR / 'driving_off_policy.onnx')
 
   with open(MODELS_DIR / 'driving_vision_metadata.pkl', 'rb') as f:
     vision_metadata = pickle.load(f)
-    vision_features_slice = vision_metadata['output_slices']['hidden_state']
     vision_input_shapes = vision_metadata['input_shapes']
   with open(MODELS_DIR / 'driving_on_policy_metadata.pkl', 'rb') as f:
     policy_input_shapes = pickle.load(f)['input_shapes']
 
   frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
 
-  _run = make_run_policy(vision_runner, on_policy_runner, off_policy_runner,
-                         cam_w, cam_h, vision_features_slice, frame_skip)
-  run_policy_jit = TinyJit(_run, prune=True)
-  bufs, npy = make_buffers(vision_input_shapes, policy_input_shapes, frame_skip)
-
-
+  run_vision = make_run_vision(vision_runner, cam_w, cam_h, frame_skip)
+  run_vision_jit = TinyJit(run_vision, prune=True)
+  rng = np.random.default_rng(0)
+  frame_np = rng.integers(0, 256, yuv_size, dtype=np.uint8)
+  big_frame_np = rng.integers(0, 256, yuv_size, dtype=np.uint8)
   for i in range(3):
-    frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
-    big_frame = Tensor(np.random.randint(0, 256, yuv_size, dtype=np.uint8)).realize()
-    for v in npy.values():
-      v[:] = np.random.randn(*v.shape).astype(v.dtype)
+    bufs, npy = make_buffers(vision_input_shapes, policy_input_shapes, frame_skip)
+    frame = Tensor(frame_np.copy()).realize()
+    big_frame = Tensor(big_frame_np.copy()).realize()
+    npy['tfm'][:] = np.eye(3, dtype=np.float32)
+    npy['big_tfm'][:] = np.eye(3, dtype=np.float32)
     Device.default.synchronize()
 
     st = time.perf_counter()
     with Context(OPENPILOT_HACKS=1):
-      inputs = {**bufs, 'frame': frame, 'big_frame': big_frame}
-      outs = run_policy_jit(**inputs)
+      inputs = {
+        'img_buf': bufs['img_buf'],
+        'big_img_buf': bufs['big_img_buf'],
+        'tfm': bufs['tfm'],
+        'big_tfm': bufs['big_tfm'],
+        'frame': frame,
+        'big_frame': big_frame,
+      }
+      out = run_vision_jit(**inputs)
     mt = time.perf_counter()
     Device.default.synchronize()
     et = time.perf_counter()
     print(f"  [{i+1}/10] enqueue {(mt-st)*1e3:6.2f} ms -- total {(et-st)*1e3:6.2f} ms")
 
-    if i == 1:
-      test_val = [np.copy(v.numpy()) for v in outs]
+    if i == 2:
+      with Context(OPENPILOT_HACKS=1):
+        test_val = np.copy(run_vision(**inputs).numpy())
       test_inputs = {k: Tensor(v.numpy().copy(), device=v.device) for k, v in inputs.items()}
 
   pkl_path = policy_pkl_path(cam_w, cam_h)
   with open(pkl_path, "wb") as f:
-    pickle.dump(run_policy_jit, f)
+    pickle.dump(run_vision_jit, f)
   print(f"  Saved to {pkl_path}")
   return test_inputs, test_val
 
 
-def test_vs_compile(run, inputs: dict[str, Tensor], test_val: list[np.ndarray]):
+def test_vs_compile(run, inputs: dict[str, Tensor], test_val: np.ndarray):
   # run 20 times
   for i in range(20):
     st = time.perf_counter()
     out = run(**inputs)
     mt = time.perf_counter()
-    val = [v.numpy() for v in out]
+    val = out.numpy()
     et = time.perf_counter()
     print(f"enqueue {(mt-st)*1e3:6.2f} ms -- total run {(et-st)*1e3:6.2f} ms")
 
@@ -228,11 +262,11 @@ def test_vs_compile(run, inputs: dict[str, Tensor], test_val: list[np.ndarray]):
       np.testing.assert_equal(test_val, val)
 
   # test that changing the inputs changes the model outputs
-  inputs_2x = {k: Tensor(v.numpy()*2, device=v.device) for k,v in inputs.items()}
-  out = run(**inputs_2x)
-  changed_val = [v.numpy() for v in out]
-  for v, cv in zip(val, changed_val):
-    assert not np.array_equal(v, cv), f"output with shape {v.shape} didn't change when inputs were doubled"
+  changed_inputs = {k: Tensor(v.numpy().copy(), device=v.device) for k, v in inputs.items()}
+  changed_inputs['tfm'] = Tensor((inputs['tfm'].numpy() + np.eye(3, dtype=np.float32)).astype(np.float32), device=inputs['tfm'].device)
+  changed_inputs['big_tfm'] = Tensor((inputs['big_tfm'].numpy() + np.eye(3, dtype=np.float32)).astype(np.float32), device=inputs['big_tfm'].device)
+  changed_val = run(**changed_inputs).numpy()
+  assert not np.array_equal(val, changed_val), "vision output didn't change when transforms changed"
   print('test_vs_compile OK')
 
 
