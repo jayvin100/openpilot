@@ -129,7 +129,7 @@ class MiciMainLayout(Scroller):
     if ui_state.started:
       # On body without joystick, stay on home screen
       if self._is_body and not ui_state.joystick_debug_mode:
-        return
+        self._scroll_to(self._onroad_layout)
       # Don't pop if at standstill
       if not ui_state.sm["carState"].standstill:
         gui_app.pop_widgets_to(self, lambda: self._scroll_to(self._onroad_layout))
