@@ -26,6 +26,10 @@ def policy_pkl_path(w, h):
   return MODELS_DIR / f'driving_{w}x{h}_tinygrad.pkl'
 
 
+def policy_head_pkl_path(model_name):
+  return MODELS_DIR / f'{model_name}_tinygrad.pkl'
+
+
 def dm_warp_pkl_path(w, h):
   return MODELS_DIR / f'dm_warp_{w}x{h}_tinygrad.pkl'
 
@@ -179,14 +183,25 @@ def make_run_vision(vision_runner, cam_w, cam_h, frame_skip):
   return run_vision
 
 
+def make_run_policy_head(head_runner):
+  def run_policy_head(features_buffer, desire_pulse, traffic_convention):
+    inputs = {
+      'features_buffer': features_buffer.to(Device.DEFAULT),
+      'desire_pulse': desire_pulse.to(Device.DEFAULT),
+      'traffic_convention': traffic_convention.to(Device.DEFAULT),
+    }
+    return next(iter(head_runner(inputs).values())).cast('float32')
+  return run_policy_head
+
+
 def run_policy_heads(on_policy_runner, off_policy_runner, features_buffer, desire_pulse, traffic_convention):
   inputs = {
     'features_buffer': features_buffer.to(Device.DEFAULT),
     'desire_pulse': desire_pulse.to(Device.DEFAULT),
     'traffic_convention': traffic_convention.to(Device.DEFAULT),
   }
-  on_policy_out = next(iter(on_policy_runner(inputs).values())).cast('float32')
-  off_policy_out = next(iter(off_policy_runner(inputs).values())).cast('float32')
+  on_policy_out = on_policy_runner(**inputs)
+  off_policy_out = off_policy_runner(**inputs)
   return on_policy_out, off_policy_out
 
 
@@ -248,6 +263,47 @@ def compile_modeld(cam_w, cam_h):
   return test_inputs, test_val
 
 
+def compile_policy_head(model_name):
+  from tinygrad.nn.onnx import OnnxRunner
+
+  print(f"Compiling {model_name} JIT...")
+
+  runner = OnnxRunner(MODELS_DIR / f'{model_name}.onnx')
+  with open(MODELS_DIR / f'{model_name}_metadata.pkl', 'rb') as f:
+    input_shapes = pickle.load(f)['input_shapes']
+
+  run_policy_head = make_run_policy_head(runner)
+  run_policy_head_jit = TinyJit(run_policy_head)
+
+  rng = np.random.default_rng(0)
+  npy = {
+    'features_buffer': rng.standard_normal(input_shapes['features_buffer'], dtype=np.float32),
+    'desire_pulse': rng.standard_normal(input_shapes['desire_pulse'], dtype=np.float32),
+    'traffic_convention': np.array([[1.0, 0.0]], dtype=np.float32),
+  }
+
+  for i in range(3):
+    inputs = {k: Tensor(v.copy(), device='NPY').realize() for k, v in npy.items()}
+    Device.default.synchronize()
+
+    st = time.perf_counter()
+    out = run_policy_head_jit(**inputs)
+    mt = time.perf_counter()
+    Device.default.synchronize()
+    et = time.perf_counter()
+    print(f"  [{i+1}/10] enqueue {(mt-st)*1e3:6.2f} ms -- total {(et-st)*1e3:6.2f} ms")
+
+    if i == 2:
+      test_inputs = {k: Tensor(v.copy(), device='NPY').realize() for k, v in npy.items()}
+      test_val = np.copy(run_policy_head(**test_inputs).numpy())
+
+  pkl_path = policy_head_pkl_path(model_name)
+  with open(pkl_path, "wb") as f:
+    pickle.dump(run_policy_head_jit, f)
+  print(f"  Saved to {pkl_path}")
+  return test_inputs, test_val
+
+
 def test_vs_compile(run, inputs: dict[str, Tensor], test_val: np.ndarray):
   # run 20 times
   for i in range(20):
@@ -270,6 +326,27 @@ def test_vs_compile(run, inputs: dict[str, Tensor], test_val: np.ndarray):
   changed_inputs['big_tfm'] = Tensor((inputs['big_tfm'].numpy() + tfm_delta).astype(np.float32), device=inputs['big_tfm'].device)
   changed_val = run(**changed_inputs).numpy()
   assert not np.array_equal(val, changed_val), "vision output didn't change when transforms changed"
+  print('test_vs_compile OK')
+
+
+def test_vs_compile_policy_head(run, inputs: dict[str, Tensor], test_val: np.ndarray):
+  for i in range(20):
+    st = time.perf_counter()
+    out = run(**inputs)
+    mt = time.perf_counter()
+    val = out.numpy()
+    et = time.perf_counter()
+    print(f"enqueue {(mt-st)*1e3:6.2f} ms -- total run {(et-st)*1e3:6.2f} ms")
+
+    if i == 0:
+      np.testing.assert_equal(test_val, val)
+
+  changed_inputs = {k: Tensor(v.numpy().copy(), device=v.device) for k, v in inputs.items()}
+  fb = changed_inputs['features_buffer'].numpy()
+  fb.reshape(-1)[0] += 1.0
+  changed_inputs['features_buffer'] = Tensor(fb, device=inputs['features_buffer'].device)
+  changed_val = run(**changed_inputs).numpy()
+  assert not np.array_equal(val, changed_val), "policy head output didn't change when features changed"
   print('test_vs_compile OK')
 
 
@@ -300,9 +377,16 @@ def compile_dm_warp(cam_w, cam_h):
 
 
 def run_and_save_pickle():
+  for model_name in ('driving_on_policy', 'driving_off_policy'):
+    inputs, outputs = compile_policy_head(model_name)
+    with open(policy_head_pkl_path(model_name), "rb") as f:
+      pickle_loaded = pickle.load(f)
+    test_vs_compile_policy_head(pickle_loaded, inputs, outputs)
+
   for cam_w, cam_h in CAMERA_CONFIGS:
     inputs, outputs = compile_modeld(cam_w, cam_h)
-    pickle_loaded = pickle.load(open(policy_pkl_path(cam_w, cam_h), "rb"))
+    with open(policy_pkl_path(cam_w, cam_h), "rb") as f:
+      pickle_loaded = pickle.load(f)
     test_vs_compile(pickle_loaded, inputs, outputs)
 
     compile_dm_warp(cam_w, cam_h)

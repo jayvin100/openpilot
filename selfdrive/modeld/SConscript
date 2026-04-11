@@ -58,13 +58,15 @@ script_files = [File(Dir("#selfdrive/modeld").File("compile_modeld.py").abspath)
 compile_modeld_cmd = f'rm -f {Dir("#selfdrive/modeld").abspath}/models/driving_*_tinygrad.pkl* && {tg_flags} {mac_brew_string} {image_flag} python3 {Dir("#selfdrive/modeld").abspath}/compile_modeld.py '
 from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
 driving_onnx_deps = [File(f"models/{m}.onnx").abspath for m in ['driving_vision', 'driving_on_policy', 'driving_off_policy']]
-driving_metadata_deps = [File(f"models/{m}_metadata.pkl").abspath for m in ['driving_vision', 'driving_on_policy']]
+driving_metadata_deps = [File(f"models/{m}_metadata.pkl").abspath for m in ['driving_vision', 'driving_on_policy', 'driving_off_policy']]
 modeld_targets = []
 policy_pkls = []
+policy_head_pkls = [File(f"models/{m}_tinygrad.pkl").abspath for m in ['driving_on_policy', 'driving_off_policy']]
 for cam in [_ar_ox_fisheye, _os_fisheye]:
   w, h = cam.width, cam.height
   policy_pkls.append(File(f"models/driving_{w}x{h}_tinygrad.pkl").abspath)
   modeld_targets += [File(f"models/driving_{w}x{h}_tinygrad.pkl").abspath, File(f"models/dm_warp_{w}x{h}_tinygrad.pkl").abspath]
+modeld_targets += policy_head_pkls
 compile_node = lenv.Command(modeld_targets, tinygrad_files + script_files + driving_onnx_deps + driving_metadata_deps + [chunker_file], compile_modeld_cmd)
 
 # chunk the combined policy pkls (they contain model weights)
@@ -94,5 +96,5 @@ def tg_compile(flags, model_name):
     do_chunk,
   )
 
-# Compile dmonitoring model (driving models are in the combined policy JIT)
+# Compile dmonitoring model (driving model artifacts are built by compile_modeld.py)
 tg_compile(tg_flags, 'dmonitoring_model')

@@ -8,7 +8,6 @@ if USBGPU:
   os.environ['DEV'] = 'AMD'
   os.environ['AMD_IFACE'] = 'USB'
 from tinygrad.tensor import Tensor
-from tinygrad.nn.onnx import OnnxRunner
 import time
 import pickle
 import numpy as np
@@ -31,6 +30,7 @@ from openpilot.selfdrive.modeld.compile_modeld import (
   make_buffers,
   make_policy_state,
   policy_pkl_path,
+  policy_head_pkl_path,
   run_policy_heads,
   update_desire_pulse,
   update_features_buffer,
@@ -179,8 +179,8 @@ class ModelState:
     self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
     self.vision_features_slice = self.vision_output_slices['hidden_state']
     self.run_vision = pickle.loads(read_file_chunked(str(policy_pkl_path(cam_w, cam_h))))
-    self.on_policy_runner = OnnxRunner(MODELS_DIR / 'driving_on_policy.onnx')
-    self.off_policy_runner = OnnxRunner(MODELS_DIR / 'driving_off_policy.onnx')
+    self.on_policy_runner = pickle.loads(read_file_chunked(str(policy_head_pkl_path('driving_on_policy'))))
+    self.off_policy_runner = pickle.loads(read_file_chunked(str(policy_head_pkl_path('driving_off_policy'))))
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
