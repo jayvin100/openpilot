@@ -283,7 +283,7 @@ def compile_policy_head(model_name):
   }
 
   for i in range(3):
-    inputs = {k: Tensor(v.copy(), device='NPY').realize() for k, v in npy.items()}
+    inputs = {k: Tensor(v.copy()).realize() for k, v in npy.items()}
     Device.default.synchronize()
 
     st = time.perf_counter()
@@ -294,7 +294,7 @@ def compile_policy_head(model_name):
     print(f"  [{i+1}/10] enqueue {(mt-st)*1e3:6.2f} ms -- total {(et-st)*1e3:6.2f} ms")
 
     if i == 2:
-      test_inputs = {k: Tensor(v.copy(), device='NPY').realize() for k, v in npy.items()}
+      test_inputs = {k: Tensor(v.copy()).realize() for k, v in npy.items()}
       test_val = np.copy(run_policy_head(**test_inputs).numpy())
 
   pkl_path = policy_head_pkl_path(model_name)
