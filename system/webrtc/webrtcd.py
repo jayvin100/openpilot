@@ -19,9 +19,13 @@ if TYPE_CHECKING:
   from aiortc.rtcdatachannel import RTCDataChannel
 
 from openpilot.system.webrtc.schema import generate_field
+from openpilot.system.webrtc.utils import clock_sync_build_json, validate_sound_name
 from cereal import messaging, log
 from openpilot.common.params import Params
+from openpilot.system.webrtc.device.audio import BODY_SOUND_NAMES
 
+
+REQUIRED_VIDEO_CODEC = "H264"
 
 class CerealOutgoingMessageProxy:
   def __init__(self, sm: messaging.SubMaster):
@@ -116,14 +120,6 @@ class DynamicPubMaster(messaging.PubMaster):
           self.sock[service] = messaging.pub_sock(service)
 
 
-def validate_body_sound_name(sound_name: Any) -> str:
-  from openpilot.system.webrtc.device.audio import BODY_SOUND_NAMES
-
-  if sound_name not in BODY_SOUND_NAMES:
-    raise ValueError(f"unsupported body sound: {sound_name}")
-  return sound_name
-
-
 class StreamSession:
   shared_pub_master = DynamicPubMaster([])
 
@@ -204,80 +200,42 @@ class StreamSession:
   async def get_answer(self):
     return await self.stream.start()
 
-  def _handle_clock_sync(self, payload: dict):
-    import time as _time
-    data = payload.get("data", {})
-    if data.get("action") != "ping":
-      return
-    pong = json.dumps({
-      "type": "clockSync",
-      "data": {
-        "action": "pong",
-        "browserSendTime": data.get("browserSendTime"),
-        "deviceTime": _time.time() * 1000,  # noqa: TID251
-      }
-    })
-    try:
-      if self.stream.has_messaging_channel():
-        self.stream.get_messaging_channel().send(pong)
-    except Exception:
-      self.logger.warning("Failed to send clockSync pong")
-
-  def _handle_switch_camera(self, payload: dict):
-    data = payload.get("data")
-    if not isinstance(data, dict):
-      return
-    camera = data.get("camera")
-    if camera in ("driver", "wideRoad"):
-      try:
-        Params().put("LivestreamCamera", camera)
-      except Exception:
-        self.logger.warning("Failed to write LivestreamCamera param")
-      if hasattr(self, 'video_track') and hasattr(self.video_track, 'switch_camera'):
-        self.video_track.switch_camera(camera)
-      self.logger.info("Switched livestream camera to %s", camera)
-
-  def _handle_play_sound(self, payload: dict):
-    data = payload.get("data")
-    if not isinstance(data, dict):
-      self.logger.warning("Ignoring malformed playSound request")
-      return
-
-    try:
-      sound_name = validate_body_sound_name(data.get("sound"))
-    except ValueError:
-      self.logger.warning("Ignoring invalid playSound request: %s", data.get("sound"))
-      return
-
-    if self.audio_output is None:
-      self.logger.warning("Ignoring playSound request; body audio output unavailable")
-      return
-
-    try:
-      self.audio_output.play_sound(sound_name)
-    except Exception:
-      self.logger.exception("Failed to play body sound")
-
   async def message_handler(self, message: bytes):
     try:
       payload = json.loads(message) if isinstance(message, (bytes, str)) else None
-      if isinstance(payload, dict) and payload.get("type") == "switchCamera":
-        self._handle_switch_camera(payload)
-        return
-      if isinstance(payload, dict) and payload.get("type") == "clockSync":
-        self._handle_clock_sync(payload)
-        return
-      if isinstance(payload, dict) and payload.get("type") == "enableTimingSei":
-        enabled = bool(payload.get("data", {}).get("enabled"))
-        if hasattr(self.video_track, 'timing_sei_enabled'):
-          self.video_track.timing_sei_enabled = enabled
-          self.logger.info("Timing SEI %s", "enabled" if enabled else "disabled")
-        return
-      if isinstance(payload, dict) and payload.get("type") == "playSound":
-        self._handle_play_sound(payload)
-        return
-      if self.incoming_bridge is not None:
+      if isinstance(payload, dict):
+        data = payload.get("data")
+        if not isinstance(data, dict):
+          raise ValueError
+
+        if payload.get("type") == "switchCamera":
+          camera = data.get("camera")
+          if camera in ("driver", "wideRoad"):
+            Params().put("LivestreamCamera", camera)
+            if hasattr(self, 'video_track') and hasattr(self.video_track, 'switch_camera'):
+              self.video_track.switch_camera(camera)
+            self.logger.info("Switched livestream camera to %s", camera)
+          else: raise ValueError
+
+        elif payload.get("type") == "clockSync":
+          pong = clock_sync_build_json(payload)
+          self.stream.get_messaging_channel().send(pong)
+
+        elif payload.get("type") == "enableTimingSei":
+          enabled = bool(payload.get("data", {}).get("enabled"))
+          if hasattr(self.video_track, 'timing_sei_enabled'):
+            self.video_track.timing_sei_enabled = enabled
+
+        elif payload.get("type") == "playSound":
+          sound = payload.get("sound")
+          if sound in BODY_SOUND_NAMES:
+            self.audio_output.play_sound(sound)
+
+      elif self.incoming_bridge is not None:
         self.incoming_bridge.send(message)
+
+    except ValueError:
+      self.logger.warning("Ignoring malformed request: %s", payload)
     except Exception:
       self.logger.exception("Cereal incoming proxy failure")
 
@@ -294,13 +252,10 @@ class StreamSession:
           channel = self.stream.get_messaging_channel()
           self.outgoing_bridge_runner.proxy.add_channel(channel)
           self.outgoing_bridge_runner.start()
-      # Tell the client which camera is currently active
-      if self.stream.has_messaging_channel():
-        try:
-          active = getattr(self.video_track, '_camera_type', 'driver')
-          self.stream.get_messaging_channel().send(json.dumps({"type": "activeCamera", "data": {"camera": active}}))
-        except Exception:
-          pass
+        # tell the client which camera is currently active
+        active = getattr(self.video_track, '_camera_type', 'driver')
+        self.stream.get_messaging_channel().send(json.dumps({"type": "activeCamera", "data": {"camera": active}}))
+
       self.logger.info("Stream session (%s) connected", self.identifier)
 
       await self.stream.wait_for_disconnection()
@@ -332,7 +287,7 @@ class StreamRequestBody:
   bridge_services_in: list[str] = field(default_factory=list)
   bridge_services_out: list[str] = field(default_factory=list)
 
-def _add_cors_headers(request: 'web.Request', response: 'web.Response'):
+def _add_cors_headers(_, response: 'web.Response'):
   response.headers["Access-Control-Allow-Origin"] = "*"
   response.headers["Access-Control-Allow-Headers"] = "Content-Type"
   response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
@@ -356,8 +311,6 @@ async def stream_options(request: 'web.Request'):
   return response
 
 
-REQUIRED_VIDEO_CODEC = "H264"
-
 def _validate_sdp_video_codecs(sdp: str):
   import aiortc.sdp
   desc = aiortc.sdp.SessionDescription.parse(sdp)
@@ -373,25 +326,16 @@ def _validate_sdp_video_codecs(sdp: str):
       )
 
 
-def _cleanup_stale_streams(stream_dict: dict):
-  stale = [sid for sid, s in stream_dict.items() if s.run_task is None or s.run_task.done()]
-  for sid in stale:
-    del stream_dict[sid]
-
-
-def _get_active_streams(stream_dict: dict) -> list[str]:
-  return [sid for sid, s in stream_dict.items() if s.run_task is not None and not s.run_task.done()]
-
-
 async def get_stream(request: 'web.Request'):
   logger = logging.getLogger("webrtcd")
   try:
     stream_dict, debug_mode = request.app['streams'], request.app['debug']
 
-    _cleanup_stale_streams(stream_dict)
+    # cleanup old streams
+    for sid in [sid for sid, s in stream_dict.items() if s.run_task is None or s.run_task.done()]:
+      del stream_dict[sid]
 
-    active_streams = _get_active_streams(stream_dict)
-    if active_streams:
+    if stream_dict:
       raise web.HTTPConflict(
         text=json.dumps({"error": "already_connected", "message": "Another device is already connected to the stream"}),
         content_type="application/json",
@@ -452,18 +396,9 @@ async def on_shutdown(app: 'web.Application'):
 
 
 def create_app(debug: bool) -> web.Application:
-  from openpilot.system.webrtc.device.audio import WebToDeviceAudioTrack
-
-  logger = logging.getLogger("webrtcd")
-
   app = web.Application(middlewares=[cors_middleware])
   app['streams'] = dict()
   app['debug'] = debug
-  try:
-    app['body_audio_output'] = WebToDeviceAudioTrack()
-  except Exception:
-    logger.exception("Failed to initialize shared body audio output")
-    app['body_audio_output'] = None
   app.on_shutdown.append(on_shutdown)
   app.router.add_route("OPTIONS", "/stream", stream_options)
   app.router.add_post("/stream", get_stream)
