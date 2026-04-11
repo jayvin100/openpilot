@@ -45,11 +45,11 @@ THERMAL_BANDS = OrderedDict({
   ThermalStatus.green: ThermalBand(None, 80.0),
   ThermalStatus.yellow: ThermalBand(75.0, 96.0),
   ThermalStatus.red: ThermalBand(88.0, 107.),
-  ThermalStatus.danger: ThermalBand(70.0, None),
+  ThermalStatus.danger: ThermalBand(40.0, None),
 })
 
 # Override to highest thermal band when offroad and above this temp
-OFFROAD_DANGER_TEMP = 60
+OFFROAD_DANGER_TEMP = 35
 
 prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
 
