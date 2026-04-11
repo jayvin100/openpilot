@@ -341,10 +341,12 @@ def test_vs_compile_policy_head(run, inputs: dict[str, Tensor], test_val: np.nda
     if i == 0:
       np.testing.assert_equal(test_val, val)
 
-  changed_inputs = {k: Tensor(v.numpy().copy(), device=v.device) for k, v in inputs.items()}
-  fb = changed_inputs['features_buffer'].numpy()
-  fb.reshape(-1)[0] += 1.0
-  changed_inputs['features_buffer'] = Tensor(fb, device=inputs['features_buffer'].device)
+  rng = np.random.default_rng(1)
+  changed_inputs = {
+    'features_buffer': Tensor(rng.standard_normal(inputs['features_buffer'].shape, dtype=np.float32), device=inputs['features_buffer'].device),
+    'desire_pulse': Tensor(rng.standard_normal(inputs['desire_pulse'].shape, dtype=np.float32), device=inputs['desire_pulse'].device),
+    'traffic_convention': Tensor(np.array([[0.0, 1.0]], dtype=np.float32), device=inputs['traffic_convention'].device),
+  }
   changed_val = run(**changed_inputs).numpy()
   assert not np.array_equal(val, changed_val), "policy head output didn't change when features changed"
   print('test_vs_compile OK')
