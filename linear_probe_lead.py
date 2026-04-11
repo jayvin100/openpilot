@@ -13,9 +13,10 @@ os.environ['SEND_RAW_PRED'] = '1'
 from openpilot.selfdrive.modeld.tinygrad_helpers import MODELS_DIR, set_tinygrad_backend_from_compiled_flags
 set_tinygrad_backend_from_compiled_flags()
 
+import math
 import time
 import pickle
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import as_completed, ThreadPoolExecutor, ProcessPoolExecutor
 
 import torch
 import torch.nn as nn
@@ -39,15 +40,14 @@ FEATURE_SLICE = slice(117, 629)
 
 LEXUS_TRAIN = [
   '7830b8e854d6713c/000000f9--a736138536/5:',
-  '7830b8e854d6713c/000000c9--e769ceac34/7:21',
+  # '7830b8e854d6713c/000000c9--e769ceac34/7:21',
   # '7830b8e854d6713c/000000d1--9f7385daf2',
   # '7830b8e854d6713c/000000d4--ac4ec365b4',
   # '7830b8e854d6713c/000000cb--8d6a2f4626',
+  # "7830b8e854d6713c/000000db--d5575f785a",
   # '7830b8e854d6713c/000000cc--d30fb0aa7f',
-  # '7830b8e854d6713c/000000cd--741c93fcb1',
 ]
-# LEXUS_VAL = '7830b8e854d6713c/000000db--d5575f785a'
-LEXUS_VAL = '7830b8e854d6713c/000000db--d5575f785a/13'
+LEXUS_VAL = '7830b8e854d6713c/000000cd--741c93fcb1'
 TESLA_ROUTE = 'dffcf1de8723a20f/000000be--f00fb3e5b5/4'
 
 CACHE_DIR = '/tmp/linear_probe_cache'
@@ -62,7 +62,8 @@ N_LEAD_VARS = 4  # x, y, v, a
 LEAD_OUT = N_HORIZONS * N_LEAD_VARS * 2  # mu + log_sigma per var per horizon = 48
 
 class TemporalProbe(nn.Module):
-  """Matches off-policy temporal model: transformer + hydra-style lead head with Laplacian density."""
+  """Temporal probe matching prod off-policy architecture.
+  1L transformer, lead head hidden=64, separate lead_prob head (hidden=16)."""
   def __init__(self, n_embd=512, n_head=8, n_layer=1, hidden_size=64, dropout=0.1):
     super().__init__()
     self.pos_embedding = nn.Embedding(SEQ_LEN, n_embd)
@@ -79,9 +80,9 @@ class TemporalProbe(nn.Module):
     self.head_in = nn.Linear(n_embd, hidden_size)
     self.head_res1 = nn.Linear(hidden_size, hidden_size)
     self.head_res2 = nn.Linear(hidden_size, hidden_size)
-    self.head_out = nn.Linear(hidden_size, LEAD_OUT)  # 6 horizons × 4 vars × 2 (mu + log_sigma)
-    # Separate lead_prob head (like actual model)
+    self.head_out = nn.Linear(hidden_size, LEAD_OUT)
     self.prob_head = nn.Linear(hidden_size, 1)
+    self.vego_head = nn.Linear(hidden_size, 1)
 
   def forward(self, x):
     # x: [B, SEQ_LEN, 512]
@@ -98,13 +99,28 @@ class TemporalProbe(nn.Module):
     h = torch.relu(self.head_in(x))
     h = torch.relu(h + self.head_res2(torch.relu(self.head_res1(h))))
     lead = self.head_out(h).view(-1, N_HORIZONS, N_LEAD_VARS * 2)
-    prob = self.prob_head(h).squeeze(-1)  # logit
-    return lead, prob
+    prob = self.prob_head(h).squeeze(-1)
+    vego = self.vego_head(h).squeeze(-1)
+    return lead, prob, vego
+
+
+def autoscale_y_on_zoom(fig):
+  """Connect xlim_changed callback so y autoscales when zooming on x."""
+  def on_xlim_changed(ax):
+    xlim = ax.get_xlim()
+    for line in ax.get_lines():
+      xd, yd = line.get_xdata(), line.get_ydata()
+      mask = (xd >= xlim[0]) & (xd <= xlim[1]) & np.isfinite(yd)
+      if mask.any():
+        lo, hi = yd[mask].min(), yd[mask].max()
+        margin = (hi - lo) * 0.05 or 1.0
+        ax.set_ylim(lo - margin, hi + margin)
+  for ax in fig.axes:
+    ax.callbacks.connect('xlim_changed', on_xlim_changed)
 
 
 def laplacian_nll(pred, target, std_clamp=1e-3, loss_clamp=1000.):
   """Laplacian density loss matching xx DensityLoss('laplacian') exactly."""
-  import math
   # Mask NaN targets (same as num_from_nan)
   mask = ~torch.isnan(target)
   target = target.masked_fill(~mask, 0).detach()
@@ -147,7 +163,7 @@ def make_temporal_sequences(aligned_data):
     feats = np.array([d['features'] for d in seg_sub])
     vlead = np.array([d.get('vLead_radar', np.nan) for d in seg_sub])
     drel = np.array([d.get('dRel_radar', np.nan) for d in seg_sub])
-    status = np.array([d.get('lead_status', True) for d in seg_sub])  # old cache was pre-filtered to lead-only
+    status = np.array([d.get('lead_status', True) for d in seg_sub])
     vego = np.array([d['vEgo'] for d in seg_sub])
     ts = np.array([d['t'] for d in seg_sub])
 
@@ -180,61 +196,78 @@ def make_temporal_sequences(aligned_data):
           np.array(vego_targets), np.array(t_targets))
 
 
-def train_temporal_probe(train_seqs, train_lead, train_prob, val_seqs, val_lead, val_prob, epochs=200, lr=1e-3, batch_size=256):
-  """Train temporal probe on full lead trajectory + lead_prob."""
+def batched_inference(model, seqs, batch_size=1024):
+  """Run model inference in batches to avoid OOM."""
+  device = next(model.parameters()).device
+  lead_preds, prob_preds, vego_preds = [], [], []
+  x = torch.tensor(seqs, dtype=torch.float32) if not isinstance(seqs, torch.Tensor) else seqs
+  with torch.no_grad():
+    for i in range(0, len(x), batch_size):
+      lp, pp, vp = model(x[i:i+batch_size].to(device))
+      lead_preds.append(lp.cpu()); prob_preds.append(pp.cpu()); vego_preds.append(vp.cpu())
+  return torch.cat(lead_preds), torch.cat(prob_preds), torch.cat(vego_preds)
+
+
+def train_temporal_probe(train_seqs, train_lead, train_prob, train_vego, val_seqs, val_lead, val_prob, val_vego, epochs=100, lr=1e-3, batch_size=256):
+  """Train temporal probe on full lead trajectory + lead_prob + vEgo."""
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   model = TemporalProbe().to(device)
 
   train_x = torch.tensor(train_seqs, dtype=torch.float32)
   train_y = torch.tensor(train_lead, dtype=torch.float32)
   train_p = torch.tensor(train_prob, dtype=torch.float32)
-  val_x = torch.tensor(val_seqs, dtype=torch.float32).to(device)
-  val_y = torch.tensor(val_lead, dtype=torch.float32).to(device)
-  val_p = torch.tensor(val_prob, dtype=torch.float32).to(device)
+  train_ve = torch.tensor(train_vego, dtype=torch.float32)
+  val_x = torch.tensor(val_seqs, dtype=torch.float32)
+  val_y = torch.tensor(val_lead, dtype=torch.float32)
+  val_p = torch.tensor(val_prob, dtype=torch.float32)
+  val_ve = torch.tensor(val_vego, dtype=torch.float32)
 
   optimizer = torch.optim.Adam(model.parameters(), lr=lr)
   scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-  dataset = torch.utils.data.TensorDataset(train_x, train_y, train_p)
+  dataset = torch.utils.data.TensorDataset(train_x, train_y, train_p, train_ve)
   loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-  for epoch in range(epochs):
-    model.train()
-    total_loss = 0
-    for bx, by, bp in loader:
-      bx, by, bp = bx.to(device), by.to(device), bp.to(device)
-      lead_pred, prob_pred = model(bx)
-      loss = laplacian_nll(lead_pred, by) + nn.functional.binary_cross_entropy_with_logits(prob_pred, bp)
-      optimizer.zero_grad()
-      loss.backward()
-      optimizer.step()
-      total_loss += loss.item() * len(bx)
-    scheduler.step()
+  try:
+    for epoch in range(epochs):
+      model.train()
+      total_loss = 0
+      for bx, by, bp, bve in loader:
+        bx, by, bp, bve = bx.to(device), by.to(device), bp.to(device), bve.to(device)
+        lead_pred, prob_pred, vego_pred = model(bx)
+        loss = laplacian_nll(lead_pred, by) + nn.functional.binary_cross_entropy_with_logits(prob_pred, bp) + \
+               nn.functional.mse_loss(vego_pred, bve)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * len(bx)
+      scheduler.step()
 
-    if epoch % 10 == 0 or epoch == epochs - 1:
-      model.eval()
-      with torch.no_grad():
-        # Train metrics
-        train_lead_pred, train_prob_pred = model(train_x.to(device))
-        train_has = train_p > 0.5
-        if train_has.any():
-          tr_x_mae = (train_lead_pred[train_has, 0, 0] - train_y[train_has, 0, 0].to(device)).abs().mean().item()
-          tr_v_mae = (train_lead_pred[train_has, 0, 2] - train_y[train_has, 0, 2].to(device)).abs().mean().item()
-        else:
-          tr_x_mae, tr_v_mae = 0, 0
-        # Val metrics
-        val_lead_pred, val_prob_pred = model(val_x)
-        has_lead = val_p > 0.5
-        if has_lead.any():
-          val_x_mae = (val_lead_pred[has_lead, 0, 0] - val_y[has_lead, 0, 0]).abs().mean().item()
-          val_v_mae = (val_lead_pred[has_lead, 0, 2] - val_y[has_lead, 0, 2]).abs().mean().item()
-        else:
-          val_x_mae, val_v_mae = 0, 0
-        val_prob_acc = ((val_prob_pred > 0) == (val_p > 0.5)).float().mean().item()
-      print(f"  epoch {epoch:>3d}: loss={total_loss/len(train_x):.3f} | "
-            f"train dRel={tr_x_mae:.2f}m vLead={tr_v_mae:.2f}m/s | "
-            f"val dRel={val_x_mae:.2f}m vLead={val_v_mae:.2f}m/s prob_acc={val_prob_acc:.2f}")
+      if epoch % 10 == 0 or epoch == epochs - 1:
+        model.eval()
+        with torch.no_grad():
+          def eval_metrics(x, y, p, ve):
+            lead_preds, prob_preds, vego_preds = [], [], []
+            for i in range(0, len(x), batch_size):
+              lp, pp, vp = model(x[i:i+batch_size].to(device))
+              lead_preds.append(lp.cpu()); prob_preds.append(pp.cpu()); vego_preds.append(vp.cpu())
+            lead_pred = torch.cat(lead_preds); prob_pred = torch.cat(prob_preds); vego_pred = torch.cat(vego_preds)
+            has = p > 0.5
+            x_mae = (lead_pred[has, 0, 0] - y[has, 0, 0]).abs().mean().item() if has.any() else 0
+            v_mae = (lead_pred[has, 0, 2] - y[has, 0, 2]).abs().mean().item() if has.any() else 0
+            ve_mae = (vego_pred - ve).abs().mean().item()
+            p_acc = ((prob_pred > 0) == (p > 0.5)).float().mean().item()
+            return x_mae, v_mae, ve_mae, p_acc
+          tr_x_mae, tr_v_mae, tr_vego_mae, _ = eval_metrics(train_x, train_y, train_p, train_ve)
+          val_x_mae, val_v_mae, val_vego_mae, val_prob_acc = eval_metrics(val_x, val_y, val_p, val_ve)
+        print(f"  epoch {epoch:>3d}: loss={total_loss/len(train_x):.3f} | "
+              f"train dRel={tr_x_mae:.2f}m vLead={tr_v_mae:.2f}m/s vEgo={tr_vego_mae:.2f}m/s | "
+              f"val dRel={val_x_mae:.2f}m vLead={val_v_mae:.2f}m/s vEgo={val_vego_mae:.2f}m/s prob_acc={val_prob_acc:.2f}")
 
+  except KeyboardInterrupt:
+    print(f"\n  Stopped early at epoch {epoch}")
   model.eval()
+  del train_x, train_y, train_p, train_ve, val_x, val_y, val_p, val_ve, optimizer, scheduler, loader, dataset
+  torch.cuda.empty_cache()
   return model
 
 
@@ -401,6 +434,10 @@ class FakeBuf:
 
 def process_segment(route_name, seg, camera_path, ecamera_path):
   """Decode frames and run vision inference for one segment. Caches result."""
+  # Ensure auth is available on worker
+  if 'COMMA_JWT' in os.environ:
+    from openpilot.tools.lib.auth_config import set_token
+    set_token(os.environ['COMMA_JWT'])
   from openpilot.common.transformations.camera import DEVICE_CAMERAS
 
   cache_path = get_cache_path(route_name, seg)
@@ -567,23 +604,33 @@ def collect_features(seg_range_str):
   route = Route(sr.route_name)
   all_aligned = []
 
+  cached_segs = []
   work = []
   for s in sr.seg_idxs:
     cache_path = get_cache_path(sr.route_name, s)
     if os.path.exists(cache_path):
       with open(cache_path, 'rb') as f:
         cached = pickle.load(f)
-      aligned = align_with_radar(sr.route_name, s, cached)
-      n_lead = sum(1 for a in aligned if a['lead_status'])
-      all_aligned.extend(aligned)
-      print(f"  seg {s}: {len(aligned)} samples ({n_lead} with lead)")
+      cached_segs.append((s, cached))
     else:
       work.append(s)
+
+  # Align cached segments with radar in parallel (LogReader is I/O-bound)
+  def _align_seg(args):
+    s, cached = args
+    aligned = align_with_radar(sr.route_name, s, cached)
+    n_lead = sum(1 for a in aligned if a['lead_status'])
+    return s, aligned, n_lead
+
+  with ThreadPoolExecutor(max_workers=16) as pool:
+    for s, aligned, n_lead in pool.map(_align_seg, cached_segs):
+      print(f"  seg {s}: {len(aligned)} samples ({n_lead} with lead)")
+      all_aligned.extend(aligned)
 
   if not work:
     return all_aligned
 
-  with ProcessPoolExecutor(max_workers=8) as pool:
+  with ProcessPoolExecutor(max_workers=3) as pool:
     futures = {pool.submit(process_segment, sr.route_name, s, route.camera_paths()[s], route.ecamera_paths()[s]): s for s in work}
     for fut in tqdm(as_completed(futures), total=len(futures), desc='segments'):
       all_aligned.extend(fut.result())
@@ -618,12 +665,10 @@ def phase2_temporal_probe():
   print(f"  Train: {train_seqs.shape[0]} sequences ({n_train_lead} with lead)")
   print(f"  Val:   {val_seqs.shape[0]} sequences ({n_val_lead} with lead)")
 
-  temporal_model = train_temporal_probe(train_seqs, train_lead, train_prob, val_seqs, val_lead, val_prob)
+  temporal_model = train_temporal_probe(train_seqs, train_lead, train_prob, train_vego, val_seqs, val_lead, val_prob, val_vego)
 
-  device = next(temporal_model.parameters()).device
-  with torch.no_grad():
-    val_lead_pred, val_prob_pred = temporal_model(torch.tensor(val_seqs, dtype=torch.float32).to(device))
-    val_pred_raw = val_lead_pred.cpu().numpy()
+  val_lead_pred, val_prob_pred, _ = batched_inference(temporal_model, val_seqs)
+  val_pred_raw = val_lead_pred.numpy()
   val_pred_drel = val_pred_raw[:, 0, 0]
   val_pred_vlead = val_pred_raw[:, 0, 2]
   val_pred_prob = torch.sigmoid(val_prob_pred).cpu().numpy()
@@ -648,6 +693,28 @@ def phase2_temporal_probe():
     if bmask.sum() > 0:
       print(f"  [{lo:>2}-{hi:>2} m/s]:  {np.mean(np.abs(v_err[bmask])):>7.2f}  "
             f"{mean_absolute_error(val_vlead[bmask], val_vego[has_lead][bmask]):>7.2f}  {bmask.sum():>5d}")
+
+  # Quick Tesla check
+  print(f"\n--- Tesla braking segment (no radar ground truth) ---")
+  tesla_ts, tesla_feats = get_tesla_features()
+  tesla_logs = list(LogReader(TESLA_ROUTE, sort_by_time=True))
+  tesla_vego = np.array([m.carState.vEgo for m in tesla_logs if m.which() == 'carState'])
+  tesla_car_t = np.array([m.logMonoTime * 1e-9 for m in tesla_logs if m.which() == 'carState'])
+  tesla_model_vlead = np.array([m.modelV2.leadsV3[0].v[0] for m in tesla_logs if m.which() == 'modelV2'])
+  tesla_model_t = np.array([m.logMonoTime * 1e-9 for m in tesla_logs if m.which() == 'modelV2'])
+  # Run probe at 5Hz
+  feats_sub = tesla_feats[::SUBSAMPLE]
+  ts_sub = tesla_ts[::SUBSAMPLE]
+  tesla_lead_pred, tesla_prob_pred, _ = batched_inference(temporal_model,
+    np.array([feats_sub[i:i+SEQ_LEN] for i in range(len(feats_sub) - SEQ_LEN + 1)]))
+  probe_vlead = tesla_lead_pred[:, 0, 2].numpy()
+  probe_t = ts_sub[SEQ_LEN-1:]
+  # Interpolate vEgo to probe timestamps
+  probe_vego = np.interp(probe_t, tesla_car_t, tesla_vego)
+  prod_vlead = np.interp(probe_t, tesla_model_t, tesla_model_vlead)
+  print(f"  Probe vLead mean: {probe_vlead.mean():.1f} m/s, Prod model: {prod_vlead.mean():.1f} m/s, vEgo mean: {probe_vego.mean():.1f} m/s")
+  print(f"  Probe-vEgo corr: {np.corrcoef(probe_vlead, probe_vego)[0,1]:.3f}, Prod-vEgo corr: {np.corrcoef(prod_vlead, probe_vego)[0,1]:.3f}")
+  print(f"  Probe-Prod MAE: {np.mean(np.abs(probe_vlead - prod_vlead)):.2f} m/s")
 
   # Scatter plot
   vp = val_pred_vlead[has_lead]
@@ -688,21 +755,23 @@ def phase2_temporal_probe():
   train_model_t, train_model_vlead, train_model_drel, train_model_prob = get_model_preds_from_logs(LEXUS_TRAIN[0])
   val_model_t, val_model_vlead, val_model_drel, val_model_prob = get_model_preds_from_logs(LEXUS_VAL)
 
-  # Lexus train route time series
-  train_seqs_all, train_lead_all, train_prob_all, train_vego_all, train_t_all = make_temporal_sequences(train_split)
-  train_t_all = train_t_all - train_t_all[0]
-  with torch.no_grad():
-    train_lead_pred_all, train_prob_pred_all = temporal_model(torch.tensor(train_seqs_all, dtype=torch.float32).to(device))
-    train_preds_all_raw = train_lead_pred_all.cpu().numpy()
-    train_preds_all_prob = torch.sigmoid(train_prob_pred_all).cpu().numpy()
+  # Lexus train route time series (first route only — use model timestamps to define time range)
+  t0_train = train_model_t[0]
+  t_end_train = train_model_t[-1]
+  train_split_route0 = [s for s in train_split if t0_train - 1 <= s['t'] <= t_end_train + 1]
+  train_seqs_all, train_lead_all, train_prob_all, train_vego_all, train_t_all = make_temporal_sequences(train_split_route0)
+  train_t_all = train_t_all - t0_train
+  train_lead_pred_all, train_prob_pred_all, _ = batched_inference(temporal_model, train_seqs_all)
+  train_preds_all_raw = train_lead_pred_all.numpy()
+  train_preds_all_prob = torch.sigmoid(train_prob_pred_all).numpy()
   train_preds_all_vlead = train_preds_all_raw[:, 0, 2]
   train_preds_all_drel = train_preds_all_raw[:, 0, 0]
   train_vlead_all = train_lead_all[:, 0, 2]
   train_drel_all = train_lead_all[:, 0, 0]
 
-  train_model_t_rel = train_model_t - train_model_t[0]
+  train_model_t_rel = train_model_t - t0_train
 
-  fig, axes = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
+  fig, axes = plt.subplots(3, 1, figsize=(14, 9), sharex=True)
   ax = axes[0]
   ax.plot(train_t_all, train_drel_all, label='dRel radar')
   ax.plot(train_t_all, train_preds_all_drel, label='dRel probe')
@@ -723,33 +792,29 @@ def phase2_temporal_probe():
   ax.plot(train_model_t_rel, train_model_prob, label='lead prob (prod)')
   ax.set_ylabel('probability')
   ax.set_ylim(-0.05, 1.05)
-  ax.legend()
-  ax = axes[3]
-  ax.plot(train_t_all, train_preds_all_vlead - train_vlead_all, label='vLead probe error')
-  ax.axhline(0, color='k', lw=0.8)
-  ax.set_ylabel('error (m/s)')
   ax.set_xlabel('time (s)')
   ax.legend()
   plt.tight_layout()
+  autoscale_y_on_zoom(fig)
   plt.savefig('/tmp/phase2_lexus_train_timeseries.png', dpi=150)
   print(f"Saved plot to /tmp/phase2_lexus_train_timeseries.png")
 
   # Lexus val route time series
+  t0_val = val_model_t[0]
   val_seqs_all, val_lead_all, val_prob_all, val_vego_all, val_t_all = make_temporal_sequences(val_split)
-  val_t_all = val_t_all - val_t_all[0]
+  val_t_all = val_t_all - t0_val
 
-  with torch.no_grad():
-    val_lead_pred_all, val_prob_pred_all = temporal_model(torch.tensor(val_seqs_all, dtype=torch.float32).to(device))
-    val_preds_all_raw = val_lead_pred_all.cpu().numpy()
-    val_preds_all_prob = torch.sigmoid(val_prob_pred_all).cpu().numpy()
+  val_lead_pred_all, val_prob_pred_all, _ = batched_inference(temporal_model, val_seqs_all)
+  val_preds_all_raw = val_lead_pred_all.numpy()
+  val_preds_all_prob = torch.sigmoid(val_prob_pred_all).numpy()
   val_preds_all_vlead = val_preds_all_raw[:, 0, 2]
   val_preds_all_drel = val_preds_all_raw[:, 0, 0]
   val_vlead_all = val_lead_all[:, 0, 2]
   val_drel_all = val_lead_all[:, 0, 0]
 
-  val_model_t_rel = val_model_t - val_model_t[0]
+  val_model_t_rel = val_model_t - t0_val
 
-  fig, axes = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
+  fig, axes = plt.subplots(3, 1, figsize=(14, 9), sharex=True)
   ax = axes[0]
   ax.plot(val_t_all, val_drel_all, label='dRel radar')
   ax.plot(val_t_all, val_preds_all_drel, label='dRel probe')
@@ -770,14 +835,10 @@ def phase2_temporal_probe():
   ax.plot(val_model_t_rel, val_model_prob, label='lead prob (prod)')
   ax.set_ylabel('probability')
   ax.set_ylim(-0.05, 1.05)
-  ax.legend()
-  ax = axes[3]
-  ax.plot(val_t_all, val_preds_all_vlead - val_vlead_all, label='vLead probe error')
-  ax.axhline(0, color='k', lw=0.8)
-  ax.set_ylabel('error (m/s)')
   ax.set_xlabel('time (s)')
   ax.legend()
   plt.tight_layout()
+  autoscale_y_on_zoom(fig)
   plt.savefig('/tmp/phase2_lexus_timeseries.png', dpi=150)
   print(f"Saved plot to /tmp/phase2_lexus_timeseries.png")
 
@@ -895,7 +956,7 @@ def plot_tesla_braking(temporal_model=None):
     with torch.no_grad():
       for i in range(len(feats_sub) - SEQ_LEN + 1):
         seq = torch.tensor(feats_sub[i:i+SEQ_LEN], dtype=torch.float32).unsqueeze(0).to(device)
-        lead_out, prob_out = temporal_model(seq)
+        lead_out, prob_out, _ = temporal_model(seq)
         temporal_drel.append(lead_out[0, 0, 0].cpu().item())
         temporal_vlead.append(lead_out[0, 0, 2].cpu().item())
         temporal_prob.append(torch.sigmoid(prob_out[0]).cpu().item())
@@ -957,6 +1018,7 @@ def plot_tesla_braking(temporal_model=None):
   ax.legend()
 
   plt.tight_layout()
+  autoscale_y_on_zoom(fig)
   plt.savefig('/tmp/tesla_braking_comparison.png', dpi=150)
   print(f"Saved plot to /tmp/tesla_braking_comparison.png")
 
