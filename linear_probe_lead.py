@@ -82,7 +82,6 @@ class TemporalProbe(nn.Module):
     self.head_res2 = nn.Linear(hidden_size, hidden_size)
     self.head_out = nn.Linear(hidden_size, LEAD_OUT)
     self.prob_head = nn.Linear(hidden_size, 1)
-    self.vego_head = nn.Linear(hidden_size, 1)
 
   def forward(self, x):
     # x: [B, SEQ_LEN, 512]
@@ -100,8 +99,7 @@ class TemporalProbe(nn.Module):
     h = torch.relu(h + self.head_res2(torch.relu(self.head_res1(h))))
     lead = self.head_out(h).view(-1, N_HORIZONS, N_LEAD_VARS * 2)
     prob = self.prob_head(h).squeeze(-1)
-    vego = self.vego_head(h).squeeze(-1)
-    return lead, prob, vego
+    return lead, prob
 
 
 def autoscale_y_on_zoom(fig):
@@ -199,43 +197,42 @@ def make_temporal_sequences(aligned_data):
 def batched_inference(model, seqs, batch_size=1024):
   """Run model inference in batches to avoid OOM."""
   device = next(model.parameters()).device
-  lead_preds, prob_preds, vego_preds = [], [], []
+  lead_preds, prob_preds = [], []
   x = torch.tensor(seqs, dtype=torch.float32) if not isinstance(seqs, torch.Tensor) else seqs
   with torch.no_grad():
     for i in range(0, len(x), batch_size):
-      lp, pp, vp = model(x[i:i+batch_size].to(device))
-      lead_preds.append(lp.cpu()); prob_preds.append(pp.cpu()); vego_preds.append(vp.cpu())
-  return torch.cat(lead_preds), torch.cat(prob_preds), torch.cat(vego_preds)
+      lp, pp = model(x[i:i+batch_size].to(device))
+      lead_preds.append(lp.cpu()); prob_preds.append(pp.cpu())
+  return torch.cat(lead_preds), torch.cat(prob_preds)
 
 
-def train_temporal_probe(train_seqs, train_lead, train_prob, train_vego, val_seqs, val_lead, val_prob, val_vego, epochs=100, lr=1e-3, batch_size=256):
-  """Train temporal probe on full lead trajectory + lead_prob + vEgo."""
+def train_temporal_probe(train_seqs, train_lead, train_prob, val_seqs, val_lead, val_prob, epochs=200, lr=1e-3, batch_size=256):
+  """Train temporal probe on full lead trajectory + lead_prob."""
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   model = TemporalProbe().to(device)
 
   train_x = torch.tensor(train_seqs, dtype=torch.float32)
   train_y = torch.tensor(train_lead, dtype=torch.float32)
   train_p = torch.tensor(train_prob, dtype=torch.float32)
-  train_ve = torch.tensor(train_vego, dtype=torch.float32)
   val_x = torch.tensor(val_seqs, dtype=torch.float32)
   val_y = torch.tensor(val_lead, dtype=torch.float32)
   val_p = torch.tensor(val_prob, dtype=torch.float32)
-  val_ve = torch.tensor(val_vego, dtype=torch.float32)
 
   optimizer = torch.optim.Adam(model.parameters(), lr=lr)
   scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-  dataset = torch.utils.data.TensorDataset(train_x, train_y, train_p, train_ve)
+  dataset = torch.utils.data.TensorDataset(train_x, train_y, train_p)
   loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
   try:
     for epoch in range(epochs):
       model.train()
       total_loss = 0
-      for bx, by, bp, bve in loader:
-        bx, by, bp, bve = bx.to(device), by.to(device), bp.to(device), bve.to(device)
-        lead_pred, prob_pred, vego_pred = model(bx)
-        loss = laplacian_nll(lead_pred, by) + nn.functional.binary_cross_entropy_with_logits(prob_pred, bp) + \
-               nn.functional.mse_loss(vego_pred, bve)
+      for bx, by, bp in loader:
+        bx, by, bp = bx.to(device), by.to(device), bp.to(device)
+        lead_pred, prob_pred = model(bx)
+        l_lead = laplacian_nll(lead_pred, by)
+        l_prob = nn.functional.binary_cross_entropy_with_logits(prob_pred, bp)
+        loss = l_lead + l_prob
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -245,28 +242,27 @@ def train_temporal_probe(train_seqs, train_lead, train_prob, train_vego, val_seq
       if epoch % 10 == 0 or epoch == epochs - 1:
         model.eval()
         with torch.no_grad():
-          def eval_metrics(x, y, p, ve):
-            lead_preds, prob_preds, vego_preds = [], [], []
+          def eval_metrics(x, y, p):
+            lead_preds, prob_preds = [], []
             for i in range(0, len(x), batch_size):
-              lp, pp, vp = model(x[i:i+batch_size].to(device))
-              lead_preds.append(lp.cpu()); prob_preds.append(pp.cpu()); vego_preds.append(vp.cpu())
-            lead_pred = torch.cat(lead_preds); prob_pred = torch.cat(prob_preds); vego_pred = torch.cat(vego_preds)
+              lp, pp = model(x[i:i+batch_size].to(device))
+              lead_preds.append(lp.cpu()); prob_preds.append(pp.cpu())
+            lead_pred = torch.cat(lead_preds); prob_pred = torch.cat(prob_preds)
             has = p > 0.5
             x_mae = (lead_pred[has, 0, 0] - y[has, 0, 0]).abs().mean().item() if has.any() else 0
             v_mae = (lead_pred[has, 0, 2] - y[has, 0, 2]).abs().mean().item() if has.any() else 0
-            ve_mae = (vego_pred - ve).abs().mean().item()
             p_acc = ((prob_pred > 0) == (p > 0.5)).float().mean().item()
-            return x_mae, v_mae, ve_mae, p_acc
-          tr_x_mae, tr_v_mae, tr_vego_mae, _ = eval_metrics(train_x, train_y, train_p, train_ve)
-          val_x_mae, val_v_mae, val_vego_mae, val_prob_acc = eval_metrics(val_x, val_y, val_p, val_ve)
+            return x_mae, v_mae, p_acc
+          tr_x_mae, tr_v_mae, _ = eval_metrics(train_x, train_y, train_p)
+          val_x_mae, val_v_mae, val_prob_acc = eval_metrics(val_x, val_y, val_p)
         print(f"  epoch {epoch:>3d}: loss={total_loss/len(train_x):.3f} | "
-              f"train dRel={tr_x_mae:.2f}m vLead={tr_v_mae:.2f}m/s vEgo={tr_vego_mae:.2f}m/s | "
-              f"val dRel={val_x_mae:.2f}m vLead={val_v_mae:.2f}m/s vEgo={val_vego_mae:.2f}m/s prob_acc={val_prob_acc:.2f}")
+              f"train dRel={tr_x_mae:.2f}m vLead={tr_v_mae:.2f}m/s | "
+              f"val dRel={val_x_mae:.2f}m vLead={val_v_mae:.2f}m/s prob_acc={val_prob_acc:.2f}")
 
   except KeyboardInterrupt:
     print(f"\n  Stopped early at epoch {epoch}")
   model.eval()
-  del train_x, train_y, train_p, train_ve, val_x, val_y, val_p, val_ve, optimizer, scheduler, loader, dataset
+  del train_x, train_y, train_p, val_x, val_y, val_p, optimizer, scheduler, loader, dataset
   torch.cuda.empty_cache()
   return model
 
@@ -665,9 +661,9 @@ def phase2_temporal_probe():
   print(f"  Train: {train_seqs.shape[0]} sequences ({n_train_lead} with lead)")
   print(f"  Val:   {val_seqs.shape[0]} sequences ({n_val_lead} with lead)")
 
-  temporal_model = train_temporal_probe(train_seqs, train_lead, train_prob, train_vego, val_seqs, val_lead, val_prob, val_vego)
+  temporal_model = train_temporal_probe(train_seqs, train_lead, train_prob, val_seqs, val_lead, val_prob)
 
-  val_lead_pred, val_prob_pred, _ = batched_inference(temporal_model, val_seqs)
+  val_lead_pred, val_prob_pred = batched_inference(temporal_model, val_seqs)
   val_pred_raw = val_lead_pred.numpy()
   val_pred_drel = val_pred_raw[:, 0, 0]
   val_pred_vlead = val_pred_raw[:, 0, 2]
@@ -705,7 +701,7 @@ def phase2_temporal_probe():
   # Run probe at 5Hz
   feats_sub = tesla_feats[::SUBSAMPLE]
   ts_sub = tesla_ts[::SUBSAMPLE]
-  tesla_lead_pred, tesla_prob_pred, _ = batched_inference(temporal_model,
+  tesla_lead_pred, tesla_prob_pred = batched_inference(temporal_model,
     np.array([feats_sub[i:i+SEQ_LEN] for i in range(len(feats_sub) - SEQ_LEN + 1)]))
   probe_vlead = tesla_lead_pred[:, 0, 2].numpy()
   probe_t = ts_sub[SEQ_LEN-1:]
@@ -761,7 +757,7 @@ def phase2_temporal_probe():
   train_split_route0 = [s for s in train_split if t0_train - 1 <= s['t'] <= t_end_train + 1]
   train_seqs_all, train_lead_all, train_prob_all, train_vego_all, train_t_all = make_temporal_sequences(train_split_route0)
   train_t_all = train_t_all - t0_train
-  train_lead_pred_all, train_prob_pred_all, _ = batched_inference(temporal_model, train_seqs_all)
+  train_lead_pred_all, train_prob_pred_all = batched_inference(temporal_model, train_seqs_all)
   train_preds_all_raw = train_lead_pred_all.numpy()
   train_preds_all_prob = torch.sigmoid(train_prob_pred_all).numpy()
   train_preds_all_vlead = train_preds_all_raw[:, 0, 2]
@@ -804,7 +800,7 @@ def phase2_temporal_probe():
   val_seqs_all, val_lead_all, val_prob_all, val_vego_all, val_t_all = make_temporal_sequences(val_split)
   val_t_all = val_t_all - t0_val
 
-  val_lead_pred_all, val_prob_pred_all, _ = batched_inference(temporal_model, val_seqs_all)
+  val_lead_pred_all, val_prob_pred_all = batched_inference(temporal_model, val_seqs_all)
   val_preds_all_raw = val_lead_pred_all.numpy()
   val_preds_all_prob = torch.sigmoid(val_prob_pred_all).numpy()
   val_preds_all_vlead = val_preds_all_raw[:, 0, 2]
@@ -956,7 +952,7 @@ def plot_tesla_braking(temporal_model=None):
     with torch.no_grad():
       for i in range(len(feats_sub) - SEQ_LEN + 1):
         seq = torch.tensor(feats_sub[i:i+SEQ_LEN], dtype=torch.float32).unsqueeze(0).to(device)
-        lead_out, prob_out, _ = temporal_model(seq)
+        lead_out, prob_out = temporal_model(seq)
         temporal_drel.append(lead_out[0, 0, 0].cpu().item())
         temporal_vlead.append(lead_out[0, 0, 2].cpu().item())
         temporal_prob.append(torch.sigmoid(prob_out[0]).cpu().item())
