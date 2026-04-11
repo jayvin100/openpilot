@@ -263,8 +263,11 @@ def test_vs_compile(run, inputs: dict[str, Tensor], test_val: np.ndarray):
 
   # test that changing the inputs changes the model outputs
   changed_inputs = {k: Tensor(v.numpy().copy(), device=v.device) for k, v in inputs.items()}
-  changed_inputs['tfm'] = Tensor((inputs['tfm'].numpy() + np.eye(3, dtype=np.float32)).astype(np.float32), device=inputs['tfm'].device)
-  changed_inputs['big_tfm'] = Tensor((inputs['big_tfm'].numpy() + np.eye(3, dtype=np.float32)).astype(np.float32), device=inputs['big_tfm'].device)
+  tfm_delta = np.zeros((3, 3), dtype=np.float32)
+  tfm_delta[0, 2] = 8.0
+  tfm_delta[1, 2] = 4.0
+  changed_inputs['tfm'] = Tensor((inputs['tfm'].numpy() + tfm_delta).astype(np.float32), device=inputs['tfm'].device)
+  changed_inputs['big_tfm'] = Tensor((inputs['big_tfm'].numpy() + tfm_delta).astype(np.float32), device=inputs['big_tfm'].device)
   changed_val = run(**changed_inputs).numpy()
   assert not np.array_equal(val, changed_val), "vision output didn't change when transforms changed"
   print('test_vs_compile OK')
