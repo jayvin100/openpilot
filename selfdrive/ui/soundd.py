@@ -1,7 +1,5 @@
-from collections import deque
 import math
 import numpy as np
-import threading
 import time
 import wave
 
@@ -17,8 +15,6 @@ from openpilot.system.hardware import HARDWARE
 
 SAMPLE_RATE = 48000
 SAMPLE_BUFFER = 4096 # (approx 100ms)
-MAX_WEBRTC_BUFFER_SAMPLES = SAMPLE_RATE
-WEBRTC_START_BUFFER_SAMPLES = SAMPLE_BUFFER + (SAMPLE_RATE // 50)  # keep headroom over 20ms WebRTC chunks
 MAX_VOLUME = 1.0
 MIN_VOLUME = 0.1
 ALERT_RAMP_TIME = 4 # seconds to ramp to max volume for warningImmediate
@@ -79,11 +75,6 @@ class Soundd:
     self.selfdrive_timeout_alert = False
 
     self.spl_filter_weighted = FirstOrderFilter(0, 2.5, FILTER_DT, initialized=False)
-    self.webrtc_buffer: deque[np.ndarray] = deque()
-    self.webrtc_buffer_offset = 0
-    self.webrtc_buffer_size = 0
-    self.webrtc_playing = False
-    self.webrtc_lock = threading.Lock()
 
   def load_sounds(self):
     self.loaded_sounds: dict[int, np.ndarray] = {}
@@ -121,85 +112,10 @@ class Soundd:
 
     return ret * self.current_volume
 
-  def _trim_webrtc_buffer(self):
-    overflow = self.webrtc_buffer_size - MAX_WEBRTC_BUFFER_SAMPLES
-    while overflow > 0 and self.webrtc_buffer:
-      chunk = self.webrtc_buffer[0]
-      available = chunk.size - self.webrtc_buffer_offset
-      drop = min(overflow, available)
-      self.webrtc_buffer_offset += drop
-      self.webrtc_buffer_size -= drop
-      overflow -= drop
-
-      if self.webrtc_buffer_offset >= chunk.size:
-        self.webrtc_buffer.popleft()
-        self.webrtc_buffer_offset = 0
-
-  def _clear_webrtc_buffer_locked(self):
-    self.webrtc_buffer.clear()
-    self.webrtc_buffer_offset = 0
-    self.webrtc_buffer_size = 0
-
-  def add_webrtc_audio(self, audio_data: bytes, sample_rate: int):
-    if sample_rate != SAMPLE_RATE:
-      cloudlog.warning(f"soundd dropping webrtc audio with unexpected sample rate: {sample_rate}")
-      return
-    if not audio_data:
-      return
-
-    samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / (2**15)
-    if samples.size == 0:
-      return
-
-    with self.webrtc_lock:
-      self.webrtc_buffer.append(samples)
-      self.webrtc_buffer_size += samples.size
-      self._trim_webrtc_buffer()
-
-  def get_webrtc_audio(self, frames: int) -> np.ndarray:
-    out = np.zeros(frames, dtype=np.float32)
-
-    with self.webrtc_lock:
-      if not self.webrtc_playing:
-        if self.webrtc_buffer_size < max(frames, WEBRTC_START_BUFFER_SAMPLES):
-          return out
-        self.webrtc_playing = True
-
-      if self.webrtc_buffer_size < frames:
-        self._clear_webrtc_buffer_locked()
-        self.webrtc_playing = False
-        return out
-
-      written = 0
-      while written < frames and self.webrtc_buffer:
-        chunk = self.webrtc_buffer[0]
-        available = chunk.size - self.webrtc_buffer_offset
-        take = min(frames - written, available)
-        out[written:written + take] = chunk[self.webrtc_buffer_offset:self.webrtc_buffer_offset + take]
-        written += take
-        self.webrtc_buffer_offset += take
-
-        if self.webrtc_buffer_offset >= chunk.size:
-          self.webrtc_buffer.popleft()
-          self.webrtc_buffer_offset = 0
-
-      self.webrtc_buffer_size -= written
-
-    return out
-
-  def webrtc_audio_thread(self, sock) -> None:
-    while True:
-      for msg in messaging.drain_sock(sock, wait_for_one=True):
-        audio = msg.webrtcAudioData
-        self.add_webrtc_audio(audio.data, audio.sampleRate)
-
   def callback(self, data_out: np.ndarray, frames: int, time, status) -> None:
     if status:
       cloudlog.warning(f"soundd stream over/underflow: {status}")
-    sound = self.get_sound_data(frames)
-    sound += self.get_webrtc_audio(frames)
-    np.clip(sound, -1.0, 1.0, out=sound)
-    data_out[:frames, 0] = sound
+    data_out[:frames, 0] = self.get_sound_data(frames)
 
   def update_alert(self, new_alert):
     current_alert_played_once = self.current_alert == AudibleAlert.none or self.current_sound_frame > len(self.loaded_sounds[self.current_alert])
@@ -211,14 +127,7 @@ class Soundd:
       self.current_sound_frame = 0
 
   def get_audible_alert(self, sm):
-    sound_request_updated = False
-    if sm.updated['soundRequest']:
-      new_alert = sm['soundRequest'].sound.raw
-      if new_alert != AudibleAlert.none:
-        self.update_alert(new_alert)
-        sound_request_updated = True
-
-    if sm.updated['selfdriveState'] and not sound_request_updated:
+    if sm.updated['selfdriveState']:
       new_alert = sm['selfdriveState'].alertSound.raw
       self.update_alert(new_alert)
     elif check_selfdrive_timeout_alert(sm):
@@ -227,6 +136,10 @@ class Soundd:
     elif self.selfdrive_timeout_alert:
       self.update_alert(AudibleAlert.none)
       self.selfdrive_timeout_alert = False
+    elif sm.updated['soundRequest']:
+      new_alert = sm['soundRequest'].sound.raw
+      if new_alert != AudibleAlert.none:
+        self.update_alert(new_alert)
 
   def calculate_volume(self, weighted_db):
     volume = ((weighted_db - AMBIENT_DB) / DB_SCALE) * (MAX_VOLUME - MIN_VOLUME) + MIN_VOLUME
@@ -244,8 +157,6 @@ class Soundd:
     import sounddevice as sd
 
     sm = messaging.SubMaster(['selfdriveState', 'soundPressure', 'soundRequest'])
-    webrtc_audio_sock = messaging.sub_sock('webrtcAudioData', conflate=False)
-    threading.Thread(target=self.webrtc_audio_thread, args=(webrtc_audio_sock,), daemon=True).start()
 
     with self.get_stream(sd) as stream:
       rk = Ratekeeper(20)

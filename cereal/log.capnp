@@ -2360,6 +2360,15 @@ struct SoundRequest {
   sound @0 :Car.CarControl.HUDControl.AudibleAlert;
 }
 
+struct LiveStreamCamera {
+  camera @0 :CameraType;
+
+  enum CameraType {
+    driver @0;
+    wideRoad @1;
+  }
+}
+
 struct Touch {
   sec @0 :Int64;
   usec @1 :Int64;
@@ -2479,7 +2488,7 @@ struct Event {
     livestreamDriverEncodeData @122 :EncodeData;
 
     soundRequest @151 :SoundRequest;
-    webrtcAudioData @152 :AudioData;
+    liveStreamCamera @152 :LiveStreamCamera;
 
     # *********** Custom: reserved for forks ***********
 

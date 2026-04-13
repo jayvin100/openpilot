@@ -151,15 +151,12 @@ void encoderd_thread(const LogCameraInfo (&cameras)[N]) {
   }
 }
 
-// Map param value to stream camera config
-const LogCameraInfo *find_stream_camera(const std::string &name) {
-  if (name == "driver") return &stream_driver_camera_info;
-  return &stream_wide_road_camera_info;  // default
+const LogCameraInfo *find_stream_camera(cereal::LiveStreamCamera::CameraType type) {
+  if (type == cereal::LiveStreamCamera::CameraType::DRIVER) return &stream_driver_camera_info;
+  return &stream_wide_road_camera_info;
 }
 
 void stream_encoderd_thread() {
-  Params params;
-
   // Wait for cameras to be available
   std::set<VisionStreamType> available_streams;
   while (!do_exit) {
@@ -168,16 +165,17 @@ void stream_encoderd_thread() {
     util::sleep_for(100);
   }
 
-  std::string active_camera = params.get("LivestreamCamera");
-  if (active_camera.empty()) active_camera = "driver";
+  SubMaster sm({"liveStreamCamera"});
+
+  auto active_camera = cereal::LiveStreamCamera::CameraType::DRIVER;
 
   while (!do_exit) {
     const LogCameraInfo *cam_info = find_stream_camera(active_camera);
 
     // Check that the requested camera stream is available
     if (available_streams.find(cam_info->stream_type) == available_streams.end()) {
-      LOGE("stream encoder: camera %s not available, falling back", active_camera.c_str());
-      active_camera = "wideRoad";
+      LOGE("stream encoder: requested camera not available, falling back to wideRoad");
+      active_camera = cereal::LiveStreamCamera::CameraType::WIDE_ROAD;
       cam_info = find_stream_camera(active_camera);
     }
 
@@ -188,7 +186,7 @@ void stream_encoderd_thread() {
     }
 
     const VisionBuf &buf_info = vipc_client.buffers[0];
-    LOGW("stream encoder init %s %zux%zu", active_camera.c_str(), buf_info.width, buf_info.height);
+    LOGW("stream encoder init %zux%zu", buf_info.width, buf_info.height);
     assert(buf_info.width > 0 && buf_info.height > 0);
 
     const auto &encoder_info = cam_info->encoder_infos[0];
@@ -197,11 +195,14 @@ void stream_encoderd_thread() {
 
     while (!do_exit) {
       // Check for camera switch request
-      std::string requested = params.get("LivestreamCamera");
-      if (!requested.empty() && requested != active_camera) {
-        LOGW("stream encoder switching from %s to %s", active_camera.c_str(), requested.c_str());
-        active_camera = requested;
-        break;  // break to reinit encoder with new camera
+      sm.update(0);
+      if (sm.updated("liveStreamCamera")) {
+        auto requested = sm["liveStreamCamera"].getLiveStreamCamera().getCamera();
+        if (requested != active_camera) {
+          LOGW("stream encoder switching camera");
+          active_camera = requested;
+          break;  // break to reinit encoder with new camera
+        }
       }
 
       VisionIpcBufExtra extra;
