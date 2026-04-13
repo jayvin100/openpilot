@@ -233,7 +233,7 @@ class StreamRequestBody:
 def _add_cors_headers(_, response: 'web.Response'):
   response.headers["Access-Control-Allow-Origin"] = "*"
   response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-  response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+  response.headers["Access-Control-Allow-Methods"] = "POST"
   response.headers["Access-Control-Allow-Private-Network"] = "true"
 
 
@@ -330,23 +330,21 @@ async def on_shutdown(app: 'web.Application'):
   del app['streams']
 
 
-def create_app(debug: bool) -> web.Application:
+def webrtcd_thread(host: str, port: int, debug: bool):
+  logging.basicConfig(level=logging.CRITICAL, handlers=[logging.StreamHandler()])
+  logging_level = logging.DEBUG if debug else logging.INFO
+  logging.getLogger("WebRTCStream").setLevel(logging_level)
+  logging.getLogger("webrtcd").setLevel(logging_level)
+
   app = web.Application(middlewares=[cors_middleware])
+
   app['streams'] = dict()
   app['debug'] = debug
   app.on_shutdown.append(on_shutdown)
   app.router.add_post("/stream", get_stream)
   app.router.add_post("/notify", post_notify)
   app.router.add_get("/schema", get_schema)
-  return app
 
-
-def webrtcd_thread(host: str, port: int, debug: bool):
-  logging.basicConfig(level=logging.CRITICAL, handlers=[logging.StreamHandler()])
-  logging_level = logging.DEBUG if debug else logging.INFO
-  logging.getLogger("WebRTCStream").setLevel(logging_level)
-  logging.getLogger("webrtcd").setLevel(logging_level)
-  app = create_app(debug)
   web.run_app(app, host=host, port=port)
 
 
