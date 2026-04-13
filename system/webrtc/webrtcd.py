@@ -126,12 +126,8 @@ class StreamSession:
     from aiortc.mediastreams import VideoStreamTrack
     from openpilot.system.webrtc.device.video import LiveStreamVideoStreamTrack
     from teleoprtc import WebRTCAnswerBuilder
-    from teleoprtc.info import parse_info_from_offer
 
-    config = parse_info_from_offer(sdp)
     builder = WebRTCAnswerBuilder(sdp)
-
-    assert len(cameras) == config.n_expected_camera_tracks, "Incoming stream has misconfigured number of video tracks"
 
     self.video_track = LiveStreamVideoStreamTrack(INITIAL_CAMERA) if not debug_mode else VideoStreamTrack()
     builder.add_video_stream(INITIAL_CAMERA, self.video_track)
@@ -188,11 +184,6 @@ class StreamSession:
         return
 
       if self.incoming_bridge is not None:
-        if msg_type == "liveStreamCamera":
-          camera = payload.get("data").get("camera")
-          if camera in ("driver", "wideRoad"):
-            if hasattr(self, 'video_track') and hasattr(self.video_track, 'switch_camera'):
-              self.video_track.switch_camera(camera)
         self.incoming_bridge.send(message)
     except ValueError:
       self.logger.warning("Ignoring malformed request: %s", payload)
@@ -206,7 +197,7 @@ class StreamSession:
         if self.incoming_bridge is not None:
           await self.shared_pub_master.add_services_if_needed(self.incoming_bridge_services)
           # set camera to default
-          self.incoming_bridge.send(json.dumps({"type": "liveStreamCamera", "data": {"camera": INITIAL_CAMERA}}).encode())
+          self.incoming_bridge.send(json.dumps({"type": "livestreamCameraSwitch", "data": {"camera": INITIAL_CAMERA}}).encode())
         self.stream.set_message_handler(self.message_handler)
         if self.outgoing_bridge_runner is not None:
           channel = self.stream.get_messaging_channel()

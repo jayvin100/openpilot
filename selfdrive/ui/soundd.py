@@ -127,13 +127,9 @@ class Soundd:
       self.current_sound_frame = 0
 
   def get_audible_alert(self, sm):
-    if sm.updated['soundRequest']:
-      new_alert = sm['soundRequest'].sound.raw
-      if new_alert != AudibleAlert.none:
-        self.update_alert(new_alert)
-        return
-
-    if sm.updated['selfdriveState']:
+    if sm.updated['soundRequest'] and sm['soundRequest'].sound.raw != AudibleAlert.none:
+        self.update_alert(sm['soundRequest'].sound.raw)
+    elif sm.updated['selfdriveState']:
       new_alert = sm['selfdriveState'].alertSound.raw
       self.update_alert(new_alert)
     elif check_selfdrive_timeout_alert(sm):

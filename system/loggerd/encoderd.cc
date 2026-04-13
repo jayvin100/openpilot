@@ -151,35 +151,20 @@ void encoderd_thread(const LogCameraInfo (&cameras)[N]) {
   }
 }
 
-const LogCameraInfo *find_stream_camera(cereal::LiveStreamCamera::CameraType type) {
-  if (type == cereal::LiveStreamCamera::CameraType::DRIVER) return &stream_driver_camera_info;
-  return &stream_wide_road_camera_info;
-}
-
-void stream_encoderd_thread() {
-  // Wait for cameras to be available
-  std::set<VisionStreamType> available_streams;
+template <size_t N>
+void stream_encoderd_thread(const LogCameraInfo (&cameras)[N]) {
+  // Wait for camerad to publish at least one stream
   while (!do_exit) {
-    available_streams = VisionIpcClient::getAvailableStreams("camerad", false);
-    if (!available_streams.empty()) break;
+    if (!VisionIpcClient::getAvailableStreams("camerad", false).empty()) break;
     util::sleep_for(100);
   }
 
-  SubMaster sm({"liveStreamCamera"});
+  SubMaster sm({"livestreamCameraSwitch"});
 
-  auto active_camera = cereal::LiveStreamCamera::CameraType::DRIVER;
+  const LogCameraInfo *active_cam = &cameras[0];
 
   while (!do_exit) {
-    const LogCameraInfo *cam_info = find_stream_camera(active_camera);
-
-    // Check that the requested camera stream is available
-    if (available_streams.find(cam_info->stream_type) == available_streams.end()) {
-      LOGE("stream encoder: requested camera not available, falling back to wideRoad");
-      active_camera = cereal::LiveStreamCamera::CameraType::WIDE_ROAD;
-      cam_info = find_stream_camera(active_camera);
-    }
-
-    VisionIpcClient vipc_client("camerad", cam_info->stream_type, false);
+    VisionIpcClient vipc_client("camerad", active_cam->stream_type, false);
     if (!vipc_client.connect(false)) {
       util::sleep_for(5);
       continue;
@@ -189,19 +174,23 @@ void stream_encoderd_thread() {
     LOGW("stream encoder init %zux%zu", buf_info.width, buf_info.height);
     assert(buf_info.width > 0 && buf_info.height > 0);
 
-    const auto &encoder_info = cam_info->encoder_infos[0];
-    auto encoder = std::make_unique<Encoder>(encoder_info, buf_info.width, buf_info.height);
+    // Each stream camera has exactly one encoder
+    auto encoder = std::make_unique<Encoder>(active_cam->encoder_infos[0], buf_info.width, buf_info.height);
     encoder->encoder_open();
 
     while (!do_exit) {
-      // Check for camera switch request
       sm.update(0);
-      if (sm.updated("liveStreamCamera")) {
-        auto requested = sm["liveStreamCamera"].getLiveStreamCamera().getCamera();
-        if (requested != active_camera) {
+      if (sm.updated("livestreamCameraSwitch")) {
+        auto requested = sm["livestreamCameraSwitch"].getLivestreamCameraSwitch().getCamera();
+        VisionStreamType requested_stream = requested == cereal::LiveStreamCamera::CameraType::DRIVER
+                                                ? VISION_STREAM_DRIVER : VISION_STREAM_WIDE_ROAD;
+        // Switch camera if the request differs from the current one
+        if (requested_stream != active_cam->stream_type) {
           LOGW("stream encoder switching camera");
-          active_camera = requested;
-          break;  // break to reinit encoder with new camera
+          auto it = std::find_if(std::begin(cameras), std::end(cameras),
+                                 [requested_stream](const auto &cam) { return cam.stream_type == requested_stream; });
+          if (it != std::end(cameras)) active_cam = &(*it);
+          break;  // Reinit encoder with the new camera
         }
       }
 
@@ -209,11 +198,9 @@ void stream_encoderd_thread() {
       VisionBuf *buf = vipc_client.recv(&extra);
       if (buf == nullptr) continue;
 
-      // detect loop around and drop the frames
       if (buf->get_frame_id() != extra.frame_id) continue;
 
-      int out_id = encoder->encode_frame(buf, &extra);
-      if (out_id == -1) {
+      if (encoder->encode_frame(buf, &extra) == -1) {
         LOGE("stream encoder: failed to encode frame. frame_id: %d", extra.frame_id);
       }
     }
@@ -233,7 +220,7 @@ int main(int argc, char* argv[]) {
   if (argc > 1) {
     std::string arg1(argv[1]);
     if (arg1 == "--stream") {
-      stream_encoderd_thread();
+      stream_encoderd_thread(stream_cameras_logged);
     } else {
       LOGE("Argument '%s' is not supported", arg1.c_str());
     }
