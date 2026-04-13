@@ -193,8 +193,6 @@ class StreamSession:
           if camera in ("driver", "wideRoad"):
             if hasattr(self, 'video_track') and hasattr(self.video_track, 'switch_camera'):
               self.video_track.switch_camera(camera)
-        elif msg_type == "soundRequest":
-          return
         self.incoming_bridge.send(message)
     except ValueError:
       self.logger.warning("Ignoring malformed request: %s", payload)
