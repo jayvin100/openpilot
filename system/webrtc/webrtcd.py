@@ -126,9 +126,12 @@ class StreamSession:
     from aiortc.mediastreams import VideoStreamTrack
     from openpilot.system.webrtc.device.video import LiveStreamVideoStreamTrack
     from teleoprtc import WebRTCAnswerBuilder
+    from teleoprtc.info import parse_info_from_offer
 
-    self.logger = logging.getLogger("webrtcd")
+    config = parse_info_from_offer(sdp)
     builder = WebRTCAnswerBuilder(sdp)
+
+    assert len(cameras) == config.n_expected_camera_tracks, "Incoming stream has misconfigured number of video tracks"
 
     self.video_track = LiveStreamVideoStreamTrack(INITIAL_CAMERA) if not debug_mode else VideoStreamTrack()
     builder.add_video_stream(INITIAL_CAMERA, self.video_track)
@@ -147,7 +150,7 @@ class StreamSession:
       self.outgoing_bridge_runner = CerealProxyRunner(self.outgoing_bridge)
 
     self.run_task: asyncio.Task | None = None
-    self.cleaned_up = False
+    self.logger = logging.getLogger("webrtcd")
     self.logger.info(
       "New stream session (%s), cameras %s, incoming services %s, outgoing services %s",
       self.identifier, cameras, incoming_services, outgoing_services,
@@ -161,12 +164,7 @@ class StreamSession:
       return
     self.run_task.cancel()
     self.run_task = None
-    try:
-      loop = asyncio.get_running_loop()
-    except RuntimeError:
-      asyncio.run(self.post_run_cleanup())
-    else:
-      loop.create_task(self.post_run_cleanup())
+    asyncio.get_running_loop().create_task(self.post_run_cleanup())
 
   async def get_answer(self):
     return await self.stream.start()
@@ -228,9 +226,6 @@ class StreamSession:
       await self.post_run_cleanup()
 
   async def post_run_cleanup(self):
-    if self.cleaned_up:
-      return
-    self.cleaned_up = True
     await self.stream.stop()
     if self.outgoing_bridge is not None:
       self.outgoing_bridge_runner.stop()
@@ -258,12 +253,6 @@ async def cors_middleware(request: 'web.Request', handler):
   except web.HTTPException as ex:
     _add_cors_headers(request, ex)
     raise
-  _add_cors_headers(request, response)
-  return response
-
-
-async def stream_options(request: 'web.Request'):
-  response = web.Response()
   _add_cors_headers(request, response)
   return response
 
@@ -347,8 +336,6 @@ async def post_notify(request: 'web.Request'):
 async def on_shutdown(app: 'web.Application'):
   for session in app['streams'].values():
     session.stop()
-  if app.get('body_audio_output') is not None:
-    await app['body_audio_output'].stop()
   del app['streams']
 
 
@@ -357,7 +344,6 @@ def create_app(debug: bool) -> web.Application:
   app['streams'] = dict()
   app['debug'] = debug
   app.on_shutdown.append(on_shutdown)
-  app.router.add_route("OPTIONS", "/stream", stream_options)
   app.router.add_post("/stream", get_stream)
   app.router.add_post("/notify", post_notify)
   app.router.add_get("/schema", get_schema)
