@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+import time
 import argparse
 import asyncio
 import json
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
   from aiortc.rtcdatachannel import RTCDataChannel
 
 from openpilot.system.webrtc.schema import generate_field
-from openpilot.system.webrtc.utils import clock_sync_build_json
 from cereal import messaging, log
 from openpilot.common.params import Params
 
@@ -173,7 +172,10 @@ class StreamSession:
       msg_type = payload.get("type")
 
       if msg_type == "clockSync":
-        pong = clock_sync_build_json(payload)
+        data = payload.get("data", {})
+        pong = json.dumps({"type": "clockSync", "data": {
+          "action": "pong", "browserSendTime": data.get("browserSendTime"), "deviceTime": time.time() * 1000, # noqa: TID251
+        }})
         self.stream.get_messaging_channel().send(pong)
         return
 
