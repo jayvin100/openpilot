@@ -1,7 +1,6 @@
 import asyncio
 import struct
 import time
-
 import av
 from teleoprtc.tracks import TiciVideoStreamTrack
 
