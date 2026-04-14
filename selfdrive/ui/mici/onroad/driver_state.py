@@ -36,6 +36,7 @@ class DriverStateRenderer(Widget):
     self._should_draw = False
     self._force_active = False
     self._looking_center = False
+    self._awareness_unfull = False
 
     self._fade_filter = FirstOrderFilter(0.0, 0.05, 1 / gui_app.target_fps)
     self._pitch_filter = FirstOrderFilter(0.0, 0.05, 1 / gui_app.target_fps, initialized=False)
@@ -58,9 +59,11 @@ class DriverStateRenderer(Widget):
       cone_and_person_size = round(cone_and_person_size - current_inset * 2)
 
     self._dm_person = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_person.png", cone_and_person_size, cone_and_person_size)
-    self._dm_cone = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_cone.png", cone_and_person_size, cone_and_person_size)
+    self._dm_cone_green = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_cone.png", cone_and_person_size, cone_and_person_size)
+    self._dm_cone_orange = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_cone_orange.png", cone_and_person_size, cone_and_person_size)
     center_size = round(36 / self.BASE_SIZE * self._rect.width)
-    self._dm_center = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_center.png", center_size, center_size)
+    self._dm_center_green = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_center.png", center_size, center_size)
+    self._dm_center_orange = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_center_orange.png", center_size, center_size)
     self._dm_background = gui_app.texture("icons_mici/onroad/driver_monitoring/dm_background.png", int(self._rect.width), int(self._rect.height))
 
   def set_should_draw(self, should_draw: bool):
@@ -98,17 +101,20 @@ class DriverStateRenderer(Widget):
                        rl.Color(255, 255, 255, int(255 * 0.9 * self._fade_filter.x)))
 
     if self.effective_active:
-      source_rect = rl.Rectangle(0, 0, self._dm_cone.width, self._dm_cone.height)
+      dm_cone = self._dm_cone_orange if self._awareness_unfull else self._dm_cone_green
+      dm_center = self._dm_center_orange if self._awareness_unfull else self._dm_center_green
+
+      source_rect = rl.Rectangle(0, 0, dm_cone.width, dm_cone.height)
       dest_rect = rl.Rectangle(
         self._rect.x + self._rect.width / 2,
         self._rect.y + self._rect.height / 2,
-        self._dm_cone.width,
-        self._dm_cone.height,
+        dm_cone.width,
+        dm_cone.height,
       )
 
       if not self._lines:
         rl.draw_texture_pro(
-          self._dm_cone,
+          dm_cone,
           source_rect,
           dest_rect,
           rl.Vector2(dest_rect.width / 2, dest_rect.height / 2),
@@ -117,9 +123,9 @@ class DriverStateRenderer(Widget):
         )
 
         rl.draw_texture_ex(
-          self._dm_center,
-          (int(self._rect.x + (self._rect.width - self._dm_center.width) / 2),
-           int(self._rect.y + (self._rect.height - self._dm_center.height) / 2)),
+          dm_center,
+          (int(self._rect.x + (self._rect.width - dm_center.width) / 2),
+           int(self._rect.y + (self._rect.height - dm_center.height) / 2)),
           0,
           1.0,
           rl.Color(255, 255, 255, int(255 * self._fade_filter.x * self._looking_center_filter.x)),
@@ -165,6 +171,7 @@ class DriverStateRenderer(Widget):
     self._is_active = dm_state.isActiveMode
     self._is_rhd = dm_state.isRHD
     self._face_detected = dm_state.faceDetected
+    self._awareness_unfull = dm_state.awarenessStatus < 0.91
 
     driverstate = sm["driverStateV2"]
     driver_data = driverstate.rightDriverData if self._is_rhd else driverstate.leftDriverData
