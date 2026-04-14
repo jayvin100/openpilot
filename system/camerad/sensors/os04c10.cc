@@ -68,7 +68,7 @@ OS04C10::OS04C10() {
   exposure_time_max = 1684;
   analog_gain_min_idx = 0x0;
   analog_gain_rec_idx = 0x0;  // 1x
-  analog_gain_max_idx = 0x28;
+  analog_gain_max_idx = 0x36;
   analog_gain_cost_delta = -1;
   analog_gain_cost_low = 0.4;
   analog_gain_cost_high = 6.4;
