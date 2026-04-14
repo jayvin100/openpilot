@@ -80,6 +80,7 @@ OS04C10::OS04C10() {
   target_grey_factor = 0.01;
 
   black_level = 48;
+  ife_abf_enable = true;
   color_correct_matrix = {
     0x000000c2, 0x00000fe0, 0x00000fde,
     0x00000fa7, 0x000000d9, 0x00001000,

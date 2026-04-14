@@ -1,9 +1,95 @@
 #pragma once
 
+#include <algorithm>
+
 #include "cdm.h"
 
 #include "system/camerad/cameras/hw.h"
 #include "system/camerad/sensors/sensor.h"
+
+namespace {
+
+constexpr uint32_t IFE_ABF_RNR_RSQUARE_SHIFT = 10;
+
+uint32_t build_ife_abf_cfg() {
+  return (3U << 26) | (2U << 24) | (1U << 20) |
+         (3U << 18) | (2U << 16) | (1U << 12) |
+         (2U << 8) | (2U << 4) |
+         (1U << 3) | (1U << 2) | 1U;
+}
+
+uint32_t build_ife_abf_curve_offset(const SensorInfo *s) {
+  return std::min<uint32_t>(0x7fU, (s->black_level >> 1) + 4U);
+}
+
+std::vector<uint32_t> build_ife_abf_rnr_cfg(const SensorInfo *s) {
+  const uint32_t bx = s->frame_width / 2;
+  const uint32_t by = s->frame_height / 2;
+  const uint32_t init_rsquare = bx * bx + by * by;
+  const uint32_t scaled_rsquare = std::max<uint32_t>(1U, init_rsquare >> IFE_ABF_RNR_RSQUARE_SHIFT);
+  const uint32_t anchor0 = std::max<uint32_t>(1U, scaled_rsquare / 4);
+  const uint32_t anchor1 = std::max<uint32_t>(anchor0 + 1, scaled_rsquare / 2);
+  const uint32_t anchor2 = std::max<uint32_t>(anchor1 + 1, (scaled_rsquare * 3) / 4);
+  const uint32_t anchor3 = std::min<uint32_t>(0xfffU, std::max<uint32_t>(anchor2 + 1, scaled_rsquare));
+
+  return {
+    (by << 16) | bx,
+    init_rsquare & 0x0fffffffU,
+    (anchor1 << 16) | anchor0,
+    (anchor3 << 16) | anchor2,
+    (3U << 16) | (8U << 8) | 8U,
+    (3U << 16) | (8U << 8) | 12U,
+    (3U << 16) | (8U << 8) | 16U,
+    20U,
+    (2U << 16) | (4U << 8) | 6U,
+    (2U << 16) | (4U << 8) | 10U,
+    (2U << 16) | (4U << 8) | 14U,
+    18U,
+    IFE_ABF_RNR_RSQUARE_SHIFT,
+  };
+}
+
+std::vector<uint32_t> build_ife_abf_bpc_cfg(const SensorInfo *s) {
+  const uint32_t black_level = std::min<uint32_t>(0xfffU, s->black_level);
+  const uint32_t offset = std::min<uint32_t>(0xfffU, black_level + 32U);
+
+  return {
+    (offset << 16) | (4U << 8) | 31U,
+    (black_level << 8) | (5U << 4) | 2U,
+  };
+}
+
+std::vector<uint32_t> build_ife_abf_noise_preserve_cfg(const SensorInfo *s) {
+  const uint32_t anchor_lo = std::min<uint32_t>(0x3ffU, s->black_level + 16U);
+
+  return {
+    (96U << 16) | anchor_lo,
+    (4U << 24) | (96U << 12) | 24U,
+    (4U << 24) | (96U << 12) | 28U,
+  };
+}
+
+int build_ife_abf(uint8_t *dst, const SensorInfo *s) {
+  uint8_t *start = dst;
+  const uint32_t curve_offset = build_ife_abf_curve_offset(s);
+
+  dst += write_cont(dst, 0x5e8, {
+    build_ife_abf_cfg(),
+  });
+  dst += write_cont(dst, 0x5f4, {
+    curve_offset,
+    curve_offset,
+    curve_offset,
+    curve_offset,
+  });
+  dst += write_cont(dst, 0x604, build_ife_abf_rnr_cfg(s));
+  dst += write_cont(dst, 0x638, build_ife_abf_bpc_cfg(s));
+  dst += write_cont(dst, 0x640, build_ife_abf_noise_preserve_cfg(s));
+
+  return dst - start;
+}
+
+}  // namespace
 
 int build_common_ife_bps(uint8_t *dst, const CameraConfig cam, const SensorInfo *s, std::vector<uint32_t> &patches, bool ife) {
   uint8_t *start = dst;
@@ -71,7 +157,9 @@ int build_update(uint8_t *dst, const CameraConfig cam, const SensorInfo *s, std:
 
   // module config/enables (e.g. enable debayer, white balance, etc.)
   dst += write_cont(dst, 0x40, {
-    0x00000c06 | ((uint32_t)(cam.vignetting_correction) << 8),
+    0x00000c06 |
+    ((uint32_t)(cam.vignetting_correction) << 8) |
+    ((uint32_t)(s->ife_abf_enable) << 7),
   });
   dst += write_cont(dst, 0x44, {
     0x00000000,
@@ -112,6 +200,12 @@ int build_initial_config(uint8_t *dst, const CameraConfig cam, const SensorInfo 
   dst += build_update(dst, cam, s, patches);
 
   uint64_t addr;
+
+  if (s->ife_abf_enable) {
+    // Conservative raw-domain denoise. This is register-only for now; future
+    // tuning can replace these defaults without changing the IFE plumbing.
+    dst += build_ife_abf(dst, s);
+  }
 
   // setup
   dst += write_cont(dst, 0x478, {
@@ -232,5 +326,4 @@ int build_initial_config(uint8_t *dst, const CameraConfig cam, const SensorInfo 
 
   return dst - start;
 }
-
 

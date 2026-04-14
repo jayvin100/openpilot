@@ -69,6 +69,7 @@ public:
   uint32_t readout_time_ns;  // used to recover EOF from SOF
 
   // ISP image processing params
+  bool ife_abf_enable = false;
   uint32_t black_level;
   std::vector<uint32_t> color_correct_matrix;  // 3x3
   std::vector<uint32_t> gamma_lut_rgb;         // gamma LUTs are length 64 * sizeof(uint32_t); same for r/g/b here
