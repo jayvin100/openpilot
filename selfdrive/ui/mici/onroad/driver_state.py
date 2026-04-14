@@ -19,6 +19,7 @@ class DriverStateRenderer(Widget):
   BASE_SIZE = 60
   LINES_ANGLE_INCREMENT = 5
   LINES_STALE_ANGLES = 3.0  # seconds
+  AWARENESS_UNFULL_THRESHOLD = 0.95 # ~0.5s
 
   def __init__(self, lines: bool = False, inset: bool = False):
     super().__init__()
@@ -39,6 +40,8 @@ class DriverStateRenderer(Widget):
     self._awareness_unfull = False
 
     self._fade_filter = FirstOrderFilter(0.0, 0.05, 1 / gui_app.target_fps)
+    self._color_fade = FirstOrderFilter(1.0, 0.05, 1 / gui_app.target_fps)  # 0.05s per phase, 0.1s total
+    self._showing_orange = False
     self._pitch_filter = FirstOrderFilter(0.0, 0.05, 1 / gui_app.target_fps, initialized=False)
     self._yaw_filter = FirstOrderFilter(0.0, 0.05, 1 / gui_app.target_fps, initialized=False)
     self._rotation_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps, initialized=False)
@@ -101,8 +104,17 @@ class DriverStateRenderer(Widget):
                        rl.Color(255, 255, 255, int(255 * 0.9 * self._fade_filter.x)))
 
     if self.effective_active:
-      dm_cone = self._dm_cone_orange if self._awareness_unfull else self._dm_cone_green
-      dm_center = self._dm_center_orange if self._awareness_unfull else self._dm_center_green
+      # fade out → swap color → fade in
+      if self._awareness_unfull != self._showing_orange:
+        self._color_fade.update(0.0)  # fade out
+        if self._color_fade.x < 0.01:
+          self._showing_orange = self._awareness_unfull
+      else:
+        self._color_fade.update(1.0)  # fade in
+
+      dm_cone = self._dm_cone_orange if self._showing_orange else self._dm_cone_green
+      dm_center = self._dm_center_orange if self._showing_orange else self._dm_center_green
+      c = self._color_fade.x
 
       source_rect = rl.Rectangle(0, 0, dm_cone.width, dm_cone.height)
       dest_rect = rl.Rectangle(
@@ -113,23 +125,16 @@ class DriverStateRenderer(Widget):
       )
 
       if not self._lines:
-        rl.draw_texture_pro(
-          dm_cone,
-          source_rect,
-          dest_rect,
-          rl.Vector2(dest_rect.width / 2, dest_rect.height / 2),
-          self._rotation_filter.x - 90,
-          rl.Color(255, 255, 255, int(255 * self._fade_filter.x * (1 - self._looking_center_filter.x))),
-        )
+        cone_alpha = int(255 * self._fade_filter.x * (1 - self._looking_center_filter.x) * c)
+        center_alpha = int(255 * self._fade_filter.x * self._looking_center_filter.x * c)
+        origin = rl.Vector2(dest_rect.width / 2, dest_rect.height / 2)
+        center_pos = (int(self._rect.x + (self._rect.width - dm_center.width) / 2),
+                      int(self._rect.y + (self._rect.height - dm_center.height) / 2))
 
-        rl.draw_texture_ex(
-          dm_center,
-          (int(self._rect.x + (self._rect.width - dm_center.width) / 2),
-           int(self._rect.y + (self._rect.height - dm_center.height) / 2)),
-          0,
-          1.0,
-          rl.Color(255, 255, 255, int(255 * self._fade_filter.x * self._looking_center_filter.x)),
-        )
+        rl.draw_texture_pro(dm_cone, source_rect, dest_rect, origin,
+                            self._rotation_filter.x - 90, rl.Color(255, 255, 255, cone_alpha))
+        rl.draw_texture_ex(dm_center, center_pos, 0, 1.0,
+                           rl.Color(255, 255, 255, center_alpha))
 
       else:
         # remove old angles
@@ -171,7 +176,7 @@ class DriverStateRenderer(Widget):
     self._is_active = dm_state.isActiveMode
     self._is_rhd = dm_state.isRHD
     self._face_detected = dm_state.faceDetected
-    self._awareness_unfull = dm_state.awarenessStatus < 0.91
+    self._awareness_unfull = dm_state.awarenessStatus < self.AWARENESS_UNFULL_THRESHOLD
 
     driverstate = sm["driverStateV2"]
     driver_data = driverstate.rightDriverData if self._is_rhd else driverstate.leftDriverData
