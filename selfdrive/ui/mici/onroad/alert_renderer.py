@@ -139,7 +139,6 @@ class AlertRenderer(Widget):
     self._critical_bg_mix_filter = FirstOrderFilter(0.0, CRITICAL_BG_TRANSITION_RC, 1 / gui_app.target_fps)
     self._critical_pulse_filter = FirstOrderFilter(1.0, CRITICAL_PULSE_RC, 1 / gui_app.target_fps)
     self._critical_alert_started_at = -1.0
-    self._critical_pulse_phase = 0.0
     self._critical_prev_active = False
     self._critical_icon_alpha_filter = FirstOrderFilter(1.0, CRITICAL_ICON_BLINK_ALPHA_RC, 1 / gui_app.target_fps)
     self._critical_icon_started_at = -1.0
@@ -482,16 +481,14 @@ class AlertRenderer(Widget):
     if use_red_critical_bg and critical_mix > 0.0:
       if not self._critical_prev_active:
         self._critical_alert_started_at = time.monotonic()
-        self._critical_pulse_phase = 0.0
 
       elapsed = time.monotonic() - self._critical_alert_started_at
       if elapsed < CRITICAL_PULSE_START_DELAY:
         # Let red gradient settle in before pulse cadence starts.
         target_pulse = 1.0
       else:
-        dt = 1 / gui_app.target_fps
-        self._critical_pulse_phase = (self._critical_pulse_phase + dt / RED_BG_BREATH_CYCLE) % 1.0
-        target_pulse = 0.5 * (1.0 + math.cos(self._critical_pulse_phase * 2.0 * math.pi))
+        pulse_phase = ((elapsed - CRITICAL_PULSE_START_DELAY) / RED_BG_BREATH_CYCLE) % 1.0
+        target_pulse = 0.5 * (1.0 + math.cos(pulse_phase * 2.0 * math.pi))
 
       pulse = self._critical_pulse_filter.update(target_pulse)
       top = rl.Color(int(top.r * pulse), int(top.g * pulse), int(top.b * pulse), top.a)
