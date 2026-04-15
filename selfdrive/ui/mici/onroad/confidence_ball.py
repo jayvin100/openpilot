@@ -55,7 +55,6 @@ class ConfidenceBall(Widget):
     self._right_dot_presence_filter = FirstOrderFilter(1.0, RIGHT_DOT_EXIT_RC, 1 / gui_app.target_fps)
     self._orange_alert_started_at = -1.0
     self._orange_alert_prev_active = False
-    self._orange_breath_phase = 0.0
 
   def update_filter(self, value: float):
     self._confidence_filter.update(value)
@@ -239,10 +238,8 @@ class ConfidenceBall(Widget):
     left_blindspot_active = self._is_left_blindspot_alert_active()
     if alert_active and not self._orange_alert_prev_active:
       self._orange_alert_started_at = rl.get_time()
-      self._orange_breath_phase = 0.0
     elif not alert_active:
       self._orange_alert_started_at = -1.0
-      self._orange_breath_phase = 0.0
     self._orange_alert_prev_active = alert_active
     self._alert_morph_filter.update(1.0 if alert_active else 0.0)
     if red_active and alert_active:

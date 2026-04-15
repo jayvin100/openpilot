@@ -290,6 +290,24 @@ class AlertRenderer(Widget):
     )
     return AlertLayout(text_rect, icon_layout)
 
+  def _background_height(self, alert: Alert) -> int:
+    small_alert_height = round(self._rect.height * 0.583)  # 140px at mici height
+    medium_alert_height = round(self._rect.height * 0.833)  # 200px at mici height
+
+    event_name = self._event_name(alert)
+    if event_name in ('preLaneChangeLeft', 'preLaneChangeRight', 'laneChange'):
+      return small_alert_height
+    if event_name == 'laneChangeBlocked':
+      return medium_alert_height
+    return int(self._rect.height)
+
+  def _warning_icon_spec(self, alert: Alert) -> tuple[rl.Texture, float] | None:
+    if alert.status == AlertStatus.critical:
+      return self._txt_red_warning, self._critical_icon_blink_alpha()
+    if ui_state.status == UIStatus.DISENGAGED and alert.status == AlertStatus.userPrompt:
+      return self._txt_orange_warning, self._orange_icon_blink_alpha()
+    return None
+
   def _render(self, rect: rl.Rectangle) -> bool:
     alert = self.get_alert(ui_state.sm)
 
@@ -335,20 +353,14 @@ class AlertRenderer(Widget):
     return True
 
   def _draw_warning_icon(self, alert: Alert) -> None:
-    show_critical_icon = alert.status == AlertStatus.critical
-    show_disengaged_orange_icon = (ui_state.status == UIStatus.DISENGAGED and alert.status == AlertStatus.userPrompt)
-    if not (show_critical_icon or show_disengaged_orange_icon):
+    icon_spec = self._warning_icon_spec(alert)
+    if icon_spec is None:
       self._orange_icon_alpha_filter.x = 1.0
       self._orange_icon_started_at = -1.0
       self._orange_icon_prev_active = False
       return
 
-    if show_disengaged_orange_icon:
-      icon_texture = self._txt_orange_warning
-      blink_alpha = self._orange_icon_blink_alpha()
-    else:
-      icon_texture = self._txt_red_warning
-      blink_alpha = self._critical_icon_blink_alpha()
+    icon_texture, blink_alpha = icon_spec
 
     icon_x = int(self._rect.x + CRITICAL_ICON_LEFT_INSET)
     # Match text slide-in movement while preserving icon's defined resting position.
@@ -434,22 +446,7 @@ class AlertRenderer(Widget):
                        rl.Color(255, 255, 255, int(icon_alpha * self._content_alpha_filter.x)))
 
   def _draw_background(self, alert: Alert, critical_style: CriticalAlertStyle | None) -> None:
-    small_alert_height = round(self._rect.height * 0.583) # 140px at mici height
-    medium_alert_height = round(self._rect.height * 0.833) # 200px at mici height
-
-    # alert_type format is "EventName/eventType" (e.g., "preLaneChangeLeft/warning")
-    event_name = self._event_name(alert)
-
-    if event_name == 'preLaneChangeLeft':
-      bg_height = small_alert_height
-    elif event_name == 'preLaneChangeRight':
-      bg_height = small_alert_height
-    elif event_name == 'laneChange':
-      bg_height = small_alert_height
-    elif event_name == 'laneChangeBlocked':
-      bg_height = medium_alert_height
-    else:
-      bg_height = int(self._rect.height)
+    bg_height = self._background_height(alert)
 
     use_red_critical_bg = (critical_style == CriticalAlertStyle.non_disengaging and
                            not self._use_disengaged_warning_style(alert))
