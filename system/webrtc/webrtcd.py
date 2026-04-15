@@ -220,7 +220,6 @@ class StreamSession:
     await self.stream.stop()
     if self.outgoing_bridge is not None:
       self.outgoing_bridge_runner.stop()
-    Params().put_bool("JoystickDebugMode", False)
 
 
 @dataclass
@@ -233,7 +232,7 @@ class StreamRequestBody:
 def _add_cors_headers(_, response: 'web.Response'):
   response.headers["Access-Control-Allow-Origin"] = "*"
   response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-  response.headers["Access-Control-Allow-Methods"] = "POST"
+  response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
   response.headers["Access-Control-Allow-Private-Network"] = "true"
 
 
@@ -244,6 +243,12 @@ async def cors_middleware(request: 'web.Request', handler):
   except web.HTTPException as ex:
     _add_cors_headers(request, ex)
     raise
+  _add_cors_headers(request, response)
+  return response
+
+
+async def stream_options(request: 'web.Request'):
+  response = web.Response()
   _add_cors_headers(request, response)
   return response
 
@@ -286,7 +291,6 @@ async def get_stream(request: 'web.Request'):
     session = StreamSession(body.sdp, body.cameras, body.bridge_services_in, body.bridge_services_out, debug_mode)
     answer = await session.get_answer()
     session.start()
-    Params().put_bool("JoystickDebugMode", True)
 
     stream_dict[session.identifier] = session
 
@@ -341,6 +345,7 @@ def webrtcd_thread(host: str, port: int, debug: bool):
   app['streams'] = dict()
   app['debug'] = debug
   app.on_shutdown.append(on_shutdown)
+  app.router.add_route("OPTIONS", "/stream", stream_options)
   app.router.add_post("/stream", get_stream)
   app.router.add_post("/notify", post_notify)
   app.router.add_get("/schema", get_schema)
