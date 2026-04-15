@@ -36,7 +36,7 @@ class ConfidenceBall(Widget):
 
     # animate status dot in from bottom
     if ui_state.status == UIStatus.DISENGAGED:
-      self._confidence_filter.update(-0.5)
+      self._confidence_filter.update(0)
     else:
       self._confidence_filter.update((1 - max(ui_state.sm['modelV2'].meta.disengagePredictions.brakeDisengageProbs or [1])) *
                                                         (1 - max(ui_state.sm['modelV2'].meta.disengagePredictions.steerOverrideProbs or [1])))
