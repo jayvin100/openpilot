@@ -2,6 +2,7 @@
 #include "tools/jotpluggler/app_common.h"
 
 #include <capnp/dynamic.h>
+#include <kj/exception.h>
 
 #include <chrono>
 #include <cmath>
@@ -203,6 +204,17 @@ struct LoadStats {
   RouteLoadProgressCallback progress;
   mutable std::mutex progress_mutex;
 };
+
+// Skip individual messages our local schema can't project, which can happen
+// when loading logs from a newer build.
+template <typename Fn>
+void with_parseable_event(kj::ArrayPtr<const capnp::word> data, Fn &&fn) {
+  try {
+    capnp::FlatArrayMessageReader event_reader(data);
+    fn(event_reader.getRoot<cereal::Event>());
+  } catch (const kj::Exception &) {
+  }
+}
 
 std::string curve_label(std::string_view series_name) {
   return std::string(series_name.empty() ? std::string_view{"plot"} : series_name);
@@ -700,11 +712,11 @@ std::vector<TimelineEntry> extract_segment_timeline(const std::vector<Event> &ev
     if (event_record.which != cereal::Event::Which::SELFDRIVE_STATE) {
       continue;
     }
-    capnp::FlatArrayMessageReader event_reader(event_record.data);
-    const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-    const auto sd = event.getSelfdriveState();
-    const double mono_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
-    append_timeline_entry(&timeline, mono_time, alert_status_to_timeline_type(sd.getAlertStatus(), sd.getEnabled()));
+    with_parseable_event(event_record.data, [&](const cereal::Event::Reader &event) {
+      const auto sd = event.getSelfdriveState();
+      const double mono_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
+      append_timeline_entry(&timeline, mono_time, alert_status_to_timeline_type(sd.getAlertStatus(), sd.getEnabled()));
+    });
   }
 
   return timeline;
@@ -716,9 +728,9 @@ std::vector<LogEntry> extract_segment_logs(const std::vector<Event> &events) {
   std::string last_alert_key;
 
   for (const Event &event_record : events) {
-    capnp::FlatArrayMessageReader event_reader(event_record.data);
-    const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-    append_log_event(event_record.which, event, 0.0, &logs, &last_alert_key);
+    with_parseable_event(event_record.data, [&](const cereal::Event::Reader &event) {
+      append_log_event(event_record.which, event, 0.0, &logs, &last_alert_key);
+    });
   }
 
   return logs;
@@ -728,9 +740,9 @@ RouteMetadata extract_segment_metadata(const std::vector<Event> &events) {
   RouteMetadata metadata;
   for (const Event &event_record : events) {
     if (event_record.which != cereal::Event::Which::CAR_PARAMS) continue;
-    capnp::FlatArrayMessageReader event_reader(event_record.data);
-    const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-    metadata.car_fingerprint = event.getCarParams().getCarFingerprint().cStr();
+    with_parseable_event(event_record.data, [&](const cereal::Event::Reader &event) {
+      metadata.car_fingerprint = event.getCarParams().getCarFingerprint().cStr();
+    });
     if (!metadata.car_fingerprint.empty()) break;
   }
   return metadata;
@@ -1297,24 +1309,18 @@ void append_fast_node(const ResolvedNode &node,
   }
 }
 
-void append_event_fast(cereal::Event::Which which,
-                       int32_t eidx_segnum,
-                       kj::ArrayPtr<const capnp::word> data,
-                       const SchemaIndex &schema,
-                       const dbc::Database *can_dbc,
-                       bool skip_raw_can,
-                       double time_offset,
-                       SeriesAccumulator *series) {
-  if (eidx_segnum != -1) {
-    return;
-  }
+void append_event_fast_reader(cereal::Event::Which which,
+                              const cereal::Event::Reader &event,
+                              const SchemaIndex &schema,
+                              const dbc::Database *can_dbc,
+                              bool skip_raw_can,
+                              double time_offset,
+                              SeriesAccumulator *series) {
   const uint16_t which_index = static_cast<uint16_t>(which);
   if (which_index >= schema.by_which.size() || !schema.by_which[which_index].has_value()) {
     return;
   }
   const ResolvedService &service = *schema.by_which[which_index];
-  capnp::FlatArrayMessageReader event_reader(data);
-  const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
   const double tm = static_cast<double>(event.getLogMonoTime()) / 1.0e9 - time_offset;
   append_fixed_scalar_point(&series->fixed_series[static_cast<size_t>(service.valid_slot)],
                             tm,
@@ -1338,7 +1344,7 @@ void append_event_fast(cereal::Event::Which which,
         append_can_frame(can_service,
                          static_cast<uint8_t>(msg.getSrc()),
                          msg.getAddress(),
-                         msg.getBusTimeDEPRECATED(),
+                         msg.getDeprecated().getBusTime(),
                          msg.getDat(),
                          tm,
                          series);
@@ -1350,7 +1356,7 @@ void append_event_fast(cereal::Event::Which which,
         append_can_frame(can_service,
                          static_cast<uint8_t>(msg.getSrc()),
                          msg.getAddress(),
-                         msg.getBusTimeDEPRECATED(),
+                         msg.getDeprecated().getBusTime(),
                          msg.getDat(),
                          tm,
                          series);
@@ -1365,6 +1371,22 @@ void append_event_fast(cereal::Event::Which which,
 
   const capnp::DynamicStruct::Reader dynamic_event(event);
   append_fast_node(service.payload, dynamic_event.get(service.union_field), tm, series);
+}
+
+void append_event_fast(cereal::Event::Which which,
+                       int32_t eidx_segnum,
+                       kj::ArrayPtr<const capnp::word> data,
+                       const SchemaIndex &schema,
+                       const dbc::Database *can_dbc,
+                       bool skip_raw_can,
+                       double time_offset,
+                       SeriesAccumulator *series) {
+  if (eidx_segnum != -1) {
+    return;
+  }
+  with_parseable_event(data, [&](const cereal::Event::Reader &event) {
+    append_event_fast_reader(which, event, schema, can_dbc, skip_raw_can, time_offset, series);
+  });
 }
 
 void append_events_fast_range(const std::vector<Event> &events,
@@ -2043,34 +2065,33 @@ void StreamAccumulator::setDbcName(const std::string &dbc_name) {
 }
 
 void StreamAccumulator::appendEvent(cereal::Event::Which which, kj::ArrayPtr<const capnp::word> data) {
-  capnp::FlatArrayMessageReader event_reader(data);
-  const cereal::Event::Reader event = event_reader.getRoot<cereal::Event>();
-  const double boot_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
-  if (!impl_->time_offset.has_value()) {
-    impl_->time_offset = boot_time;
-  }
-  if (which == cereal::Event::Which::CAR_PARAMS) {
-    const std::string fingerprint = event.getCarParams().getCarFingerprint().cStr();
-    if (!fingerprint.empty() && fingerprint != impl_->car_fingerprint) {
-      impl_->car_fingerprint = fingerprint;
-      impl_->refresh_dbc();
+  with_parseable_event(data, [&](const cereal::Event::Reader &event) {
+    const double boot_time = static_cast<double>(event.getLogMonoTime()) / 1.0e9;
+    if (!impl_->time_offset.has_value()) {
+      impl_->time_offset = boot_time;
     }
-  }
+    if (which == cereal::Event::Which::CAR_PARAMS) {
+      const std::string fingerprint = event.getCarParams().getCarFingerprint().cStr();
+      if (!fingerprint.empty() && fingerprint != impl_->car_fingerprint) {
+        impl_->car_fingerprint = fingerprint;
+        impl_->refresh_dbc();
+      }
+    }
 
-  append_event_fast(which,
-                    -1,
-                    data,
-                    impl_->schema,
-                    impl_->can_dbc ? &*impl_->can_dbc : nullptr,
-                    true,
-                    *impl_->time_offset,
-                    &impl_->series);
-  append_log_event(which, event, *impl_->time_offset, &impl_->logs, &impl_->last_alert_key);
-  if (which == cereal::Event::Which::SELFDRIVE_STATE) {
-    const auto sd = event.getSelfdriveState();
-    append_timeline_entry(&impl_->timeline, boot_time - *impl_->time_offset,
-                          alert_status_to_timeline_type(sd.getAlertStatus(), sd.getEnabled()));
-  }
+    append_event_fast_reader(which,
+                             event,
+                             impl_->schema,
+                             impl_->can_dbc ? &*impl_->can_dbc : nullptr,
+                             true,
+                             *impl_->time_offset,
+                             &impl_->series);
+    append_log_event(which, event, *impl_->time_offset, &impl_->logs, &impl_->last_alert_key);
+    if (which == cereal::Event::Which::SELFDRIVE_STATE) {
+      const auto sd = event.getSelfdriveState();
+      append_timeline_entry(&impl_->timeline, boot_time - *impl_->time_offset,
+                            alert_status_to_timeline_type(sd.getAlertStatus(), sd.getEnabled()));
+    }
+  });
 }
 
 void StreamAccumulator::appendCanFrames(CanServiceKind service, const std::vector<LiveCanFrame> &frames) {
