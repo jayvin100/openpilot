@@ -18,18 +18,15 @@ BLINK_CYCLE = BLINK_OFF_1 + BLINK_ON_1 + BLINK_OFF_2 + BLINK_ON_2
 RED_BLINK_ON = 0.30
 RED_BLINK_OFF = 0.30
 RED_BLINK_CYCLE = RED_BLINK_ON + RED_BLINK_OFF
-PREWARNING_BREATH_CYCLE = 1.2  # smooth preDriverDistracted breathing cadence
 BLINK_DIM_ALPHA = 0.15
 BLINK_ALPHA_RC = 0.035
-# Test override to match alert icon test mode in alert_renderer.py.
-# When True, lane-change events also trigger the orange confidence bar.
-TEST_ORANGE_BAR_FOR_LANE_CHANGE_EVENTS = False
 LEFT_BLINDSPOT_SHIFT = 60
 RIGHT_DOT_EXIT_RC = 0.06
 RIGHT_DOT_EXIT_PIXELS = 14
 ORANGE_BAR_WIDTH = 48  # Match normal confidence ball diameter (2 * 24)
 ALERT_COLOR_MIX_RC = 0.08
 BALL_ANIM_RC = 0.04
+DISENGAGED_CONFIDENCE_TARGET = 0.0
 
 
 def draw_circle_gradient(center_x: float, center_y: float, radius: int,
@@ -59,11 +56,14 @@ class ConfidenceBall(Widget):
     self._orange_alert_started_at = -1.0
     self._orange_alert_prev_active = False
     self._orange_breath_phase = 0.0
-    self._ball_breath_phase = 0.0
-    self._ball_anim_prev_active = False
 
   def update_filter(self, value: float):
     self._confidence_filter.update(value)
+
+  @staticmethod
+  def _event_name() -> str:
+    ss = ui_state.sm['selfdriveState']
+    return ss.alertType.split('/')[0] if ss.alertType else ''
 
   def _is_orange_alert_active(self) -> bool:
     ss = ui_state.sm['selfdriveState']
@@ -75,41 +75,34 @@ class ConfidenceBall(Widget):
       return True
 
     # Blindspot warning should also trigger the orange grow bar.
-    event_name = ss.alertType.split('/')[0] if ss.alertType else ''
+    event_name = self._event_name()
     if event_name == 'laneChangeBlocked':
       return True
-
-    # Keep this test behavior aligned with the icon override experiment.
-    if TEST_ORANGE_BAR_FOR_LANE_CHANGE_EVENTS:
-      return event_name in ('preLaneChangeLeft', 'preLaneChangeRight', 'laneChange')
 
     return False
 
   def _is_red_alert_active(self) -> bool:
     ss = ui_state.sm['selfdriveState']
+    if ui_state.status == UIStatus.DISENGAGED:
+      return False
     return ss.alertSize != log.SelfdriveState.AlertSize.none and ss.alertStatus == log.SelfdriveState.AlertStatus.critical
 
   def _is_alert_bar_active(self) -> bool:
-    return self._is_orange_alert_active() or self._is_red_alert_active()
-
-  def _is_first_pay_attention_warning_active(self) -> bool:
-    """First level DM warning: 'Pay Attention' pre-warning state."""
-    ss = ui_state.sm['selfdriveState']
-    if ss.alertSize == log.SelfdriveState.AlertSize.none:
-      return False
-    event_name = ss.alertType.split('/')[0] if ss.alertType else ''
-    return event_name == 'preDriverDistracted'
+    # In disengaged mode, suppress the orange full-height flashing bar while
+    # keeping the confidence dot visible.
+    orange_active = self._is_orange_alert_active()
+    red_active = self._is_red_alert_active()
+    orange_bar_allowed = not (ui_state.status == UIStatus.DISENGAGED and orange_active)
+    return red_active or (orange_active and orange_bar_allowed)
 
   def _is_left_blindspot_alert_active(self) -> bool:
     ss = ui_state.sm['selfdriveState']
     if ss.alertSize == log.SelfdriveState.AlertSize.none:
       return False
 
-    event_name = ss.alertType.split('/')[0] if ss.alertType else ''
+    event_name = self._event_name()
     if event_name == 'laneChangeBlocked':
       return ui_state.sm['carState'].leftBlinker
-    if TEST_ORANGE_BAR_FOR_LANE_CHANGE_EVENTS:
-      return event_name == 'preLaneChangeLeft'
     return False
 
   def _orange_blink_target_alpha(self) -> float:
@@ -141,13 +134,6 @@ class ConfidenceBall(Widget):
 
     phase = (elapsed - BLINK_GROW_DELAY) % RED_BLINK_CYCLE
     return 1.0 if phase < RED_BLINK_ON else BLINK_DIM_ALPHA
-
-  def _ball_breath_target_alpha(self) -> float:
-    """Pre-warning confidence ball cadence: smooth breathing."""
-    dt = 1 / gui_app.target_fps
-    self._ball_breath_phase = (self._ball_breath_phase + dt / max(PREWARNING_BREATH_CYCLE, 1e-3)) % 1.0
-    wave = 0.5 * (1.0 + math.cos(self._ball_breath_phase * 2.0 * math.pi))
-    return BLINK_DIM_ALPHA + (1.0 - BLINK_DIM_ALPHA) * wave
 
   @staticmethod
   def _lerp(a: float, b: float, t: float) -> float:
@@ -240,14 +226,16 @@ class ConfidenceBall(Widget):
 
     # animate status dot in from bottom
     if ui_state.status == UIStatus.DISENGAGED:
-      self._confidence_filter.update(-0.5)
+      # Keep the resting dot visible at the bottom edge while preserving the
+      # existing smooth transition from the current engaged/override position.
+      self._confidence_filter.update(DISENGAGED_CONFIDENCE_TARGET)
     else:
       self._confidence_filter.update((1 - max(ui_state.sm['modelV2'].meta.disengagePredictions.brakeDisengageProbs or [1])) *
                                                         (1 - max(ui_state.sm['modelV2'].meta.disengagePredictions.steerOverrideProbs or [1])))
 
     orange_active = self._is_orange_alert_active()
     red_active = self._is_red_alert_active()
-    alert_active = orange_active or red_active
+    alert_active = self._is_alert_bar_active()
     left_blindspot_active = self._is_left_blindspot_alert_active()
     if alert_active and not self._orange_alert_prev_active:
       self._orange_alert_started_at = rl.get_time()
@@ -257,9 +245,9 @@ class ConfidenceBall(Widget):
       self._orange_breath_phase = 0.0
     self._orange_alert_prev_active = alert_active
     self._alert_morph_filter.update(1.0 if alert_active else 0.0)
-    if red_active:
+    if red_active and alert_active:
       target_alpha = self._red_blink_target_alpha()
-    elif orange_active:
+    elif orange_active and alert_active:
       target_alpha = self._orange_blink_target_alpha()
     else:
       target_alpha = 1.0
@@ -270,20 +258,10 @@ class ConfidenceBall(Widget):
       # Reset immediately when no alert bar is active to prevent red tint carryover.
       self._alert_color_mix_filter.x = 0.0
 
-    # Animate the regular confidence ball ONLY during first-level "Pay Attention" warning.
-    ball_anim_active = (not alert_active) and self._is_first_pay_attention_warning_active()
-    if ball_anim_active and not self._ball_anim_prev_active:
-      self._ball_breath_phase = 0.0
-    self._ball_anim_prev_active = ball_anim_active
-
-    if ball_anim_active:
-      # Unified behavior for preDriverDistracted: always use smooth breathing.
-      self._ball_alpha_filter.update(self._ball_breath_target_alpha())
-    else:
-      self._ball_alpha_filter.update(1.0)
-    # Hide the base confidence dot whenever the orange alert bar is active,
-    # so blink dim phases never reveal the dot underneath.
-    self._right_dot_presence_filter.update(0.0 if alert_active else 1.0)
+    # Keep the regular confidence ball static in the default black notification state.
+    self._ball_alpha_filter.update(1.0)
+    # Keep the confidence dot visible while disengaged.
+    self._right_dot_presence_filter.update(1.0 if ui_state.status == UIStatus.DISENGAGED else (0.0 if alert_active else 1.0))
 
   def _render(self, _):
     content_rect = rl.Rectangle(

@@ -5,7 +5,7 @@ from cereal import messaging, car, log
 from msgq.visionipc import VisionStreamType
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
-from openpilot.selfdrive.ui.mici.onroad.alert_renderer import AlertRenderer, TEST_USE_BLINDSPOT_ICON_FOR_BLINKERS
+from openpilot.selfdrive.ui.mici.onroad.alert_renderer import AlertRenderer
 from openpilot.selfdrive.ui.mici.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.mici.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.mici.onroad.model_renderer import ModelRenderer
@@ -193,9 +193,6 @@ class AugmentedRoadView(CameraView):
     if event_name == 'laneChangeBlocked':
       return ui_state.sm['carState'].leftBlinker
 
-    if TEST_USE_BLINDSPOT_ICON_FOR_BLINKERS:
-      return event_name == 'preLaneChangeLeft'
-
     return False
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
@@ -250,7 +247,11 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer.set_can_draw_top_icons(alert_to_render is None)
     self._hud_renderer.set_wheel_critical_icon(alert_to_render is not None and not not_animating_out and
                                                alert_to_render.visual_alert == car.CarControl.HUDControl.VisualAlert.steerRequired)
-    self._hud_renderer.set_hide_lower_hud(alert_to_render is not None and alert_to_render.status == log.SelfdriveState.AlertStatus.critical)
+    hide_for_critical = alert_to_render is not None and alert_to_render.status == log.SelfdriveState.AlertStatus.critical
+    hide_for_disengaged_orange = (alert_to_render is not None and
+                                  ui_state.status == UIStatus.DISENGAGED and
+                                  alert_to_render.status == log.SelfdriveState.AlertStatus.userPrompt)
+    self._hud_renderer.set_hide_lower_hud(hide_for_critical or hide_for_disengaged_orange)
     # TODO: have alert renderer draw offroad mici label below
     if ui_state.started:
       self._alert_renderer.render(self._content_rect)

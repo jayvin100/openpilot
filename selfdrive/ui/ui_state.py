@@ -13,6 +13,8 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.hardware import HARDWARE, PC
 
 BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
+# Debug/replay toggle: force onroad UI visuals into DISENGAGED state.
+FORCE_UI_DISENGAGED = True
 
 
 class UIStatus(Enum):
@@ -151,6 +153,9 @@ class UIState:
         self.status = UIStatus.OVERRIDE
       else:
         self.status = UIStatus.ENGAGED if ss.enabled else UIStatus.DISENGAGED
+
+      if FORCE_UI_DISENGAGED:
+        self.status = UIStatus.DISENGAGED
 
     # Check for engagement state changes
     if self.engaged != self._engaged_prev:
