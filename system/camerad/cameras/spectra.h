@@ -17,7 +17,7 @@
 
 #define MAX_IFE_BUFS 20
 
-const int MIPI_SETTLE_CNT = 33;  // Calculated by camera_freqs.py
+const int MIPI_SETTLE_CNT = 20;  // Calculated by camera_freqs.py
 
 // For use with the Titan 170 ISP in the SDM845
 // https://github.com/commaai/agnos-kernel-sdm845
