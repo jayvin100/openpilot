@@ -96,6 +96,23 @@ def touch_thread(end_event):
       time.sleep(DT_HW)
 
 
+def power_sample_thread(end_event):
+  """5.6Hz SOM power via FG IADC direct mode."""
+  try:
+    HARDWARE.init_fast_power()
+    while not end_event.is_set():
+      try:
+        i_ua = HARDWARE.fast_ibat_ua()
+        v_mv = HARDWARE.fast_vbat_mv()
+        p = v_mv * i_ua / 1e9
+        statlog.sample("som_power_draw", p)
+        statlog.sample("power_draw", p)
+      except Exception:
+        pass
+  finally:
+    HARDWARE.stop_fast_power()
+
+
 def hw_state_thread(end_event, hw_queue):
   """Handles non critical hardware state, and sends over queue"""
   count = 0
@@ -472,6 +489,7 @@ def main():
 
   if TICI:
     threads.append(threading.Thread(target=touch_thread, args=(end_event,)))
+    threads.append(threading.Thread(target=power_sample_thread, args=(end_event,)))
 
   for t in threads:
     t.start()

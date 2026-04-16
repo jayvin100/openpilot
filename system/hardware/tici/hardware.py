@@ -317,6 +317,50 @@ class Tici(HardwareBase):
   def get_som_power_draw(self):
     return (self.read_param_file("/sys/class/power_supply/bms/voltage_now", int) * self.read_param_file("/sys/class/power_supply/bms/current_now", int) / 1e12)
 
+  # fast power measurement: FG IADC direct mode (5.6Hz, 488uA resolution)
+  # PMI8998 FG normally converts IBATT every 1.47s. ALG_DIRECT_MODE triggers
+  # the 15-bit delta-sigma IADC on demand
+
+  def _spmi_write(self, addr, val):
+    regmap = '/sys/kernel/debug/regmap/spmi0-02'
+    with open(f'{regmap}/address', 'w') as f:
+      f.write(hex(addr))
+    with open(f'{regmap}/count', 'w') as f:
+      f.write('1')
+    with open(f'{regmap}/data', 'w') as f:
+      f.write(hex(val))
+
+  def _spmi_read16(self, addr):
+    regmap = '/sys/kernel/debug/regmap/spmi0-02'
+    with open(f'{regmap}/address', 'w') as f:
+      f.write(hex(addr))
+    with open(f'{regmap}/count', 'w') as f:
+      f.write('2')
+    with open(f'{regmap}/data') as f:
+      d = f.read().strip().split('\n')
+    return int(d[1].split(':')[1], 16) << 8 | int(d[0].split(':')[1], 16)
+
+  def fast_vbat_mv(self):
+    return self.read_param_file("/sys/class/power_supply/bms/voltage_now", int) / 1e3
+
+  def fast_ibat_ua(self):
+    self._spmi_write(0x41D0, 0xA5)
+    self._spmi_write(0x41E5, 0x12)
+    self._spmi_write(0x41D0, 0xA5)
+    self._spmi_write(0x41E5, 0x16)
+    time.sleep(0.170)
+    raw = self._spmi_read16(0x41AE)
+    signed = raw if raw < 0x8000 else raw - 0x10000
+    return signed * 488281 // 1000
+
+  def init_fast_power(self):
+    self._spmi_write(0x41D0, 0xA5)
+    self._spmi_write(0x41E5, 0x12)
+
+  def stop_fast_power(self):
+    self._spmi_write(0x41D0, 0xA5)
+    self._spmi_write(0x41E5, 0x20)
+
   def shutdown(self):
     os.system("sudo poweroff")
 
