@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 
 from openpilot.system.webrtc.schema import generate_field
 from cereal import messaging, log
-from openpilot.common.params import Params
 
 INITIAL_CAMERA = "driver"
 REQUIRED_VIDEO_CODEC = "H264"
