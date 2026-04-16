@@ -170,7 +170,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   count = 0
 
   onroad_conditions: dict[str, bool] = {
-    "ignition": False,
+    "ignition": True,
     "not_onroad_cycle": True,
     "device_temp_good": True,
   }
@@ -227,7 +227,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     if sm.updated['pandaStates'] and len(pandaStates) > 0:
 
       # Set ignition based on any panda connected
-      onroad_conditions["ignition"] = any(ps.ignitionLine or ps.ignitionCan for ps in pandaStates if ps.pandaType != log.PandaState.PandaType.unknown)
+      # onroad_conditions["ignition"] = any(ps.ignitionLine or ps.ignitionCan for ps in pandaStates if ps.pandaType != log.PandaState.PandaType.unknown)
 
       pandaState = pandaStates[0]
 
@@ -235,7 +235,7 @@ def hardware_thread(end_event, hw_queue) -> None:
 
     elif (time.monotonic() - sm.recv_time['pandaStates']) > DISCONNECT_TIMEOUT:
       if onroad_conditions["ignition"]:
-        onroad_conditions["ignition"] = False
+        # onroad_conditions["ignition"] = False
         cloudlog.error("panda timed out onroad")
 
     # Run at 2Hz, plus either edge of ignition
