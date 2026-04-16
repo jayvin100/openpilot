@@ -39,38 +39,9 @@ def run_and_log(procs, services, duration):
     return collect_logs(services, duration)
 
 @pytest.fixture(scope="module")
-def logs():
-  """Clean camerad session for timing tests (no VisionIPC recv interference).
-     VisionIPC recv from get_snapshots can cause occasional PHY switch timing
-     issues with IFE sharing, so timing tests use this dedicated fixture."""
-  raw_logs = run_and_log(["camerad"], CAMERAS, TEST_TIMESPAN)
-  ts = msgs_to_time_series(raw_logs)
-
-  elapsed = TEST_TIMESPAN
-  for cam in CAMERAS:
-    cnt = len(ts[cam]['t'])
-    expected = SERVICE_LIST[cam].frequency * elapsed
-    print(f"  {cam}: {cnt} frames in {elapsed:.1f}s ({cnt/elapsed:.1f}fps, expected {expected:.0f})")
-
-  for cam in CAMERAS:
-    expected_frames = SERVICE_LIST[cam].frequency * elapsed
-    cnt = len(ts[cam]['t'])
-    assert expected_frames*0.8 < cnt < expected_frames*1.2, f"unexpected frame count {cam}: {expected_frames=}, got {cnt}"
-
-    sof_ms = ts[cam]['timestampSof'] / 1e6
-    d_fid = np.diff(ts[cam]['frameId'])
-    d_sof = np.diff(sof_ms)
-    expected_period = 1000 / SERVICE_LIST[cam].frequency
-    dts = np.abs(d_sof - d_fid * expected_period)
-    # Skip first 5 timing measurements: FSIN stagger takes a few frames to stabilize
-    dts_steady = dts[5:]
-    assert (dts_steady < 1.0).all(), f"{cam} dts(ms) out of spec: max diff {dts_steady.max():.2f}ms, 99 percentile {np.percentile(dts_steady, 99):.2f}ms"
-
-  return ts
-
-@pytest.fixture(scope="module")
-def exposure_data():
-  """Camerad session with get_snapshots for exposure testing."""
+def _camera_session():
+  """Single camerad session that collects logs and exposure data.
+     Runs until exposure stabilizes (min TEST_TIMESPAN seconds for enough log data)."""
   with processes_context(["camerad"]), log_collector(CAMERAS) as (raw_logs, lock):
     exposure = {cam: [] for cam in CAMERAS}
     start = time.monotonic()
@@ -83,7 +54,28 @@ def exposure_data():
       if time.monotonic() - start >= TEST_TIMESPAN and _exposure_stable(exposure):
         break
 
-  return exposure
+    elapsed = time.monotonic() - start
+
+  with lock:
+    ts = msgs_to_time_series(raw_logs)
+
+  for cam in CAMERAS:
+    expected_frames = SERVICE_LIST[cam].frequency * elapsed
+    cnt = len(ts[cam]['t'])
+    assert expected_frames*0.8 < cnt < expected_frames*1.2, f"unexpected frame count {cam}: {expected_frames=}, got {cnt}"
+
+    dts = np.abs(np.diff([ts[cam]['timestampSof']/1e6]) - 1000/SERVICE_LIST[cam].frequency)
+    assert (dts < 1.0).all(), f"{cam} dts(ms) out of spec: max diff {dts.max()}, 99 percentile {np.percentile(dts, 99)}"
+
+  return ts, exposure
+
+@pytest.fixture(scope="module")
+def logs(_camera_session):
+  return _camera_session[0]
+
+@pytest.fixture(scope="module")
+def exposure_data(_camera_session):
+  return _camera_session[1]
 
 @pytest.mark.tici
 class TestCamerad:
@@ -110,37 +102,25 @@ class TestCamerad:
 
   def test_frame_skips(self, logs):
     for c in CAMERAS:
-      diffs = np.diff(logs[c]['frameId'])
-      assert np.all(diffs > 0) and np.all(diffs <= 5), \
-        f"{c} has frame skips: diffs range [{diffs.min()}, {diffs.max()}]"
+      assert set(np.diff(logs[c]['frameId'])) == {1, }, f"{c} has frame skips"
 
   def test_frame_sync(self, logs):
     SYNCED_CAMS = ('roadCameraState', 'wideRoadCameraState')
+    n = range(len(logs['roadCameraState']['t'][:-10]))
 
-    # Build frame_id → index mapping for each camera
-    fid_idx = {cam: {fid: i for i, fid in enumerate(logs[cam]['frameId'])} for cam in CAMERAS}
-
-    # Find common frame_ids (exclude last 10 for boundary effects)
-    common_fids = set(logs[CAMERAS[0]]['frameId'][:-10])
-    for cam in CAMERAS[1:]:
-      common_fids &= set(logs[cam]['frameId'])
-    common_fids = sorted(common_fids)
-    assert len(common_fids) > 20, f"too few common frames: {len(common_fids)}"
+    frame_ids = {i: [logs[cam]['frameId'][i] for cam in CAMERAS] for i in n}
+    assert all(len(set(v)) == 1 for v in frame_ids.values()), "frame IDs not aligned"
 
     # road and wide cameras should be synced within 1.1ms
-    laggy_frames = {}
-    for fid in common_fids:
-      ts = [logs[cam]['timestampSof'][fid_idx[cam][fid]] for cam in SYNCED_CAMS]
-      diff_ms = (max(ts) - min(ts)) / 1e6
-      if diff_ms > 1.1:
-        laggy_frames[fid] = diff_ms
+    synced_times = {i: [logs[cam]['timestampSof'][i] for cam in SYNCED_CAMS] for i in n}
+    diffs = {i: (max(ts) - min(ts))/1e6 for i, ts in synced_times.items()}
+    laggy_frames = {k: v for k, v in diffs.items() if v > 1.1}
     assert len(laggy_frames) == 0, f"Frames not synced properly: {laggy_frames=}"
 
-    # driver camera: either staggered ~24ms (OX03C10 IFE sharing) or synced <2ms (OS04C10 BPS fallback)
-    for fid in common_fids:
-      offset_ms = abs(logs['driverCameraState']['timestampSof'][fid_idx['driverCameraState'][fid]] -
-                      logs['roadCameraState']['timestampSof'][fid_idx['roadCameraState'][fid]]) / 1e6
-      assert offset_ms < 2 or 15 < offset_ms < 30, f"driver camera offset out of range at frame {fid}: {offset_ms:.1f}ms (expected <2ms or 15-30ms)"
+    # driver camera should be staggered ~25ms from road camera
+    for i in n:
+      offset_ms = abs(logs['driverCameraState']['timestampSof'][i] - logs['roadCameraState']['timestampSof'][i]) / 1e6
+      assert 20 < offset_ms < 30, f"driver camera stagger out of range at frame {i}: {offset_ms:.1f}ms (expected ~25ms)"
 
   def test_sanity_checks(self, logs):
     self._sanity_checks(logs)
@@ -175,10 +155,8 @@ class TestCamerad:
       del os.environ['SPECTRA_ERROR_PROB']
     ts = msgs_to_time_series(logs)
 
-    # errors should cause some frame drops (fewer frames than expected)
-    for c in CAMERAS:
-      cnt = len(ts[c]['t'])
-      expected = SERVICE_LIST[c].frequency * 10
-      assert cnt < expected * 0.95, f"{c}: expected frame drops from errors, got {cnt}/{expected}"
+    # we should see some jumps from introduced errors
+    assert np.max([ np.max(np.diff(ts[c]['frameId'])) for c in CAMERAS ]) > 1
+    assert np.max([ np.max(np.diff(ts[c]['requestId'])) for c in CAMERAS ]) > 1
 
     self._sanity_checks(ts)
