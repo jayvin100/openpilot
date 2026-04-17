@@ -147,7 +147,8 @@ def make_run_policy(vision_runner, policy_runner, cam_w, cam_h, model_w, model_h
 
 
 def compile_modeld(cam_w, cam_h, model_w, model_h, prepare_only, frame_skip,
-                   vision_onnx, policy_onnx, vision_metadata, policy_metadata, output):
+                   vision_onnx, policy_onnx, pkl_path):
+  from get_model_metadata import metadata_path_for
 
   _, _, _, yuv_size = get_nv12_info(cam_w, cam_h)
   print(f"Compiling combined policy JIT for {cam_w}x{cam_h} (prepare_only={prepare_only})...")
@@ -155,11 +156,11 @@ def compile_modeld(cam_w, cam_h, model_w, model_h, prepare_only, frame_skip,
   vision_runner = OnnxRunner(vision_onnx)
   policy_runner = OnnxRunner(policy_onnx)
 
-  with open(vision_metadata, 'rb') as f:
-    vm = pickle.load(f)
-    vision_features_slice = vm['output_slices']['hidden_state']
-    vision_input_shapes = vm['input_shapes']
-  with open(policy_metadata, 'rb') as f:
+  with open(metadata_path_for(vision_onnx), 'rb') as f:
+    vision_metadata = pickle.load(f)
+    vision_features_slice = vision_metadata['output_slices']['hidden_state']
+    vision_input_shapes = vision_metadata['input_shapes']
+  with open(metadata_path_for(policy_onnx), 'rb') as f:
     policy_input_shapes = pickle.load(f)['input_shapes']
 
   _run = make_run_policy(vision_runner, policy_runner,
@@ -206,10 +207,10 @@ def compile_modeld(cam_w, cam_h, model_w, model_h, prepare_only, frame_skip,
   run_policy_jit, _, _ = random_inputs_run_fn(run_policy_jit, SEED, test_val, test_buffers)
 
   print('pickle round trip')
-  with open(output, "wb") as f:
+  with open(pkl_path, "wb") as f:
     pickle.dump(run_policy_jit, f)
-    print(f"  Saved to {output}")
-  with open(output, "rb") as f:
+    print(f"  Saved to {pkl_path}")
+  with open(pkl_path, "rb") as f:
     run_policy_jit = pickle.load(f)
   random_inputs_run_fn(run_policy_jit, SEED, test_val, test_buffers, expect_match=True)
   random_inputs_run_fn(run_policy_jit, SEED+1, test_val, test_buffers, expect_match=False)
@@ -221,8 +222,6 @@ def _parse_size(s):
 
 
 if __name__ == "__main__":
-  from get_model_metadata import metadata_path_for
-
   p = argparse.ArgumentParser()
   p.add_argument('--cam-size', type=_parse_size, required=True, help='camera WxH, e.g. 1928x1208')
   p.add_argument('--model-size', type=_parse_size, required=True, help='model input WxH, e.g. 512x256')
@@ -236,7 +235,4 @@ if __name__ == "__main__":
   cam_w, cam_h = args.cam_size
   model_w, model_h = args.model_size
   compile_modeld(cam_w, cam_h, model_w, model_h, args.prepare_only, args.frame_skip,
-                 args.vision_onnx, args.policy_onnx,
-                 str(metadata_path_for(args.vision_onnx)),
-                 str(metadata_path_for(args.policy_onnx)),
-                 args.output)
+                 args.vision_onnx, args.policy_onnx, args.output)
