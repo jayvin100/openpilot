@@ -6,6 +6,7 @@ from SCons.Script import Value
 from openpilot.common.file_chunker import chunk_file, get_chunk_paths
 from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
 from openpilot.common.transformations.model import MEDMODEL_INPUT_SIZE, DM_INPUT_SIZE
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.helpers import CompileConfig
 from tinygrad import Device
 
@@ -72,12 +73,13 @@ driving_onnx_deps = [File(f"models/{m}.onnx").abspath for m in ['driving_vision'
 driving_metadata_deps = [File(f"models/{m}_metadata.pkl").abspath for m in ['driving_vision', 'driving_policy']]
 
 model_w, model_h = MEDMODEL_INPUT_SIZE
+frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
 for cfg in MODELD_CONFIGS:
   cmd = (f'{tg_flags} {mac_brew_string} {image_flag} python3 {modeld_dir}/compile_modeld.py '
          f'--cam-size {cfg.cam_w}x{cfg.cam_h} --model-size {model_w}x{model_h} '
          f'--vision-onnx {File("models/driving_vision.onnx").abspath} '
          f'--policy-onnx {File("models/driving_policy.onnx").abspath} '
-         f'--output {cfg.pkl_path}'
+         f'--output {cfg.pkl_path} --frame-skip {frame_skip}'
          + (' --prepare-only' if cfg.prepare_only else ''))
   node = lenv.Command(cfg.pkl_path, tinygrad_files + compile_modeld_script + driving_onnx_deps + driving_metadata_deps + [chunker_file, compiled_flags_node], cmd)
   onnx_sizes_sum = sum(os.path.getsize(f) for f in driving_onnx_deps)

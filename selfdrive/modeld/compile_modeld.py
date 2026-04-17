@@ -229,7 +229,7 @@ if __name__ == "__main__":
   p.add_argument('--policy-onnx', required=True)
   p.add_argument('--output', required=True)
   p.add_argument('--prepare-only', action='store_true')
-  p.add_argument('--frame-skip', type=int, default=4)
+  p.add_argument('--frame-skip', type=int, required=True)
   args = p.parse_args()
 
   cam_w, cam_h = args.cam_size
