@@ -43,7 +43,7 @@ class DriverStateRenderer(Widget):
     self._showing_orange = False
 
     self._fade_filter = FirstOrderFilter(0.0, 0.05, 1 / gui_app.target_fps)
-    self._color_fade = FirstOrderFilter(1.0, 0.05, 1 / gui_app.target_fps)  # 0.05s per phase, 0.1s total
+    self._color_fade = FirstOrderFilter(1.0, 0.05/2, 1 / gui_app.target_fps)
     self._pitch_filter = FirstOrderFilter(0.0, 0.05, 1 / gui_app.target_fps, initialized=False)
     self._yaw_filter = FirstOrderFilter(0.0, 0.05, 1 / gui_app.target_fps, initialized=False)
     self._rotation_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps, initialized=False)
