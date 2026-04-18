@@ -2556,10 +2556,10 @@ struct Event {
     livestreamWideRoadEncodeData @121 :EncodeData;
     livestreamDriverEncodeData @122 :EncodeData;
 
-    livestreamCameraEncodeData @151 :EncodeData;
-    livestreamCameraSwitch @152 :LiveStreamCamera;
+    livestreamCameraEncodeData @152 :EncodeData;
+    livestreamCameraSwitch @153 :LiveStreamCamera;
 
-    soundRequest @153 :SoundRequest;
+    soundRequest @154 :SoundRequest;
 
     # *********** Custom: reserved for forks ***********
 
