@@ -77,7 +77,9 @@ class SelfdriveD:
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'lateralManeuverPlan']
-    if SIMULATION:
+    if self.CP.notCar:
+      ignore += ['driverMonitoringState']
+    elif SIMULATION:
       ignore += ['driverCameraState', 'managerState']
     if REPLAY:
       # no vipc in replay will make them ignored anyways
