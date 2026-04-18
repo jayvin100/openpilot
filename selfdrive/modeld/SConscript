@@ -95,6 +95,6 @@ def tg_compile(flags, model_name):
   )
 
 dm_flags = {
-  'larch64': 'IMAGE=2 FLOAT16=1 NOLOCALS=1 JIT_BATCH_SIZE=0 OPENPILOT_HACKS=1',
+  'larch64': 'DEV=QCOM IMAGE=2 FLOAT16=1 NOLOCALS=1 JIT_BATCH_SIZE=0 OPENPILOT_HACKS=1',
 }.get(arch, 'DEV=CPU:LLVM')
 tg_compile(f'{dm_flags}', 'dmonitoring_model')
