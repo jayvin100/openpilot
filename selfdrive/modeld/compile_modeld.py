@@ -39,7 +39,7 @@ class CompileConfig:
     return str(MODELS_DIR / f'{self.prefix}{"warp_" if self.prepare_only else ""}{self.cam_w}x{self.cam_h}_tinygrad.pkl')
 
 CAMERA_CONFIGS = [
-  (_ar_ox_fisheye.width, _ar_ox_fisheye.height),  # tici: 1928x1208
+  # (_ar_ox_fisheye.width, _ar_ox_fisheye.height),  # tici: 1928x1208
   (_os_fisheye.width, _os_fisheye.height),        # mici: 1344x760
 ]
 MODELD_CONFIGS = [CompileConfig(cam_w, cam_h, prepare_only, f'{SZ_PREFIX}driving_') for (cam_w, cam_h), prepare_only in product(CAMERA_CONFIGS, [True, False])]
