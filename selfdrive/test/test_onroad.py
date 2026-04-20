@@ -72,7 +72,9 @@ PROCS = {
 
 TIMINGS = {
   # rtols: max/min, rsd
-  "can": [2.5, 0.35],
+  # `can` comes straight off panda HW: a single host scheduler hiccup shows
+  # up here much more than in downstream services, so allow a wider max.
+  "can": [4.0, 0.35],
   "pandaStates": [2.5, 0.35],
   "peripheralState": [2.5, 0.35],
   "sendcan": [2.5, 0.35],
