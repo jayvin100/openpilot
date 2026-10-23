@@ -1,9 +1,9 @@
 diff --git a/openpilot/jay/screenshot.py b/openpilot/jay/screenshot.py
 new file mode 100644
-index 0000000..bca2fa0
+index 0000000..f0d492b
 --- /dev/null
 +++ b/openpilot/jay/screenshot.py
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,22 @@
 +"""Remote screenshots for scripts/device.py: create REQUEST_PATH and the UI saves its next frame to SCREENSHOT_PATH."""
 +import os
 +
@@ -18,6 +18,7 @@ index 0000000..bca2fa0
 +    return
 +  try:
 +    os.remove(REQUEST_PATH)
++    rl.rl_draw_render_batch_active()  # flush batched draw calls, or the frame is only partly drawn
 +    image = rl.load_image_from_screen()
 +    tmp = SCREENSHOT_PATH.removesuffix(".png") + ".tmp.png"
 +    rl.export_image(image, tmp)

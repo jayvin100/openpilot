@@ -3,10 +3,10 @@ new file mode 100644
 index 0000000..e69de29
 diff --git a/openpilot/jay/upload_status.py b/openpilot/jay/upload_status.py
 new file mode 100644
-index 0000000..12fc904
+index 0000000..8117400
 --- /dev/null
 +++ b/openpilot/jay/upload_status.py
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,233 @@
 +"""Live upload status for the home screen card and screensaver.
 +
 +athenad keeps its upload queue in memory, so it dumps a small JSON snapshot once a second
@@ -22,6 +22,7 @@ index 0000000..12fc904
 +from openpilot.common.hardware.hw import Paths
 +from openpilot.common.params import Params
 +
++# UI fonts only contain ASCII plus a few extras (EXTRA_FONT_CHARS in system/ui/lib/application.py), e.g. "•" but not "·" or "…"
 +STATUS_PATH = "/tmp/jay_upload_status.json"
 +STALE_AFTER = 5.0  # seconds without a snapshot before athenad is considered disconnected
 +UPLOAD_ATTR_NAME = "user.upload"
@@ -37,16 +38,16 @@ index 0000000..12fc904
 +
 +
 +def describe_upload(path: str) -> str:
-+  """'/data/media/0/realdata/0000002f--d22d40ad1d--12/rlog.zst' -> 'full log · drive 47, min 12'"""
++  """'/data/media/0/realdata/0000002f--d22d40ad1d--12/rlog.zst' -> 'full log • #47 min 12' (drive 47, minute 12)"""
 +  segment, name = os.path.split(path)
 +  segment = os.path.basename(segment)
 +  base = name.removesuffix(".zst")
 +  kind = FILE_KINDS.get(base, base)
 +  try:
 +    counter, _, seg = segment.split("--")
-+    return f"{kind} · drive {int(counter, 16)}, min {int(seg)}"
++    return f"{kind} • #{int(counter, 16)} min {int(seg)}"
 +  except ValueError:
-+    return f"{kind} · {segment}"
++    return f"{kind} • {segment}"
 +
 +
 +def format_bytes(n: float) -> str:
@@ -221,13 +222,13 @@ index 0000000..12fc904
 +    return "Paused on metered connection", None
 +  status = stats.status
 +  if status is None:
-+    return "Waiting for connection to comma…", None
++    return "Waiting for connection to comma...", None
 +  current = status["current"]
 +  if not current:
-+    return f"Idle · {status['queued']} waiting", None
++    return f"Idle • {status['queued']} waiting", None
 +  top = max(current, key=lambda c: c["progress"])
 +  extra = f" (+{len(current) - 1})" if len(current) > 1 else ""
-+  return f"Uploading {describe_upload(top['path'])}{extra} · {format_bytes(status['speed'])}/s", top["progress"]
++  return f"Uploading {describe_upload(top['path'])}{extra} • {format_bytes(status['speed'])}/s", top["progress"]
 +
 +
 +_shared_stats: UploadStats | None = None
@@ -244,10 +245,10 @@ new file mode 100644
 index 0000000..e69de29
 diff --git a/openpilot/jay/widgets/upload_card.py b/openpilot/jay/widgets/upload_card.py
 new file mode 100644
-index 0000000..a82ad4e
+index 0000000..3092581
 --- /dev/null
 +++ b/openpilot/jay/widgets/upload_card.py
-@@ -0,0 +1,112 @@
+@@ -0,0 +1,114 @@
 +"""Home screen card with live Firehose / upload status. Replaces the comma prime ad."""
 +import pyray as rl
 +
@@ -275,7 +276,7 @@ index 0000000..a82ad4e
 +    return tr("OFFLINE"), RED
 +  if ds.networkMetered:
 +    return tr("PAUSED: metered"), ORANGE
-+  return tr("ACTIVE") + (" · Wi-Fi" if network_type == "wifi" else ""), GREEN
++  return tr("ACTIVE") + (" • Wi-Fi" if network_type == "wifi" else ""), GREEN
 +
 +
 +class UploadCardWidget(Widget):
@@ -312,14 +313,14 @@ index 0000000..a82ad4e
 +    y += 70
 +    status = s.status
 +    if status is None:
-+      gui_label(rl.Rectangle(x, y, w, 60), tr("Waiting for connection to comma…"), 48, LABEL_COLOR)
++      gui_label(rl.Rectangle(x, y, w, 60), tr("Waiting for connection to comma..."), 48, LABEL_COLOR)
 +      y += 2 * 75
 +    else:
 +      current = sorted(status["current"], key=lambda c: -c["progress"])
 +      for item in current[:MAX_CURRENT_ROWS]:
-+        bar_w = 300
-+        text_w = w - bar_w - 140
-+        gui_label(rl.Rectangle(x, y, text_w, 60), describe_upload(item["path"]), 46)
++        bar_w = 220
++        text_w = w - bar_w - 150
++        gui_label(rl.Rectangle(x, y, text_w, 60), describe_upload(item["path"]), 44)
 +        bar = rl.Rectangle(x + w - bar_w - 120, y + 18, bar_w, 24)
 +        rl.draw_rectangle_rounded(bar, 1.0, 10, BAR_BG)
 +        rl.draw_rectangle_rounded(rl.Rectangle(bar.x, bar.y, max(bar.height, bar.width * item["progress"]), bar.height), 1.0, 10, BAR_FG)
@@ -336,15 +337,17 @@ index 0000000..a82ad4e
 +      if len(current) > MAX_CURRENT_ROWS:
 +        parts.append(tr("{} more uploading").format(len(current) - MAX_CURRENT_ROWS))
 +      parts.append(tr("{} waiting").format(status["queued"]))
-+      gui_label(rl.Rectangle(x, y, w, 60), " · ".join(parts), 46, LABEL_COLOR)
++      gui_label(rl.Rectangle(x, y, w, 60), " • ".join(parts), 46, LABEL_COLOR)
 +    y += 100
 +
 +    # Session + device summary
 +    label_w = 330
-+    if status is not None:
-+      session = tr("{} uploaded · {}").format(status["success"], format_bytes(status["bytes_done"]))
++    if status is not None and not status["success"] and not status["failed"]:
++      session = tr("nothing finished yet")
++    elif status is not None:
++      session = tr("{} uploaded • {}").format(status["success"], format_bytes(status["bytes_done"]))
 +      if status["failed"]:
-+        session += tr(" · {} failed").format(status["failed"])
++        session += tr(" • {} failed").format(status["failed"])
 +    else:
 +      session = "–"
 +    gui_label(rl.Rectangle(x, y, label_w, 60), tr("THIS SESSION"), 40, LABEL_COLOR, FontWeight.BOLD)
@@ -352,7 +355,7 @@ index 0000000..a82ad4e
 +    y += 75
 +
 +    hours = s.segments / 60
-+    device = tr("{} drives · {:.0f} h · {}% full").format(s.drives, hours, s.disk_used_pct)
++    device = tr("{} drives • {:.0f} h • {}% full").format(s.drives, hours, s.disk_used_pct)
 +    gui_label(rl.Rectangle(x, y, label_w, 60), tr("ON DEVICE"), 40, LABEL_COLOR, FontWeight.BOLD)
 +    gui_label(rl.Rectangle(x + label_w, y, w - label_w, 60), device, 46)
 +    y += 75

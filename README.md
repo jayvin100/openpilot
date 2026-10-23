@@ -17,6 +17,10 @@ The workflow in `.github/workflows/build.yml` runs every 3 hours, and whenever `
 - Python only. The prebuilt branches ship compiled binaries, and C++ changes would need an on-device rebuild.
 - No changes to safety limits, panda safety, or driver monitoring.
 
+## Device screen
+
+`scripts/device.py screen | tap X Y | swipe X1 Y1 X2 Y2 [ms]` takes screenshots and injects touches over SSH. Screenshots need `patches/002`.
+
 ## Back to official
 
 On the device, run `git remote set-url origin https://github.com/sunnypilot/sunnypilot.git` in both `/data/openpilot` and `/data/safe_staging/merged`, which is the updater's overlay and has its own `.git/config`. Then set the target branch to `dev` in Settings → Software.
