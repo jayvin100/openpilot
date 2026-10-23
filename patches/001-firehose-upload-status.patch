@@ -1,0 +1,534 @@
+diff --git a/openpilot/jay/__init__.py b/openpilot/jay/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/openpilot/jay/upload_status.py b/openpilot/jay/upload_status.py
+new file mode 100644
+index 0000000..12fc904
+--- /dev/null
++++ b/openpilot/jay/upload_status.py
+@@ -0,0 +1,232 @@
++"""Live upload status for the home screen card and screensaver.
++
++athenad keeps its upload queue in memory, so it dumps a small JSON snapshot once a second
++(UploadStatusWriter) which the UI reads (read_upload_status). Firehose and on-device stats
++are collected on the UI side (UploadStats).
++"""
++import json
++import os
++import shutil
++import threading
++import time
++
++from openpilot.common.hardware.hw import Paths
++from openpilot.common.params import Params
++
++STATUS_PATH = "/tmp/jay_upload_status.json"
++STALE_AFTER = 5.0  # seconds without a snapshot before athenad is considered disconnected
++UPLOAD_ATTR_NAME = "user.upload"
++
++FILE_KINDS = {
++  "rlog": "full log",
++  "qlog": "log",
++  "fcamera.hevc": "road video",
++  "ecamera.hevc": "wide video",
++  "dcamera.hevc": "driver video",
++  "qcamera.ts": "preview video",
++}
++
++
++def describe_upload(path: str) -> str:
++  """'/data/media/0/realdata/0000002f--d22d40ad1d--12/rlog.zst' -> 'full log · drive 47, min 12'"""
++  segment, name = os.path.split(path)
++  segment = os.path.basename(segment)
++  base = name.removesuffix(".zst")
++  kind = FILE_KINDS.get(base, base)
++  try:
++    counter, _, seg = segment.split("--")
++    return f"{kind} · drive {int(counter, 16)}, min {int(seg)}"
++  except ValueError:
++    return f"{kind} · {segment}"
++
++
++def format_bytes(n: float) -> str:
++  for unit in ("B", "KB", "MB", "GB"):
++    if n < 1000 or unit == "GB":
++      return f"{n:.0f} {unit}" if unit in ("B", "KB") else f"{n:.1f} {unit}"
++    n /= 1000
++  return ""
++
++
++class UploadStatusWriter:
++  INTERVAL = 1.0
++
++  def __init__(self, path: str = STATUS_PATH):
++    self._path = path
++    self._lock = threading.Lock()
++    self._sizes: dict[str, int] = {}
++    self.success = 0
++    self.failed = 0
++    self.bytes_done = 0
++    self.last_success = ""
++    self.last_success_t = 0.0
++
++  def record_success(self, fn: str, sz: int) -> None:
++    with self._lock:
++      self.success += 1
++      self.bytes_done += max(sz, 0)
++      self.last_success = fn
++      self.last_success_t = time.time()
++
++  def record_failure(self) -> None:
++    with self._lock:
++      self.failed += 1
++
++  def _size(self, path: str) -> int:
++    if path not in self._sizes:
++      # .zst files may be compressed on the fly from the uncompressed original
++      for p in (path, path.removesuffix(".zst")):
++        try:
++          self._sizes[path] = os.path.getsize(p)
++          break
++        except OSError:
++          self._sizes[path] = 0
++    return self._sizes[path]
++
++  def run(self, end_event: threading.Event, upload_queue, cur_upload_items: dict) -> None:
++    prev_done: dict[str, float] = {}
++    prev_t = time.monotonic()
++    while not end_event.wait(self.INTERVAL):
++      try:
++        now = time.monotonic()
++        current = []
++        done: dict[str, float] = {}
++        for item in list(cur_upload_items.values()):
++          if item is None:
++            continue
++          sz = self._size(item.path)
++          done[item.path] = item.progress * sz
++          current.append({"path": item.path, "progress": item.progress, "size": sz})
++
++        moved = sum(max(d - prev_done.get(p, d), 0) for p, d in done.items())
++        speed = moved / (now - prev_t) if now > prev_t else 0.0
++        prev_done, prev_t = done, now
++        self._sizes = {p: s for p, s in self._sizes.items() if p in done}
++
++        with self._lock:
++          snapshot = {
++            "t": time.time(),
++            "queued": sum(1 for i in list(upload_queue.queue) if i is not None),
++            "current": current,
++            "speed": speed,
++            "success": self.success,
++            "failed": self.failed,
++            "bytes_done": self.bytes_done,
++            "last_success": self.last_success,
++            "last_success_t": self.last_success_t,
++          }
++        tmp = self._path + ".tmp"
++        with open(tmp, "w") as f:
++          json.dump(snapshot, f)
++        os.replace(tmp, self._path)
++      except Exception:
++        pass
++
++
++def read_upload_status(path: str = STATUS_PATH) -> dict | None:
++  """Latest athenad snapshot, or None if athenad hasn't written one recently."""
++  try:
++    with open(path) as f:
++      data = json.load(f)
++  except (OSError, ValueError):
++    return None
++  if abs(time.time() - data.get("t", 0)) > STALE_AFTER:
++    return None
++  return data
++
++
++class UploadStats:
++  """Polls the athenad snapshot, the cached Firehose count, and on-device storage."""
++  STATUS_INTERVAL = 1.0
++  PARAMS_INTERVAL = 5.0
++  STORAGE_INTERVAL = 60.0
++
++  def __init__(self):
++    self._params = Params()
++    self.status: dict | None = None
++    self.firehose: int | None = None
++    self.firehose_at_start: int | None = None
++    self.segments = 0
++    self.drives = 0
++    self.qlogs_uploaded = 0
++    self.disk_used_pct = 0
++    self._last_status = 0.0
++    self._last_params = 0.0
++    self._storage_thread = threading.Thread(target=self._storage_loop, daemon=True)
++    self._storage_thread.start()
++
++  @property
++  def firehose_delta(self) -> int:
++    if self.firehose is None or self.firehose_at_start is None:
++      return 0
++    return self.firehose - self.firehose_at_start
++
++  def update(self) -> None:
++    now = time.monotonic()
++    if now - self._last_status >= self.STATUS_INTERVAL:
++      self._last_status = now
++      self.status = read_upload_status()
++    if now - self._last_params >= self.PARAMS_INTERVAL:
++      self._last_params = now
++      try:
++        stats = self._params.get("ApiCache_FirehoseStats")
++        if stats:
++          self.firehose = int(stats.get("firehose", 0))
++          if self.firehose_at_start is None:
++            self.firehose_at_start = self.firehose
++      except Exception:
++        pass
++
++  def _storage_loop(self) -> None:
++    while True:
++      try:
++        self._scan_storage()
++      except Exception:
++        pass
++      time.sleep(self.STORAGE_INTERVAL)
++
++  def _scan_storage(self) -> None:
++    root = Paths.log_root()
++    segments = [d for d in os.listdir(root) if d.count("--") == 2]
++    uploaded = 0
++    for seg in segments:
++      for name in ("qlog.zst", "qlog"):
++        try:
++          if os.getxattr(os.path.join(root, seg, name), UPLOAD_ATTR_NAME) == b"1":
++            uploaded += 1
++            break
++        except (OSError, AttributeError):
++          continue
++    usage = shutil.disk_usage(root)
++    self.segments = len(segments)
++    self.drives = len({s.rsplit("--", 1)[0] for s in segments})
++    self.qlogs_uploaded = uploaded
++    self.disk_used_pct = round(100 * usage.used / (usage.used + usage.free)) if usage.used + usage.free else 0  # matches df
++
++
++def status_summary(stats: UploadStats, network_type: str, metered: bool) -> tuple[str, float | None]:
++  """One-line upload status, plus the progress of the furthest-along upload (None when not uploading)."""
++  if network_type == "none":
++    return "Offline", None
++  if metered:
++    return "Paused on metered connection", None
++  status = stats.status
++  if status is None:
++    return "Waiting for connection to comma…", None
++  current = status["current"]
++  if not current:
++    return f"Idle · {status['queued']} waiting", None
++  top = max(current, key=lambda c: c["progress"])
++  extra = f" (+{len(current) - 1})" if len(current) > 1 else ""
++  return f"Uploading {describe_upload(top['path'])}{extra} · {format_bytes(status['speed'])}/s", top["progress"]
++
++
++_shared_stats: UploadStats | None = None
++
++
++def shared_upload_stats() -> UploadStats:
++  """One poller shared by the home card and the screensaver."""
++  global _shared_stats
++  if _shared_stats is None:
++    _shared_stats = UploadStats()
++  return _shared_stats
+diff --git a/openpilot/jay/widgets/__init__.py b/openpilot/jay/widgets/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/openpilot/jay/widgets/upload_card.py b/openpilot/jay/widgets/upload_card.py
+new file mode 100644
+index 0000000..a82ad4e
+--- /dev/null
++++ b/openpilot/jay/widgets/upload_card.py
+@@ -0,0 +1,112 @@
++"""Home screen card with live Firehose / upload status. Replaces the comma prime ad."""
++import pyray as rl
++
++from openpilot.jay.upload_status import UploadStats, describe_upload, format_bytes, shared_upload_stats
++from openpilot.selfdrive.ui.ui_state import ui_state
++from openpilot.system.ui.lib.application import FontWeight, TextAlignment
++from openpilot.system.ui.lib.multilang import tr
++from openpilot.system.ui.widgets import Widget
++from openpilot.system.ui.widgets.label import gui_label
++
++BG_COLOR = rl.Color(51, 51, 51, 255)
++LABEL_COLOR = rl.Color(170, 170, 170, 255)
++GREEN = rl.Color(46, 204, 113, 255)
++ORANGE = rl.Color(243, 156, 18, 255)
++RED = rl.Color(231, 76, 60, 255)
++BAR_BG = rl.Color(85, 85, 85, 255)
++BAR_FG = rl.Color(70, 91, 234, 255)
++MAX_CURRENT_ROWS = 2
++
++
++def network_state() -> tuple[str, rl.Color]:
++  ds = ui_state.sm["deviceState"]
++  network_type = str(ds.networkType)
++  if network_type == "none":
++    return tr("OFFLINE"), RED
++  if ds.networkMetered:
++    return tr("PAUSED: metered"), ORANGE
++  return tr("ACTIVE") + (" · Wi-Fi" if network_type == "wifi" else ""), GREEN
++
++
++class UploadCardWidget(Widget):
++  def __init__(self, stats: UploadStats | None = None):
++    super().__init__()
++    self.stats = stats or shared_upload_stats()
++
++  def _update_state(self):
++    self.stats.update()
++
++  def _render(self, rect: rl.Rectangle):
++    s = self.stats
++    rl.draw_rectangle_rounded(rect, 0.025, 10, BG_COLOR)
++    x, y = rect.x + 70, rect.y + 55
++    w = rect.width - 140
++
++    # Header: title + network state
++    gui_label(rl.Rectangle(x, y, w, 90), tr("Firehose"), 75, font_weight=FontWeight.BOLD)
++    state_text, state_color = network_state()
++    gui_label(rl.Rectangle(x, y, w, 90), state_text, 45, state_color, FontWeight.BOLD, TextAlignment.RIGHT)
++    y += 105
++
++    if s.firehose is None:
++      count_text = tr("Training data count not loaded yet")
++    else:
++      count_text = tr("{} segments in training data").format(s.firehose)
++      if s.firehose_delta > 0:
++        count_text += f"  (+{s.firehose_delta})"
++    gui_label(rl.Rectangle(x, y, w, 65), count_text, 55)
++    y += 110
++
++    # Live uploads
++    gui_label(rl.Rectangle(x, y, w, 50), tr("UPLOADING NOW"), 40, LABEL_COLOR, FontWeight.BOLD)
++    y += 70
++    status = s.status
++    if status is None:
++      gui_label(rl.Rectangle(x, y, w, 60), tr("Waiting for connection to comma…"), 48, LABEL_COLOR)
++      y += 2 * 75
++    else:
++      current = sorted(status["current"], key=lambda c: -c["progress"])
++      for item in current[:MAX_CURRENT_ROWS]:
++        bar_w = 300
++        text_w = w - bar_w - 140
++        gui_label(rl.Rectangle(x, y, text_w, 60), describe_upload(item["path"]), 46)
++        bar = rl.Rectangle(x + w - bar_w - 120, y + 18, bar_w, 24)
++        rl.draw_rectangle_rounded(bar, 1.0, 10, BAR_BG)
++        rl.draw_rectangle_rounded(rl.Rectangle(bar.x, bar.y, max(bar.height, bar.width * item["progress"]), bar.height), 1.0, 10, BAR_FG)
++        gui_label(rl.Rectangle(x, y, w, 60), f"{item['progress'] * 100:.0f}%", 46, alignment=TextAlignment.RIGHT)
++        y += 75
++      if not current:
++        gui_label(rl.Rectangle(x, y, w, 60), tr("Idle. comma pulls segments when it needs them."), 46, LABEL_COLOR)
++        y += 75
++      y += 75 * (MAX_CURRENT_ROWS - max(len(current[:MAX_CURRENT_ROWS]), 1))
++
++      parts = []
++      if current:
++        parts.append(f"{format_bytes(status['speed'])}/s")
++      if len(current) > MAX_CURRENT_ROWS:
++        parts.append(tr("{} more uploading").format(len(current) - MAX_CURRENT_ROWS))
++      parts.append(tr("{} waiting").format(status["queued"]))
++      gui_label(rl.Rectangle(x, y, w, 60), " · ".join(parts), 46, LABEL_COLOR)
++    y += 100
++
++    # Session + device summary
++    label_w = 330
++    if status is not None:
++      session = tr("{} uploaded · {}").format(status["success"], format_bytes(status["bytes_done"]))
++      if status["failed"]:
++        session += tr(" · {} failed").format(status["failed"])
++    else:
++      session = "–"
++    gui_label(rl.Rectangle(x, y, label_w, 60), tr("THIS SESSION"), 40, LABEL_COLOR, FontWeight.BOLD)
++    gui_label(rl.Rectangle(x + label_w, y, w - label_w, 60), session, 46)
++    y += 75
++
++    hours = s.segments / 60
++    device = tr("{} drives · {:.0f} h · {}% full").format(s.drives, hours, s.disk_used_pct)
++    gui_label(rl.Rectangle(x, y, label_w, 60), tr("ON DEVICE"), 40, LABEL_COLOR, FontWeight.BOLD)
++    gui_label(rl.Rectangle(x + label_w, y, w - label_w, 60), device, 46)
++    y += 75
++
++    logs = tr("{} of {} uploaded").format(s.qlogs_uploaded, s.segments)
++    gui_label(rl.Rectangle(x, y, label_w, 60), tr("DRIVE LOGS"), 40, LABEL_COLOR, FontWeight.BOLD)
++    gui_label(rl.Rectangle(x + label_w, y, w - label_w, 60), logs, 46)
+diff --git a/openpilot/selfdrive/ui/widgets/prime.py b/openpilot/selfdrive/ui/widgets/prime.py
+index e98e4c1..3265d63 100644
+--- a/openpilot/selfdrive/ui/widgets/prime.py
++++ b/openpilot/selfdrive/ui/widgets/prime.py
+@@ -1,5 +1,6 @@
+ import pyray as rl
+ 
++from openpilot.jay.widgets.upload_card import UploadCardWidget
+ from openpilot.selfdrive.ui.ui_state import ui_state
+ from openpilot.system.ui.lib.application import gui_app, FontWeight
+ from openpilot.system.ui.lib.multilang import tr
+@@ -14,11 +15,16 @@ class PrimeWidget(Widget):
+ 
+   PRIME_BG_COLOR = rl.Color(51, 51, 51, 255)
+ 
++  def __init__(self):
++    super().__init__()
++    self._upload_card = UploadCardWidget()
++
+   def _render(self, rect):
+     if ui_state.prime_state.is_prime():
+       self._render_for_prime_user(rect)
+     else:
+-      self._render_for_non_prime_users(rect)
++      # jay: live upload status instead of the prime ad
++      self._upload_card.render(rect)
+ 
+   def _render_for_non_prime_users(self, rect: rl.Rectangle):
+     """Renders the advertisement for non-Prime users."""
+diff --git a/openpilot/system/athena/athenad.py b/openpilot/system/athena/athenad.py
+index 9ae121e..6cdd705 100755
+--- a/openpilot/system/athena/athenad.py
++++ b/openpilot/system/athena/athenad.py
+@@ -46,6 +46,7 @@ from openpilot.system.loggerd.xattr_cache import getxattr, setxattr
+ from openpilot.tools.lib.helpers import RE
+ from openpilot.common.swaglog import cloudlog
+ from openpilot.common.version import get_build_metadata
++from openpilot.jay.upload_status import UploadStatusWriter
+ from openpilot.common.hardware.hw import Paths
+ from openpilot.system.athena.rpc import dispatcher, handle, is_call, is_response, loads
+ 
+@@ -144,6 +145,7 @@ log_recv_queue: Queue[str] = queue.Queue()
+ cancelled_uploads: set[str] = set()
+ 
+ cur_upload_items: dict[int, UploadItem | None] = {}
++upload_status = UploadStatusWriter()
+ 
+ send_seq = itertools.count()
+ def send_queue_push(data: str, priority: int) -> None:
+@@ -197,6 +199,7 @@ def handle_long_poll(ws: WebSocket, exit_event: threading.Event | None) -> None:
+     threading.Thread(target=upload_handler, args=(end_event,), name='upload_handler4'),
+     threading.Thread(target=log_handler, args=(end_event,), name='log_handler'),
+     threading.Thread(target=stat_handler, args=(end_event,), name='stat_handler'),
++    threading.Thread(target=upload_status.run, args=(end_event, upload_queue, cur_upload_items), name='upload_status'),
+   ] + [
+     threading.Thread(target=jsonrpc_handler, args=(end_event,), name=f'worker_{x}')
+     for x in range(HANDLER_THREADS)
+@@ -314,13 +317,16 @@ def upload_handler(end_event: threading.Event) -> None:
+         with _do_upload(item, partial(cb, sm, item, tid, end_event)) as response:
+           if response.status_code not in (200, 201, 401, 403, 412):
+             cloudlog.event("athena.upload_handler.retry", status_code=response.status_code, fn=fn, sz=sz, network_type=network_type, metered=metered)
++            upload_status.record_failure()
+             retry_upload(tid, end_event)
+           else:
+             cloudlog.event("athena.upload_handler.success", fn=fn, sz=sz, network_type=network_type, metered=metered)
++            upload_status.record_success(fn, sz)
+ 
+         UploadQueueCache.cache(upload_queue)
+       except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.SSLError):
+         cloudlog.event("athena.upload_handler.timeout", fn=fn, sz=sz, network_type=network_type, metered=metered)
++        upload_status.record_failure()
+         retry_upload(tid, end_event)
+       except AbortTransferException:
+         cloudlog.event("athena.upload_handler.abort", fn=fn, sz=sz, network_type=network_type, metered=metered)
+diff --git a/openpilot/system/ui/sunnypilot/widgets/screen_saver.py b/openpilot/system/ui/sunnypilot/widgets/screen_saver.py
+index bf21830..155f262 100644
+--- a/openpilot/system/ui/sunnypilot/widgets/screen_saver.py
++++ b/openpilot/system/ui/sunnypilot/widgets/screen_saver.py
+@@ -11,6 +11,7 @@ import pyray as rl
+ 
+ from openpilot.common.hardware import HARDWARE
+ from openpilot.common.params import Params
++from openpilot.jay.upload_status import shared_upload_stats, status_summary
+ from openpilot.system.ui.lib.application import gui_app, FontWeight
+ from openpilot.system.ui.lib.text_measure import measure_text_cached
+ from openpilot.system.ui.widgets import Widget
+@@ -25,13 +26,23 @@ class ScreenSaverSP(Widget):
+ 
+     self.x = 0.0
+     self.y = 100.0
+-    self.vx = 120.0 if self._is_mici else 300.0
+-    self.vy = 70.0 if self._is_mici else 200.0
++    # jay: drifts slowly (burn-in safe) and shows Firehose upload status instead of the bouncing logo
++    self.vx = 30.0 if self._is_mici else 90.0
++    self.vy = 18.0 if self._is_mici else 60.0
+     self._hue = 150
+-    self.color = rl.color_from_hsv(self._hue, 1, 1)
+-
+-    self.text = "sunnypilot"
+-    self.font_size = 50 if self._is_mici else 200
++    self.color = rl.color_from_hsv(self._hue, 0.45, 0.8)
++
++    self.title_size = 36 if self._is_mici else 110
++    self.line_size = 18 if self._is_mici else 52
++    self.line_gap = 6 if self._is_mici else 20
++    self.bar_height = 4 if self._is_mici else 12
++    self.min_width = 200 if self._is_mici else 700
++    self.title = ""
++    self.line = ""
++    self.progress: float | None = None
++    self._stats = shared_upload_stats()
++    self.logo_width = 0.0
++    self.logo_height = 0.0
+     self._start_time = None
+     self._dismiss = False
+     self._screensaver_timeout = 300
+@@ -65,10 +76,13 @@ class ScreenSaverSP(Widget):
+   def _update_state(self):
+     super()._update_state()
+ 
+-    self.font = gui_app.font(FontWeight.AUDIOWIDE)
+-    text_size = measure_text_cached(self.font, self.text, self.font_size, 0)
+-    self.logo_width = text_size.x
+-    self.logo_height = text_size.y
++    self._update_text()
++    self.title_font = gui_app.font(FontWeight.BOLD)
++    self.line_font = gui_app.font(FontWeight.NORMAL)
++    title_size = measure_text_cached(self.title_font, self.title, self.title_size, 0)
++    line_size = measure_text_cached(self.line_font, self.line, self.line_size, 0)
++    self.logo_width = max(title_size.x, line_size.x, self.min_width)
++    self.logo_height = title_size.y + self.line_gap + line_size.y + 2 * self.line_gap + self.bar_height
+ 
+     if self._start_time and time.monotonic() - self._start_time > self._screensaver_timeout:
+       self._dismiss = True
+@@ -103,7 +117,7 @@ class ScreenSaverSP(Widget):
+       while self._hue_dist((new_hue := rl.get_random_value(0, 360)), self._hue) < 120:
+         pass
+       self._hue = new_hue
+-      self.color = rl.color_from_hsv(self._hue, 1, 1)
++      self.color = rl.color_from_hsv(self._hue, 0.45, 0.8)
+     self._hit_last_frame = hit
+ 
+   @staticmethod
+@@ -111,8 +125,27 @@ class ScreenSaverSP(Widget):
+     d = abs(a - b)
+     return min(d, 360 - d)
+ 
++  def _update_text(self):
++    from openpilot.selfdrive.ui.ui_state import ui_state  # imported lazily: ui_state imports this module
++
++    self._stats.update()
++    ds = ui_state.sm["deviceState"]
++    self.line, self.progress = status_summary(self._stats, str(ds.networkType), ds.networkMetered)
++    count = self._stats.firehose
++    self.title = "Firehose" if count is None else f"Firehose {count}"
++    if self._stats.firehose_delta > 0:
++      self.title += f" (+{self._stats.firehose_delta})"
++
+   def _render(self, rect: rl.Rectangle):
+     self.set_rect(rect)
+     rl.clear_background(rl.BLACK)
+-    rl.draw_text_ex(self.font, self.text, rl.Vector2(int(self.x), int(self.y)), self.font_size, 0, self.color)
++    x, y = int(self.x), int(self.y)
++    rl.draw_text_ex(self.title_font, self.title, rl.Vector2(x, y), self.title_size, 0, self.color)
++    y += int(measure_text_cached(self.title_font, self.title, self.title_size, 0).y) + self.line_gap
++    rl.draw_text_ex(self.line_font, self.line, rl.Vector2(x, y), self.line_size, 0, rl.Color(140, 140, 140, 255))
++    if self.progress is not None:
++      y += int(measure_text_cached(self.line_font, self.line, self.line_size, 0).y) + 2 * self.line_gap
++      bar = rl.Rectangle(x, y, self.logo_width, self.bar_height)
++      rl.draw_rectangle_rounded(bar, 1.0, 10, rl.Color(50, 50, 50, 255))
++      rl.draw_rectangle_rounded(rl.Rectangle(x, y, max(bar.height, bar.width * self.progress), bar.height), 1.0, 10, rl.Color(60, 75, 190, 255))
+     return -1
