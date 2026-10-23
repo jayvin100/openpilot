@@ -4,9 +4,12 @@
   scripts/device.py screen [out.png]        save what the device shows (default: screens/latest.png)
   scripts/device.py tap X Y                 tap at UI coordinates (2160x1080, origin top-left)
   scripts/device.py swipe X1 Y1 X2 Y2 [ms]  drag from one point to another (default 300 ms)
+  scripts/device.py push TREE FILE...       copy files from a worktree (paths relative to TREE) into /data/openpilot
+  scripts/device.py restart-ui              restart the UI process (picks up pushed files)
 
 Screenshots need the screenshot hook from patches/ (openpilot/jay/screenshot.py) and the screen to be on.
 Touches are injected into the touchscreen's evdev node, so the UI sees them as real finger input.
+Pushed files are for quick testing only: the next reboot swaps the finalized build back in.
 """
 import os
 import subprocess
@@ -70,6 +73,27 @@ rm -f {REQUEST_PATH}; exit 3
   print(out)
 
 
+UI_PATTERN = "^/usr/local/venv/bin/python -m openpilot[.]selfdrive[.]ui[.]ui"
+START_UI = ("cd /data/openpilot; source launch_env.sh; PYTHONPATH=/data/openpilot setsid nohup "
+            "/usr/local/venv/bin/python -m openpilot.selfdrive.ui.ui >/tmp/jay_ui.log 2>&1 </dev/null & disown")
+
+
+def push(tree: str, files: list[str]) -> None:
+  for f in files:
+    dest = f"/data/openpilot/{f}"
+    subprocess.run(SSH + [f"mkdir -p {os.path.dirname(dest)}"], check=True)
+    subprocess.run(["scp", "-q", "-i", KEY, os.path.join(tree, f), f"{HOST}:{dest}"], check=True)
+    print(dest)
+
+
+def restart_ui() -> None:
+  # pkill -f would match this ssh session's own command line, so look the PID up with an anchored pattern
+  subprocess.run(SSH + [f'pid=$(pgrep -f "{UI_PATTERN}"); [ -n "$pid" ] && kill $pid; sleep 1'], check=True)
+  # a separate ssh call, so the new UI isn't tied to the session that killed the old one
+  subprocess.run(SSH + [START_UI], check=True)
+  print("UI restarted, log: /tmp/jay_ui.log")
+
+
 def main() -> None:
   if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
     sys.exit(__doc__)
@@ -83,6 +107,10 @@ def main() -> None:
     duration = (float(args[4]) if len(args) == 5 else 300) / 1000
     steps = max(int(duration / 0.016), 2)
     inject([(x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps) for i in range(steps + 1)], duration / steps)
+  elif cmd == "push" and len(args) >= 2:
+    push(args[0], args[1:])
+  elif cmd == "restart-ui" and not args:
+    restart_ui()
   else:
     sys.exit(__doc__)
 

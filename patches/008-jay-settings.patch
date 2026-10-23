@@ -1,0 +1,86 @@
+diff --git a/openpilot/jay/settings_panel.py b/openpilot/jay/settings_panel.py
+new file mode 100644
+index 0000000..8063a65
+--- /dev/null
++++ b/openpilot/jay/settings_panel.py
+@@ -0,0 +1,42 @@
++"""Settings panel for jay's customizations. Values live in openpilot.jay.config, not Params."""
++from openpilot.jay import config
++from openpilot.jay.home import DRIVES_PATH, JsonFile
++from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp
++from openpilot.system.ui.widgets import Widget
++from openpilot.system.ui.widgets.list_view import text_item
++from openpilot.system.ui.widgets.scroller_tici import Scroller
++
++
++def config_toggle(key: str, title: str, description: str):
++  return toggle_item_sp(title=title, description=description, initial_state=bool(config.get(key)),
++                        callback=lambda state: config.put(key, bool(state)))
++
++
++class JaySettingsLayout(Widget):
++  def __init__(self):
++    super().__init__()
++    self._drives = JsonFile(DRIVES_PATH, interval=10.0)
++    items = [
++      config_toggle("onroad_minimal", "Minimal Driving Screen",
++                    "Show only speed, set speed, the path and alerts while driving. Alerts and driver monitoring always stay on."),
++      config_toggle("onroad_takeovers", "Takeover Counter",
++                    "Show takeovers and % engaged for the current drive in a corner of the driving screen."),
++      config_toggle("screensaver_dim_night", "Dim Screensaver at Night",
++                    "Dim the clock screensaver between 9 pm and 7 am."),
++      config_toggle("storage_auto_clean", "Auto-clean Storage",
++                    "When free space drops below 15%, delete video comma has already uploaded, then video older than 7 days, "
++                    "then video older than a day, until 18% is free. Drive logs are kept."),
++      text_item("Recorded Drives", self._drive_count,
++                "Drive stats are worked out from the logs on the device after each drive."),
++    ]
++    self._scroller = Scroller(items, line_separator=True, spacing=0)
++
++  def _drive_count(self) -> str:
++    data = self._drives.get() or {}
++    return str(len(data.get("drives", [])))
++
++  def _render(self, rect):
++    self._scroller.render(rect)
++
++  def show_event(self):
++    self._scroller.show_event()
+diff --git a/openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py b/openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
+index 1b85c09..c9b861a 100644
+--- a/openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
++++ b/openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
+@@ -31,6 +31,8 @@ from openpilot.system.ui.lib.wifi_manager import WifiManager
+ from openpilot.system.ui.sunnypilot.lib.styles import style
+ from openpilot.system.ui.widgets import Widget
+ from openpilot.system.ui.widgets.scroller_tici import Scroller
++from openpilot.common.params import Params
++from openpilot.jay.settings_panel import JaySettingsLayout
+ 
+ # from openpilot.selfdrive.ui.sunnypilot.layouts.settings.navigation import NavigationLayout
+ 
+@@ -50,6 +52,7 @@ OP.PanelType = IntEnum(  # type: ignore[assignment] # ty: ignore[invalid-assignm
+     "NAVIGATION",
+     "TRIPS",
+     "VEHICLE",
++    "JAY",
+   ],
+   start=0,
+ )
+@@ -109,6 +112,7 @@ class SettingsLayoutSP(OP.SettingsLayout):
+     wifi_manager.set_active(False)
+ 
+     self._panels = {
++      OP.PanelType.JAY: PanelInfo("Jay", JaySettingsLayout(), icon="icons/road.png"),
+       OP.PanelType.DEVICE: PanelInfo(tr_noop("Device"), DeviceLayoutSP(), icon="../../sunnypilot/selfdrive/assets/offroad/icon_home.png"),
+       OP.PanelType.NETWORK: PanelInfo(tr_noop("Network"), NetworkUISP(wifi_manager), icon="icons/network.png"),
+       OP.PanelType.SUNNYLINK: PanelInfo(tr_noop("sunnylink"), SunnylinkLayout(), icon="icons/wifi_strength_full.png"),
+@@ -126,6 +130,8 @@ class SettingsLayoutSP(OP.SettingsLayout):
+       OP.PanelType.FIREHOSE: PanelInfo(tr_noop("Firehose"), FirehoseLayout(), icon="../../sunnypilot/selfdrive/assets/offroad/icon_firehose.png"),
+       OP.PanelType.DEVELOPER: PanelInfo(tr_noop("Developer"), DeveloperLayoutSP(), icon="icons/shell.png"),
+     }
++    if not Params().get_bool("SunnylinkEnabled"):  # jay: sunnylink isn't used
++      del self._panels[OP.PanelType.SUNNYLINK]
+ 
+   def _draw_sidebar(self, rect: rl.Rectangle):
+     rl.draw_rectangle_rec(rect, OP.SIDEBAR_COLOR)

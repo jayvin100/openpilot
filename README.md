@@ -20,6 +20,17 @@ The workflow in `.github/workflows/build.yml` runs every 3 hours, and whenever `
 ## Device screen
 
 `scripts/device.py screen | tap X Y | swipe X1 Y1 X2 Y2 [ms]` takes screenshots and injects touches over SSH. Screenshots need `patches/002`.
+`scripts/device.py push TREE FILE...` and `restart-ui` copy files from a worktree to the device and restart the UI, for quick testing.
+`scripts/drive_report.py [N|route]` prints a drive's takeovers, their causes, and steering stats.
+
+## What the patches change
+
+- **Home:** one dashboard with the last drive (distance, % engaged, takeovers), live Firehose uploads, and storage. Replaces the prime ad and the Firehose prompt. The sunnylink box and panel are hidden.
+- **Screensaver:** a still clock with upload status, shifted a few pixels each minute against OLED burn-in, dimmed at night.
+- **Storage:** below 15% free, deletes video comma already uploaded, then video older than 7 days, then video older than a day, until 18% is free. Logs are kept.
+- **Drive stats:** each drive is summarized from its qlogs after the car turns off.
+- **Driving screen:** optional minimal mode and a takeover counter. Alerts and driver monitoring are never hidden.
+- **Settings:** a "Jay" panel for all of the above.
 
 ## Back to official
 

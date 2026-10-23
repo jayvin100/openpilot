@@ -1,0 +1,340 @@
+diff --git a/openpilot/jay/home.py b/openpilot/jay/home.py
+new file mode 100644
+index 0000000..095cfdb
+--- /dev/null
++++ b/openpilot/jay/home.py
+@@ -0,0 +1,282 @@
++"""Home screen dashboard: last drive, Firehose uploads and storage. Replaces the prime ad and the Firehose prompt."""
++import json
++import os
++import shutil
++import time
++from datetime import datetime, timedelta
++from zoneinfo import ZoneInfo
++
++import pyray as rl
++
++from openpilot.common.hardware.hw import Paths
++from openpilot.jay import config
++from openpilot.jay.guard import guarded
++from openpilot.jay.ui.theme import C, S, T, bar, card, dot, label, measure, pill, ring, stat, text, text_right, hline
++from openpilot.jay.upload_status import describe_upload, format_bytes, shared_upload_stats
++from openpilot.system.ui.lib.application import FontWeight
++from openpilot.system.ui.widgets import Widget
++
++DRIVES_PATH = "/data/jay/drives.json"
++STORAGE_PATH = "/data/jay/storage.json"
++GAP = S.MD
++LEFT_WIDTH = 860
++
++
++class JsonFile:
++  """Re-reads a JSON file when it changes, checking at most every `interval` seconds."""
++  def __init__(self, path: str, interval: float = 5.0):
++    self.path = path
++    self.interval = interval
++    self.data = None
++    self._mtime = -1.0
++    self._checked = 0.0
++
++  def get(self):
++    now = time.monotonic()
++    if now - self._checked >= self.interval:
++      self._checked = now
++      try:
++        mtime = os.path.getmtime(self.path)
++        if mtime != self._mtime:
++          with open(self.path) as f:
++            self.data = json.load(f)
++          self._mtime = mtime
++      except (OSError, ValueError):
++        pass
++    return self.data
++
++
++def local_time(ts: float) -> datetime:
++  try:
++    tz = ZoneInfo(str(config.get("timezone")))
++  except Exception:
++    tz = None
++  return datetime.fromtimestamp(ts, tz)
++
++
++def format_day(ts: float | None) -> str:
++  if not ts:
++    return ""
++  t = local_time(ts)
++  today = local_time(time.time()).date()
++  clock = t.strftime("%I:%M %p").lstrip("0").lower()
++  if t.date() == today:
++    return f"Today {clock}"
++  if t.date() == today - timedelta(days=1):
++    return f"Yesterday {clock}"
++  return t.strftime("%a %d %b").replace(" 0", " ") + f" {clock}"
++
++
++def format_duration(s: float) -> str:
++  m = int(round(s / 60))
++  return f"{m} min" if m < 60 else f"{m // 60} h {m % 60:02d} min"
++
++
++def pct(part: float, whole: float) -> int | None:
++  return round(100 * part / whole) if whole > 0 else None
++
++
++class JayHome(Widget):
++  def __init__(self):
++    super().__init__()
++    self._uploads = shared_upload_stats()
++    self._drives = JsonFile(DRIVES_PATH)
++    self._storage = JsonFile(STORAGE_PATH)
++    self._disk = (0, 0)
++    self._disk_checked = 0.0
++
++  def _update_state(self):
++    self._uploads.update()
++    now = time.monotonic()
++    if now - self._disk_checked > 10:
++      self._disk_checked = now
++      try:
++        du = shutil.disk_usage(Paths.log_root())
++        self._disk = (du.total, du.free)
++      except OSError:
++        pass
++
++  def _render(self, rect: rl.Rectangle):
++    left = rl.Rectangle(rect.x, rect.y, LEFT_WIDTH, rect.height)
++    right_w = rect.width - LEFT_WIDTH - GAP
++    half = (rect.height - GAP) / 2
++    self._draw_last_drive(left)
++    self._draw_uploads(rl.Rectangle(rect.x + LEFT_WIDTH + GAP, rect.y, right_w, half))
++    self._draw_storage(rl.Rectangle(rect.x + LEFT_WIDTH + GAP, rect.y + half + GAP, right_w, half))
++
++  # Last drive
++
++  @guarded()
++  def _draw_last_drive(self, rect: rl.Rectangle):
++    r = card(rect)
++    data = self._drives.get() or {}
++    drives = [d for d in data.get("drives", []) if d.get("moving_s", 0) > 60]
++    label("Last drive", r.x, r.y)
++    if not drives:
++      text("No drives yet", r.x, r.y + 90, T.H1, weight=FontWeight.BOLD)
++      text("Stats appear after your next drive.", r.x, r.y + 190, T.BODY, C.TEXT_DIM, max_width=r.width)
++      return
++
++    d = drives[-1]
++    text_right(format_day(d.get("start")), r.x + r.width, r.y - 4, T.SMALL, C.TEXT_DIM)
++
++    # Distance and duration
++    y = r.y + 70
++    km = d.get("distance_m", 0) / 1000
++    w = text(f"{km:.1f}", r.x, y, T.HERO, weight=FontWeight.BOLD)
++    text("km", r.x + w + S.SM, y + T.HERO - T.H2 - 22, T.H2, C.TEXT_DIM, FontWeight.SEMI_BOLD)
++    text(format_duration(d.get("duration_s", 0)) + " drive", r.x, y + T.HERO + 10, T.BODY, C.TEXT_DIM)
++
++    # Engaged ring
++    engaged = pct(d.get("engaged_moving_s", d.get("engaged_s", 0)), d.get("moving_s", 0))
++    cx, cy, radius = r.x + r.width - 125, y + 115, 125
++    ring(cx, cy, radius, 22, (engaged or 0) / 100, C.GREEN)
++    value = f"{engaged}%" if engaged is not None else "-"
++    vw = measure(value, T.H2, FontWeight.BOLD).x
++    text(value, cx - vw / 2, cy - 48, T.H2, weight=FontWeight.BOLD)
++    cw = measure("engaged", T.SMALL).x
++    text("engaged", cx - cw / 2, cy + 12, T.SMALL, C.TEXT_DIM)
++
++    # Takeovers, nudges, average speed
++    y = r.y + 400
++    hline(r.x, y, r.width)
++    y += S.LG
++    col = r.width / 3
++    avg = d.get("distance_m", 0) / d["moving_s"] * 3.6 if d.get("moving_s") else 0
++    takeovers = d.get("disengagements", 0)
++    stat(str(takeovers), "takeovers", r.x, y, color=C.YELLOW if takeovers else C.TEXT)
++    stat(str(d.get("steer_overrides", 0)), "nudges", r.x + col, y)
++    stat(f"{avg:.0f}", "avg km/h", r.x + 2 * col, y)
++
++    # Last 7 days
++    y = r.y + r.height - 125
++    hline(r.x, y - S.LG, r.width)
++    week_start = time.time() - 7 * 24 * 3600
++    week = [x for x in drives if (x.get("start") or x.get("summarized_at") or 0) >= week_start]
++    label("Last 7 days", r.x, y)
++    if week:
++      dist = sum(x.get("distance_m", 0) for x in week) / 1000
++      eng = pct(sum(x.get("engaged_moving_s", x.get("engaged_s", 0)) for x in week), sum(x.get("moving_s", 0) for x in week))
++      parts = [f"{len(week)} drive{'s' if len(week) != 1 else ''}", f"{dist:.0f} km"]
++      if eng is not None:
++        parts.append(f"{eng}% engaged")
++      text(" • ".join(parts), r.x, y + 50, T.BODY, max_width=r.width)
++    else:
++      text("No drives", r.x, y + 50, T.BODY, C.TEXT_DIM)
++
++  # Uploads
++
++  def _network_pill(self) -> tuple[str, rl.Color]:
++    from openpilot.selfdrive.ui.ui_state import ui_state  # imported lazily: ui_state is heavy and imports UI modules
++    ds = ui_state.sm["deviceState"]
++    network = str(ds.networkType)
++    if network == "none":
++      return "Offline", C.RED
++    if ds.networkMetered:
++      return "Paused on mobile data", C.YELLOW
++    if self._uploads.status is None:
++      return "Connecting", C.TEXT_DIM
++    return "Wi-Fi" if network == "wifi" else "Online", C.GREEN
++
++  @guarded()
++  def _draw_uploads(self, rect: rl.Rectangle):
++    r = card(rect)
++    s = self._uploads
++    label("Firehose uploads", r.x, r.y)
++    pill_text, pill_color = self._network_pill()
++    pill(pill_text, r.x + r.width, r.y - 14, pill_color, right_align=True)
++
++    y = r.y + 60
++    count = "-" if s.firehose is None else str(s.firehose)
++    w = text(count, r.x, y, T.DISPLAY, weight=FontWeight.BOLD)
++    text("segments in", r.x + w + S.MD, y + 14, T.SMALL, C.TEXT_DIM)
++    text("training data", r.x + w + S.MD, y + 58, T.SMALL, C.TEXT_DIM)
++    if s.firehose_delta > 0:
++      text_right(f"+{s.firehose_delta} today", r.x + r.width, y + 36, T.BODY, C.GREEN, FontWeight.SEMI_BOLD)
++
++    y = r.y + r.height - 125
++    status = s.status
++    if status is None:
++      text("Waiting for comma to connect", r.x, y, T.BODY, C.TEXT_DIM)
++      return
++    current = sorted(status["current"], key=lambda c: -c["progress"])
++    if current:
++      top = current[0]
++      p = f"{top['progress'] * 100:.0f}%"
++      pw = text_right(p, r.x + r.width, y, T.BODY, C.TEXT_DIM)
++      text(describe_upload(top["path"]), r.x, y, T.BODY, max_width=r.width - pw - S.MD)
++      bar(rl.Rectangle(r.x, y + 66, r.width, 12), top["progress"], C.BLUE)
++      parts = [f"{format_bytes(status['speed'])}/s", f"{len(current)} uploading", f"{status['queued']} waiting"]
++      text(" • ".join(parts), r.x, y + 96, T.SMALL, C.TEXT_DIM, max_width=r.width)
++    else:
++      text("Idle", r.x, y, T.BODY)
++      queued = status["queued"]
++      sub = f"{queued} waiting" if queued else "comma asks for segments when it needs them"
++      text(sub, r.x, y + 60, T.SMALL, C.TEXT_DIM, max_width=r.width)
++
++  # Storage
++
++  @guarded()
++  def _draw_storage(self, rect: rl.Rectangle):
++    r = card(rect)
++    st = self._storage.get() or {}
++    total = st.get("total_bytes") or self._disk[0]
++    free = st.get("free_bytes", self._disk[1]) if st and time.time() - st.get("t", 0) < 600 else self._disk[1]
++    label("Storage", r.x, r.y)
++
++    auto = config.get("storage_auto_clean")
++    if not auto:
++      pill("Auto-clean off", r.x + r.width, r.y - 14, C.TEXT_DIM, right_align=True)
++    elif st.get("cleaning"):
++      pill("Cleaning", r.x + r.width, r.y - 14, C.BLUE, right_align=True)
++    else:
++      pill("Auto-clean on", r.x + r.width, r.y - 14, C.GREEN, right_align=True)
++
++    y = r.y + 60
++    w = text(f"{free / 1e9:.0f} GB", r.x, y, T.DISPLAY, weight=FontWeight.BOLD)
++    text("free of", r.x + w + S.MD, y + 14, T.SMALL, C.TEXT_DIM)
++    text(f"{total / 1e9:.0f} GB" if total else "", r.x + w + S.MD, y + 58, T.SMALL, C.TEXT_DIM)
++
++    # Legend for the bar, right-aligned next to the free space
++    if st.get("video_bytes"):
++      for i, (name, size, color) in enumerate((("Video", st["video_bytes"], C.BLUE), ("Logs", st.get("log_bytes", 0), C.ACCENT))):
++        ly = y + 14 + i * 44
++        lw = text_right(f"{name} {format_bytes(size)}", r.x + r.width, ly, T.SMALL, C.TEXT_DIM)
++        dot(r.x + r.width - lw - 22, ly + T.SMALL / 2 + 2, 9, color)
++
++    # Usage bar: video, logs, everything else, free
++    y = r.y + r.height - 125
++    if total:
++      video, logs = st.get("video_bytes", 0), st.get("log_bytes", 0)
++      other = max(total - free - video - logs, 0)
++      x = r.x
++      rounded_track = rl.Rectangle(r.x, y, r.width, 22)
++      bar(rounded_track, 0)
++      for size, color in ((video, C.BLUE), (logs, C.ACCENT), (other, C.TEXT_FAINT)):
++        seg_w = r.width * size / total
++        if seg_w >= 1:
++          rl.draw_rectangle_rec(rl.Rectangle(x, y, seg_w, 22), color)
++          x += seg_w
++      # round the bar's ends over the square segments
++      rl.draw_rectangle_rounded_lines_ex(rl.Rectangle(r.x - 6, y - 6, r.width + 12, 34), 1.0, 16, 8, C.CARD)
++
++    hours = st.get("hours_left")
++    if auto and st.get("cleaning"):
++      line = "Clearing old video to make room"
++    elif auto and st.get("freed_bytes_total"):
++      line = f"Old video clears itself • {format_bytes(st['freed_bytes_total'])} freed so far"
++    elif auto:
++      line = "Old video clears itself when space runs low"
++    elif hours is not None:
++      line = f"About {hours:.0f} h of driving before old drives are removed" if hours >= 1 else "Full: oldest drives are being removed"
++    else:
++      line = ""
++    text(line, r.x, y + 50, T.SMALL, C.TEXT_DIM, max_width=r.width)
++
++
++def short_version(params) -> str:
++  """'2026.10.23-4973 / dev-jay / 8777fb0 / Oct 23' -> 'dev-jay • Oct 23'"""
++  parts = [p.strip() for p in (params.get("UpdaterCurrentDescription") or "").split("/")]
++  if len(parts) >= 4:
++    return f"{parts[1]} • {parts[3]}"
++  return " • ".join(p for p in parts if p)
+diff --git a/openpilot/selfdrive/ui/sunnypilot/layouts/home.py b/openpilot/selfdrive/ui/sunnypilot/layouts/home.py
+index 70a69ca..73e80aa 100644
+--- a/openpilot/selfdrive/ui/sunnypilot/layouts/home.py
++++ b/openpilot/selfdrive/ui/sunnypilot/layouts/home.py
+@@ -10,12 +10,20 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight, TextAlignme
+ from openpilot.system.ui.lib.text_measure import measure_text_cached
+ from openpilot.system.ui.lib.multilang import tr, trn
+ from openpilot.system.ui.widgets.label import gui_label
++from openpilot.jay.home import JayHome, short_version
+ 
+ BRAND_FONT_SIZE = 48
+ BRAND_DESC_SPACING = 12
+ 
+ 
+ class HomeLayoutSP(HomeLayout):
++  def __init__(self):
++    super().__init__()
++    self._jay_home = JayHome()  # jay: one dashboard instead of the prime ad and the Firehose prompt
++
++  def _render_home_content(self):
++    self._jay_home.render(self.content_rect)
++
+   def _render_header(self):
+     font = gui_app.font(FontWeight.MEDIUM)
+ 
+@@ -52,7 +60,7 @@ class HomeLayoutSP(HomeLayout):
+     version_left = version_right - version_text_width
+ 
+     brand = "sunnypilot"
+-    description = self.params.get("UpdaterCurrentDescription") or ""
++    description = short_version(self.params)  # jay
+ 
+     desc_width = 0
+     if description:
+diff --git a/openpilot/selfdrive/ui/sunnypilot/layouts/sidebar.py b/openpilot/selfdrive/ui/sunnypilot/layouts/sidebar.py
+index 815e701..bf363e3 100644
+--- a/openpilot/selfdrive/ui/sunnypilot/layouts/sidebar.py
++++ b/openpilot/selfdrive/ui/sunnypilot/layouts/sidebar.py
+@@ -106,9 +106,12 @@ class SidebarSP:
+     return icon, rl.Vector2(x, y), opacity
+ 
+   def _draw_metrics_w_sunnylink(self, rect: rl.Rectangle, _temp, _panda, _connect):
+-    metrics = [_temp, _panda, _connect, self._sunnylink_status]
++    metrics = [_temp, _panda, _connect]
++    if self._sunnylink_status.value != "DISABLED":  # jay: hide the sunnylink box when it's off
++      metrics.append(self._sunnylink_status)
+     start_y = int(rect.y) + METRIC_START_Y
+     available_height = max(0, int(HOME_BTN.y) - METRIC_MARGIN - METRIC_HEIGHT - start_y)
+     spacing = available_height / max(1, len(metrics) - 1)
++    spacing = min(spacing, METRIC_HEIGHT + 32)  # jay: keep boxes together when sunnylink is hidden
+ 
+     return metrics, start_y, spacing
