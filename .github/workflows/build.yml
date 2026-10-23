@@ -64,7 +64,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch -q --no-tags "$UPSTREAM_REPO" "$upstream_sha"
           git checkout -q FETCH_HEAD
-          upstream_title=$(git log -1 --format=%s)
+          upstream_title=$(git log -1 --format=%B | head -1)
 
           count=0
           for p in $patches; do
