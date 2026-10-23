@@ -1,6 +1,6 @@
-# jayvin100/sunnypilot
+# jayvin100/openpilot
 
-Personal openpilot build for a comma 3X on a Tesla Model 3 RWD (RHD). It started on sunnypilot and moved to openpilot; the repo name stayed.
+Personal openpilot build for a comma 3X on a Tesla Model 3 RWD (RHD).
 
 This branch (`tools`) holds only the build automation and patches. The installable branches are generated:
 
