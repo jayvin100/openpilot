@@ -19,4 +19,4 @@ The workflow in `.github/workflows/build.yml` runs every 3 hours, and whenever `
 
 ## Back to official
 
-On the device: `git -C /data/openpilot remote set-url origin https://github.com/sunnypilot/sunnypilot.git`, then set the target branch to `dev` in Settings → Software.
+On the device, run `git remote set-url origin https://github.com/sunnypilot/sunnypilot.git` in both `/data/openpilot` and `/data/safe_staging/merged`, which is the updater's overlay and has its own `.git/config`. Then set the target branch to `dev` in Settings → Software.
