@@ -1,16 +1,27 @@
 diff --git a/openpilot/jay/settings_panel.py b/openpilot/jay/settings_panel.py
 new file mode 100644
-index 0000000..8063a65
+index 0000000..4ddd054
 --- /dev/null
 +++ b/openpilot/jay/settings_panel.py
-@@ -0,0 +1,42 @@
-+"""Settings panel for jay's customizations. Values live in openpilot.jay.config, not Params."""
+@@ -0,0 +1,172 @@
++"""Settings for jay's customizations, and the trimming of the stock settings screen.
++
++JaySettingsLayout is the "Jay" panel. Its values live in openpilot.jay.config, not Params.
++arrange_panels() is called once from SettingsLayoutSP.__init__: it drops the panels jay doesn't use, puts the rest in a
++useful order, and hides settings that don't apply to this car. Hiding is worked out from the car's own params
++(CarParams / CarParamsSP), never from the brand name, and an item that is switched on is never hidden, so a hidden item
++is never the only way to turn something off.
++"""
++from collections.abc import Callable
++
++from opendbc.car.structs import car
++from openpilot.common.params import Params
 +from openpilot.jay import config
-+from openpilot.jay.home import DRIVES_PATH, JsonFile
++from openpilot.jay.guard import guarded
++from openpilot.selfdrive.ui.ui_state import ui_state
 +from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp
 +from openpilot.system.ui.widgets import Widget
-+from openpilot.system.ui.widgets.list_view import text_item
-+from openpilot.system.ui.widgets.scroller_tici import Scroller
++from openpilot.system.ui.widgets.scroller_tici import LineSeparator, Scroller
 +
 +
 +def config_toggle(key: str, title: str, description: str):
@@ -21,45 +32,177 @@ index 0000000..8063a65
 +class JaySettingsLayout(Widget):
 +  def __init__(self):
 +    super().__init__()
-+    self._drives = JsonFile(DRIVES_PATH, interval=10.0)
 +    items = [
 +      config_toggle("onroad_minimal", "Minimal Driving Screen",
 +                    "Show only speed, set speed, the path and alerts while driving. Alerts and driver monitoring always stay on."),
-+      config_toggle("onroad_takeovers", "Takeover Counter",
-+                    "Show takeovers and % engaged for the current drive in a corner of the driving screen."),
 +      config_toggle("screensaver_dim_night", "Dim Screensaver at Night",
 +                    "Dim the clock screensaver between 9 pm and 7 am."),
 +      config_toggle("storage_auto_clean", "Auto-clean Storage",
 +                    "When free space drops below 15%, delete video comma has already uploaded, then video older than 7 days, "
 +                    "then video older than a day, until 18% is free. Drive logs are kept."),
-+      text_item("Recorded Drives", self._drive_count,
-+                "Drive stats are worked out from the logs on the device after each drive."),
 +    ]
 +    self._scroller = Scroller(items, line_separator=True, spacing=0)
-+
-+  def _drive_count(self) -> str:
-+    data = self._drives.get() or {}
-+    return str(len(data.get("drives", [])))
 +
 +  def _render(self, rect):
 +    self._scroller.render(rect)
 +
 +  def show_event(self):
 +    self._scroller.show_event()
++
++
++# Sidebar order, by PanelType name. Panels not listed here (new upstream ones) go at the end.
++PANEL_ORDER = ("JAY", "STEERING", "CRUISE", "TOGGLES", "VISUALS", "DISPLAY", "MODELS", "VEHICLE", "OSM",
++               "NETWORK", "SUNNYLINK", "DEVICE", "SOFTWARE", "DEVELOPER")
++# NAVIGATION is an empty stub (upstream has it commented out), TRIPS is comma's drive stats, and the home screen
++# already shows Firehose uploads.
++REMOVED_PANELS = ("NAVIGATION", "TRIPS", "FIREHOSE")
++
++# Removed panel widgets are kept alive here. Firehose's background thread is what refreshes ApiCache_FirehoseStats,
++# the count on the home screen and screensaver, so it must keep running with its panel gone.
++_removed: list = []
++
++
++@guarded()
++def arrange_panels(panels: dict) -> dict:
++  """Returns the panels to show, in order. Called once with SettingsLayoutSP's panel dict; None (on error) keeps stock."""
++  removed = set(REMOVED_PANELS)
++  if not Params().get_bool("SunnylinkEnabled"):  # sunnylink isn't used
++    removed.add("SUNNYLINK")
++
++  kept = {}
++  for panel_type, info in panels.items():
++    if panel_type.name in removed:
++      _removed.append(info.instance)
++      if panel_type.name == "TRIPS":
++        info.instance._running = False  # stops its comma API poll; nothing else reads ApiCache_DriveStats
++    else:
++      kept[panel_type] = info
++
++  rank = {name: i for i, name in enumerate(PANEL_ORDER)}
++  ordered = dict(sorted(kept.items(), key=lambda kv: rank.get(kv[0].name, len(PANEL_ORDER))))
++
++  by_name = {panel_type.name: info.instance for panel_type, info in ordered.items()}
++  if "STEERING" in by_name:
++    _trim_steering(by_name["STEERING"])
++  if "CRUISE" in by_name:
++    _trim_cruise(by_name["CRUISE"])
++  if "DEVELOPER" in by_name:
++    _trim_developer(by_name["DEVELOPER"])
++  return ordered
++
++
++@guarded(default=False)
++def _hidden(hide: Callable[[], bool]) -> bool:
++  return bool(hide())
++
++
++def hide_when(item: Widget, hide: Callable[[], bool]) -> None:
++  """Keeps item hidden while hide() is true, whatever the panel sets. The panel's own set_visible() calls are remembered
++  and take effect again when hide() is false. If hide() raises, items are shown (stock behavior)."""
++  wanted = [item._is_visible]
++
++  def set_visible(visible):
++    wanted[0] = visible
++
++  def is_visible() -> bool:
++    if _hidden(hide):
++      return False
++    return bool(wanted[0]()) if callable(wanted[0]) else bool(wanted[0])
++
++  item.set_visible = set_visible  # type: ignore[method-assign]
++  item._is_visible = is_visible
++
++
++def _is_on(item) -> bool:
++  return item.action_item.get_state()
++
++
++def _separator_before(scroller: Scroller, item: Widget) -> Widget | None:
++  items = scroller._items
++  i = items.index(item)
++  return items[i - 1] if i > 0 and isinstance(items[i - 1], LineSeparator) else None
++
++
++@guarded()
++def _trim_steering(layout) -> None:
++  # Torque-only lateral settings mean nothing on an angle-steering car (Tesla). ui_state already clears their params
++  # there; stock only greys them out.
++  def angle_car() -> bool:
++    return ui_state.CP is not None and ui_state.CP.steerControlType == car.CarParams.SteerControlType.angle
++
++  torque, torque_button, nnlc = layout._torque_control_toggle, layout._torque_customization_button, layout._nnlc_toggle
++
++  def hide_torque() -> bool:
++    return angle_car() and not _is_on(torque)
++
++  def hide_nnlc() -> bool:
++    return angle_car() and not _is_on(nnlc)
++
++  hide_when(torque, hide_torque)
++  hide_when(torque_button, hide_torque)
++  hide_when(nnlc, hide_nnlc)
++  for item, hide in ((torque, hide_torque), (nnlc, hide_nnlc)):
++    if (sep := _separator_before(layout._scroller, item)) is not None:
++      hide_when(sep, hide)
++
++
++@guarded()
++def _trim_cruise(layout) -> None:
++  def car_known() -> bool:
++    return ui_state.CP is not None and ui_state.CP_SP is not None
++
++  # Same conditions CruiseLayout._update_state uses to enable these.
++  def icbm_applies() -> bool:
++    return ui_state.CP_SP.intelligentCruiseButtonManagementAvailable and not ui_state.has_longitudinal_control
++
++  def custom_acc_applies() -> bool:
++    return (ui_state.has_longitudinal_control and not ui_state.CP.pcmCruise) or ui_state.has_icbm
++
++  icbm, acc = layout.icbm_toggle, layout.custom_acc_toggle
++
++  def hide_icbm() -> bool:
++    return car_known() and not icbm_applies() and not _is_on(icbm)
++
++  def hide_acc() -> bool:  # the increments are only shown with the toggle on, so they go with it
++    return car_known() and not custom_acc_applies() and not _is_on(acc)
++
++  hide_when(icbm, hide_icbm)
++  for item in (acc, layout.custom_acc_short_increment, layout.custom_acc_long_increment):
++    hide_when(item, hide_acc)
++
++
++@guarded()
++def _trim_developer(layout) -> None:
++  # Services jay doesn't use.
++  for item in (layout.enable_github_runner_toggle, layout.enable_copyparty_toggle):
++    hide_when(item, lambda item=item: not _is_on(item))
+diff --git a/openpilot/selfdrive/ui/layouts/main.py b/openpilot/selfdrive/ui/layouts/main.py
+index 2e002b0..3d594c0 100644
+--- a/openpilot/selfdrive/ui/layouts/main.py
++++ b/openpilot/selfdrive/ui/layouts/main.py
+@@ -111,7 +111,8 @@ class MainLayout(Widget):
+     self._sidebar.set_visible(False)
+ 
+   def _on_settings_clicked(self):
+-    self.open_settings(PanelType.DEVICE)
++    from openpilot.selfdrive.ui.layouts.settings import settings as op_settings  # jay: PanelType is replaced by sunnypilot after import
++    self.open_settings(getattr(op_settings.PanelType, "JAY", PanelType.DEVICE))  # jay: the gear opens the first panel
+ 
+   def _on_bookmark_clicked(self):
+     for service in ('bookmarkButton', 'userBookmark'):
 diff --git a/openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py b/openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
-index 1b85c09..c9b861a 100644
+index 1b85c09..68ad6f3 100644
 --- a/openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
 +++ b/openpilot/selfdrive/ui/sunnypilot/layouts/settings/settings.py
-@@ -31,6 +31,8 @@ from openpilot.system.ui.lib.wifi_manager import WifiManager
+@@ -31,6 +31,7 @@ from openpilot.system.ui.lib.wifi_manager import WifiManager
  from openpilot.system.ui.sunnypilot.lib.styles import style
  from openpilot.system.ui.widgets import Widget
  from openpilot.system.ui.widgets.scroller_tici import Scroller
-+from openpilot.common.params import Params
-+from openpilot.jay.settings_panel import JaySettingsLayout
++from openpilot.jay.settings_panel import JaySettingsLayout, arrange_panels
  
  # from openpilot.selfdrive.ui.sunnypilot.layouts.settings.navigation import NavigationLayout
  
-@@ -50,6 +52,7 @@ OP.PanelType = IntEnum(  # type: ignore[assignment] # ty: ignore[invalid-assignm
+@@ -50,6 +51,7 @@ OP.PanelType = IntEnum(  # type: ignore[assignment] # ty: ignore[invalid-assignm
      "NAVIGATION",
      "TRIPS",
      "VEHICLE",
@@ -67,7 +210,7 @@ index 1b85c09..c9b861a 100644
    ],
    start=0,
  )
-@@ -109,6 +112,7 @@ class SettingsLayoutSP(OP.SettingsLayout):
+@@ -109,6 +111,7 @@ class SettingsLayoutSP(OP.SettingsLayout):
      wifi_manager.set_active(False)
  
      self._panels = {
@@ -75,12 +218,21 @@ index 1b85c09..c9b861a 100644
        OP.PanelType.DEVICE: PanelInfo(tr_noop("Device"), DeviceLayoutSP(), icon="../../sunnypilot/selfdrive/assets/offroad/icon_home.png"),
        OP.PanelType.NETWORK: PanelInfo(tr_noop("Network"), NetworkUISP(wifi_manager), icon="icons/network.png"),
        OP.PanelType.SUNNYLINK: PanelInfo(tr_noop("sunnylink"), SunnylinkLayout(), icon="icons/wifi_strength_full.png"),
-@@ -126,6 +130,8 @@ class SettingsLayoutSP(OP.SettingsLayout):
+@@ -126,6 +129,7 @@ class SettingsLayoutSP(OP.SettingsLayout):
        OP.PanelType.FIREHOSE: PanelInfo(tr_noop("Firehose"), FirehoseLayout(), icon="../../sunnypilot/selfdrive/assets/offroad/icon_firehose.png"),
        OP.PanelType.DEVELOPER: PanelInfo(tr_noop("Developer"), DeveloperLayoutSP(), icon="icons/shell.png"),
      }
-+    if not Params().get_bool("SunnylinkEnabled"):  # jay: sunnylink isn't used
-+      del self._panels[OP.PanelType.SUNNYLINK]
++    self._panels = arrange_panels(self._panels) or self._panels  # jay: drop unused panels, reorder, hide what doesn't apply
  
    def _draw_sidebar(self, rect: rl.Rectangle):
      rl.draw_rectangle_rec(rect, OP.SIDEBAR_COLOR)
+@@ -193,6 +197,9 @@ class SettingsLayoutSP(OP.SettingsLayout):
+         self.set_current_panel(panel_type)
+         return
+ 
++  def set_current_panel(self, panel_type):  # jay: a removed panel (Firehose from the home screen) opens Device
++    super().set_current_panel(panel_type if panel_type in self._panels else OP.PanelType.DEVICE)
++
+   def show_event(self):
+     super().show_event()
+     self._panels[self._current_panel].instance.show_event()

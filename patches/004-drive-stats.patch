@@ -1,20 +1,17 @@
 diff --git a/openpilot/jay/drives.py b/openpilot/jay/drives.py
 new file mode 100644
-index 0000000..328ef9b
+index 0000000..b4955c5
 --- /dev/null
 +++ b/openpilot/jay/drives.py
-@@ -0,0 +1,528 @@
-+"""Per-drive stats for the home screen, the driving screen and drive reports.
+@@ -0,0 +1,478 @@
++"""Per-drive stats for the home screen and drive reports.
 +
 +Offroad, the jaydrives process summarizes finished routes from their qlogs into DRIVES_PATH.
 +qlogs keep every 10th carState, selfdriveState(SP), carControl and controlsState (10 Hz),
 +every onroadEvents message and gpsLocation at 1 Hz, which is enough for these stats.
-+Onroad, the UI feeds the same counters live (LiveDriveStats).
 +
 +  python -m openpilot.jay.drives --backfill        summarize every finished route now, then exit
 +  python -m openpilot.jay.drives --route <route>   print one route's summary as JSON
-+
-+Module import stays light (no capnp, zstd or swaglog) because the UI imports it.
 +"""
 +import json
 +import os
@@ -58,7 +55,7 @@ index 0000000..328ef9b
 +
 +
 +class DriveAccumulator:
-+  """Drive counters fed one sample at a time, shared by the qlog summarizer and the live UI stats."""
++  """Drive counters fed one qlog sample at a time."""
 +
 +  def __init__(self):
 +    self.reset()
@@ -245,53 +242,6 @@ index 0000000..328ef9b
 +  def _add_event(self, ev: dict) -> None:
 +    if len(self.events) < MAX_EVENTS:
 +      self.events.append(ev)
-+
-+
-+class LiveDriveStats:
-+  """Takeover counters for the driving screen. Call update(sm) every UI frame, reset() at drive start."""
-+
-+  def __init__(self):
-+    self._acc = DriveAccumulator()
-+    self._last_mono = 0
-+    self._has_sp: bool | None = None
-+
-+  def reset(self) -> None:
-+    self._acc.reset()
-+    self._last_mono = 0
-+
-+  def update(self, sm) -> None:
-+    mono = sm.logMonoTime["carState"]
-+    if mono == 0 or mono == self._last_mono:
-+      return
-+    self._last_mono = mono
-+    if self._has_sp is None:
-+      self._has_sp = "selfdriveStateSP" in sm.data
-+    self._acc.step(mono * 1e-9, sm["carState"], sm["selfdriveState"], sm["selfdriveStateSP"] if self._has_sp else None,
-+                   sm["carControl"], sm["controlsState"])
-+
-+  @property
-+  def disengagements(self) -> int:
-+    return self._acc.disengagements
-+
-+  @property
-+  def steer_overrides(self) -> int:
-+    return self._acc.steer_overrides
-+
-+  @property
-+  def engaged_frac(self) -> float:
-+    return self._acc.engaged_frac
-+
-+  @property
-+  def distance_m(self) -> float:
-+    return self._acc.distance_m
-+
-+  @property
-+  def duration_s(self) -> float:
-+    return self._acc.duration_s
-+
-+  @property
-+  def events(self) -> list[dict]:
-+    return self._acc.events
 +
 +
 +# *** route summaries ***

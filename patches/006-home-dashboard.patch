@@ -1,24 +1,26 @@
 diff --git a/openpilot/jay/home.py b/openpilot/jay/home.py
 new file mode 100644
-index 0000000..095cfdb
+index 0000000..0760dc2
 --- /dev/null
 +++ b/openpilot/jay/home.py
-@@ -0,0 +1,282 @@
-+"""Home screen dashboard: last drive, Firehose uploads and storage. Replaces the prime ad and the Firehose prompt."""
+@@ -0,0 +1,343 @@
++"""Home screen dashboard: a "Ready" card (time, software, last drive), Firehose uploads and storage. Replaces the prime
++ad and the Firehose prompt. Also the sidebar tweaks: real temperature, only the boxes that need attention."""
++import datetime as dt
 +import json
 +import os
 +import shutil
 +import time
-+from datetime import datetime, timedelta
 +from zoneinfo import ZoneInfo
 +
 +import pyray as rl
 +
 +from openpilot.common.hardware.hw import Paths
++from openpilot.common.params import Params
 +from openpilot.jay import config
 +from openpilot.jay.guard import guarded
-+from openpilot.jay.ui.theme import C, S, T, bar, card, dot, label, measure, pill, ring, stat, text, text_right, hline
-+from openpilot.jay.upload_status import describe_upload, format_bytes, shared_upload_stats
++from openpilot.jay.ui.theme import C, S, T, bar, card, dot, label, pill, text, text_right, hline
++from openpilot.jay.upload_status import describe_upload, format_bytes, format_time_left, shared_upload_stats, time_left
 +from openpilot.system.ui.lib.application import FontWeight
 +from openpilot.system.ui.widgets import Widget
 +
@@ -26,6 +28,7 @@ index 0000000..095cfdb
 +STORAGE_PATH = "/data/jay/storage.json"
 +GAP = S.MD
 +LEFT_WIDTH = 860
++PARAMS_INTERVAL = 2.0  # seconds between reads of the updater params
 +
 +
 +class JsonFile:
@@ -52,12 +55,12 @@ index 0000000..095cfdb
 +    return self.data
 +
 +
-+def local_time(ts: float) -> datetime:
++def local_time(ts: float) -> dt.datetime:
 +  try:
 +    tz = ZoneInfo(str(config.get("timezone")))
 +  except Exception:
 +    tz = None
-+  return datetime.fromtimestamp(ts, tz)
++  return dt.datetime.fromtimestamp(ts, tz)
 +
 +
 +def format_day(ts: float | None) -> str:
@@ -68,28 +71,71 @@ index 0000000..095cfdb
 +  clock = t.strftime("%I:%M %p").lstrip("0").lower()
 +  if t.date() == today:
 +    return f"Today {clock}"
-+  if t.date() == today - timedelta(days=1):
++  if t.date() == today - dt.timedelta(days=1):
 +    return f"Yesterday {clock}"
 +  return t.strftime("%a %d %b").replace(" 0", " ") + f" {clock}"
 +
 +
-+def format_duration(s: float) -> str:
-+  m = int(round(s / 60))
-+  return f"{m} min" if m < 60 else f"{m // 60} h {m % 60:02d} min"
++def time_ago(when: dt.datetime | None) -> str:
++  """Naive UTC datetime (as the updater stores it) -> '12 min ago'. Empty if unknown or the clock isn't set yet."""
++  if not isinstance(when, dt.datetime):
++    return ""
++  now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
++  if now.year < 2024:
++    return ""
++  s = max((now - when.replace(tzinfo=None)).total_seconds(), 0)
++  if s < 90:
++    return "just now"
++  if s < 3600:
++    return f"{round(s / 60)} min ago"
++  if s < 48 * 3600:
++    return f"{round(s / 3600)} h ago"
++  return f"{round(s / 86400)} days ago"
 +
 +
-+def pct(part: float, whole: float) -> int | None:
-+  return round(100 * part / whole) if whole > 0 else None
++def short_version(params, key: str = "UpdaterCurrentDescription") -> str:
++  """'2026.10.23-4973 / dev-jay / 8777fb0 / Oct 23' -> 'dev-jay • Oct 23'"""
++  parts = [p.strip() for p in (params.get(key) or "").split("/")]
++  if len(parts) >= 4:
++    return f"{parts[1]} • {parts[3]}"
++  return " • ".join(p for p in parts if p)
++
++
++def software_status(params) -> tuple[str, str, rl.Color]:
++  """Updater params -> (headline, detail, color), in the order the stock software panel checks them."""
++  current = short_version(params).replace(" • ", " ")
++  checked = time_ago(params.get("LastUpdateTime"))
++  if params.get_bool("DisableUpdates"):
++    return "Updates off", current, C.TEXT_DIM
++  state = params.get("UpdaterState") or "idle"
++  if state == "downloading...":
++    return "Downloading update", "Installs on the next reboot once it's ready", C.BLUE
++  if state == "finalizing update...":
++    return "Preparing update", "Almost done downloading", C.BLUE
++  if params.get_bool("UpdateAvailable"):
++    new = short_version(params, "UpdaterNewDescription").replace(" • ", " ")
++    return "Update ready", " • ".join(p for p in (new, "installs on next reboot") if p), C.BLUE
++  if state == "checking...":
++    return "Checking for updates", current, C.TEXT_DIM
++  if (params.get("UpdateFailedCount") or 0) > 0:
++    detail = f"last good check {checked}" if checked else "will retry"
++    return "Update failed", f"{current} • {detail}" if current else detail, C.YELLOW
++  if params.get_bool("UpdaterFetchAvailable"):
++    return "Update available", "Downloads on the next check over Wi-Fi", C.BLUE
++  return "Up to date", " • ".join(p for p in (current, f"checked {checked}" if checked else "") if p), C.GREEN
 +
 +
 +class JayHome(Widget):
 +  def __init__(self):
 +    super().__init__()
++    self._params = Params()
 +    self._uploads = shared_upload_stats()
 +    self._drives = JsonFile(DRIVES_PATH)
 +    self._storage = JsonFile(STORAGE_PATH)
 +    self._disk = (0, 0)
 +    self._disk_checked = 0.0
++    self._software: tuple[str, str, rl.Color] | None = None
++    self._params_checked = 0.0
 +
 +  def _update_state(self):
 +    self._uploads.update()
@@ -101,74 +147,60 @@ index 0000000..095cfdb
 +        self._disk = (du.total, du.free)
 +      except OSError:
 +        pass
++    if now - self._params_checked > PARAMS_INTERVAL:
++      self._params_checked = now
++      try:
++        self._software = software_status(self._params)
++      except Exception:
++        self._software = None
 +
 +  def _render(self, rect: rl.Rectangle):
 +    left = rl.Rectangle(rect.x, rect.y, LEFT_WIDTH, rect.height)
 +    right_w = rect.width - LEFT_WIDTH - GAP
 +    half = (rect.height - GAP) / 2
-+    self._draw_last_drive(left)
++    self._draw_ready(left)
 +    self._draw_uploads(rl.Rectangle(rect.x + LEFT_WIDTH + GAP, rect.y, right_w, half))
 +    self._draw_storage(rl.Rectangle(rect.x + LEFT_WIDTH + GAP, rect.y + half + GAP, right_w, half))
 +
-+  # Last drive
++  # Ready: time, software, last drive
 +
 +  @guarded()
-+  def _draw_last_drive(self, rect: rl.Rectangle):
++  def _draw_ready(self, rect: rl.Rectangle):
 +    r = card(rect)
-+    data = self._drives.get() or {}
-+    drives = [d for d in data.get("drives", []) if d.get("moving_s", 0) > 60]
-+    label("Last drive", r.x, r.y)
-+    if not drives:
-+      text("No drives yet", r.x, r.y + 90, T.H1, weight=FontWeight.BOLD)
-+      text("Stats appear after your next drive.", r.x, r.y + 190, T.BODY, C.TEXT_DIM, max_width=r.width)
-+      return
++    label("Ready", r.x, r.y)
 +
-+    d = drives[-1]
-+    text_right(format_day(d.get("start")), r.x + r.width, r.y - 4, T.SMALL, C.TEXT_DIM)
++    now = local_time(time.time())
++    y = r.y + 60
++    w = text(now.strftime("%I:%M").lstrip("0"), r.x, y, T.HERO, weight=FontWeight.BOLD)
++    text(now.strftime("%p").lower(), r.x + w + S.SM, y + T.HERO - T.H2 - 22, T.H2, C.TEXT_DIM, FontWeight.SEMI_BOLD)
++    text(now.strftime("%A, %d %B").replace(" 0", " "), r.x, y + T.HERO + 10, T.BODY, C.TEXT_DIM)
 +
-+    # Distance and duration
-+    y = r.y + 70
-+    km = d.get("distance_m", 0) / 1000
-+    w = text(f"{km:.1f}", r.x, y, T.HERO, weight=FontWeight.BOLD)
-+    text("km", r.x + w + S.SM, y + T.HERO - T.H2 - 22, T.H2, C.TEXT_DIM, FontWeight.SEMI_BOLD)
-+    text(format_duration(d.get("duration_s", 0)) + " drive", r.x, y + T.HERO + 10, T.BODY, C.TEXT_DIM)
-+
-+    # Engaged ring
-+    engaged = pct(d.get("engaged_moving_s", d.get("engaged_s", 0)), d.get("moving_s", 0))
-+    cx, cy, radius = r.x + r.width - 125, y + 115, 125
-+    ring(cx, cy, radius, 22, (engaged or 0) / 100, C.GREEN)
-+    value = f"{engaged}%" if engaged is not None else "-"
-+    vw = measure(value, T.H2, FontWeight.BOLD).x
-+    text(value, cx - vw / 2, cy - 48, T.H2, weight=FontWeight.BOLD)
-+    cw = measure("engaged", T.SMALL).x
-+    text("engaged", cx - cw / 2, cy + 12, T.SMALL, C.TEXT_DIM)
-+
-+    # Takeovers, nudges, average speed
-+    y = r.y + 400
++    y = r.y + 360
 +    hline(r.x, y, r.width)
 +    y += S.LG
-+    col = r.width / 3
-+    avg = d.get("distance_m", 0) / d["moving_s"] * 3.6 if d.get("moving_s") else 0
-+    takeovers = d.get("disengagements", 0)
-+    stat(str(takeovers), "takeovers", r.x, y, color=C.YELLOW if takeovers else C.TEXT)
-+    stat(str(d.get("steer_overrides", 0)), "nudges", r.x + col, y)
-+    stat(f"{avg:.0f}", "avg km/h", r.x + 2 * col, y)
++    label("Software", r.x, y)
++    if self._software:
++      headline, detail, color = self._software
++      y += 60
++      dot(r.x + 12, y + T.H2 / 2 + 4, 12, color)
++      text(headline, r.x + 44, y, T.H2, weight=FontWeight.SEMI_BOLD, max_width=r.width - 44)
++      text(detail, r.x + 44, y + T.H2 + 18, T.SMALL, C.TEXT_DIM, max_width=r.width - 44)
 +
-+    # Last 7 days
-+    y = r.y + r.height - 125
++    y = r.y + r.height - 75
 +    hline(r.x, y - S.LG, r.width)
-+    week_start = time.time() - 7 * 24 * 3600
-+    week = [x for x in drives if (x.get("start") or x.get("summarized_at") or 0) >= week_start]
-+    label("Last 7 days", r.x, y)
-+    if week:
-+      dist = sum(x.get("distance_m", 0) for x in week) / 1000
-+      eng = pct(sum(x.get("engaged_moving_s", x.get("engaged_s", 0)) for x in week), sum(x.get("moving_s", 0) for x in week))
-+      parts = [f"{len(week)} drive{'s' if len(week) != 1 else ''}", f"{dist:.0f} km"]
-+      if eng is not None:
-+        parts.append(f"{eng}% engaged")
-+      text(" • ".join(parts), r.x, y + 50, T.BODY, max_width=r.width)
-+    else:
-+      text("No drives", r.x, y + 50, T.BODY, C.TEXT_DIM)
++    text(self._last_drive_line(), r.x, y, T.BODY, C.TEXT_DIM, max_width=r.width)
++
++  def _last_drive_line(self) -> str:
++    data = self._drives.get() or {}
++    drives = [d for d in data.get("drives", []) if d.get("moving_s", 0) > 60]
++    if not drives:
++      return "No drives yet"
++    d = drives[-1]
++    day = format_day(d.get("start") or d.get("summarized_at"))
++    if day.startswith(("Today", "Yesterday")):
++      day = day[0].lower() + day[1:]
++    km = d.get("distance_m", 0) / 1000
++    return " • ".join(p for p in (f"Last drive {day}".strip(), f"{km:.1f} km") if p)
 +
 +  # Uploads
 +
@@ -210,14 +242,21 @@ index 0000000..095cfdb
 +      top = current[0]
 +      p = f"{top['progress'] * 100:.0f}%"
 +      pw = text_right(p, r.x + r.width, y, T.BODY, C.TEXT_DIM)
-+      text(describe_upload(top["path"]), r.x, y, T.BODY, max_width=r.width - pw - S.MD)
++      more = f" (+{len(current) - 1})" if len(current) > 1 else ""
++      text(describe_upload(top["path"]) + more, r.x, y, T.BODY, max_width=r.width - pw - S.MD)
 +      bar(rl.Rectangle(r.x, y + 66, r.width, 12), top["progress"], C.BLUE)
-+      parts = [f"{format_bytes(status['speed'])}/s", f"{len(current)} uploading", f"{status['queued']} waiting"]
++      speed = status.get("avg_speed") or status["speed"]
++      parts = [f"{format_bytes(speed)}/s"]
++      if status["queued"]:
++        parts.append(f"{status['queued']} waiting")
++      left = time_left(status)
++      if left is not None:
++        parts.append(format_time_left(left))
 +      text(" • ".join(parts), r.x, y + 96, T.SMALL, C.TEXT_DIM, max_width=r.width)
 +    else:
 +      text("Idle", r.x, y, T.BODY)
 +      queued = status["queued"]
-+      sub = f"{queued} waiting" if queued else "comma asks for segments when it needs them"
++      sub = f"{queued} waiting" if queued else "comma pulls segments when it needs them"
 +      text(sub, r.x, y + 60, T.SMALL, C.TEXT_DIM, max_width=r.width)
 +
 +  # Storage
@@ -280,12 +319,34 @@ index 0000000..095cfdb
 +    text(line, r.x, y + 50, T.SMALL, C.TEXT_DIM, max_width=r.width)
 +
 +
-+def short_version(params) -> str:
-+  """'2026.10.23-4973 / dev-jay / 8777fb0 / Oct 23' -> 'dev-jay • Oct 23'"""
-+  parts = [p.strip() for p in (params.get("UpdaterCurrentDescription") or "").split("/")]
-+  if len(parts) >= 4:
-+    return f"{parts[1]} • {parts[3]}"
-+  return " • ".join(p for p in parts if p)
++
++# Sidebar
++
++THERMAL_COLORS = {"ok": "GOOD", "overheated": "WARNING", "critical": "DANGER"}
++
++
++@guarded()
++def sidebar_metrics(metrics: list, colors) -> list | None:
++  """Shows the real temperature in the TEMP box and drops the VEHICLE and CONNECT boxes while they're fine.
++  Takes and returns the sidebar's MetricData list; None (on error) means keep the stock boxes."""
++  from openpilot.selfdrive.ui.ui_state import ui_state  # imported lazily: ui_state is heavy and imports UI modules
++  ds = ui_state.sm["deviceState"]
++  shown = []
++  for m in metrics:
++    if m.label == "TEMP":
++      color = getattr(colors, THERMAL_COLORS.get(str(ds.thermalStatus), "DANGER"))
++      m.update("TEMP", f"{round(ds.maxTempC)}°C" if ds.maxTempC > 0 else m.value, color)
++    elif m.label in ("VEHICLE", "CONNECT") and m.value == "ONLINE":
++      continue
++    shown.append(m)
++  return shown
++
++
++@guarded(default=True)
++def show_home_button() -> bool:
++  """The comma button at the bottom of the sidebar bookmarks the moment while driving and does nothing offroad."""
++  from openpilot.selfdrive.ui.ui_state import ui_state
++  return bool(ui_state.started)
 diff --git a/openpilot/selfdrive/ui/sunnypilot/layouts/home.py b/openpilot/selfdrive/ui/sunnypilot/layouts/home.py
 index 70a69ca..73e80aa 100644
 --- a/openpilot/selfdrive/ui/sunnypilot/layouts/home.py
@@ -321,10 +382,27 @@ index 70a69ca..73e80aa 100644
      desc_width = 0
      if description:
 diff --git a/openpilot/selfdrive/ui/sunnypilot/layouts/sidebar.py b/openpilot/selfdrive/ui/sunnypilot/layouts/sidebar.py
-index 815e701..bf363e3 100644
+index 815e701..f0fa1f4 100644
 --- a/openpilot/selfdrive/ui/sunnypilot/layouts/sidebar.py
 +++ b/openpilot/selfdrive/ui/sunnypilot/layouts/sidebar.py
-@@ -106,9 +106,12 @@ class SidebarSP:
+@@ -13,6 +13,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state, ChestnutState
+ from openpilot.sunnypilot.sunnylink.api import UNREGISTERED_SUNNYLINK_DONGLE_ID
+ from openpilot.system.ui.lib.application import gui_app
+ from openpilot.system.ui.lib.multilang import tr_noop
++from openpilot.jay.home import show_home_button, sidebar_metrics
+ 
+ 
+ PING_TIMEOUT_NS = 80_000_000_000  # 80 seconds in nanoseconds
+@@ -89,6 +90,8 @@ class SidebarSP:
+ 
+   def _get_home_icon(self, default_img: rl.Texture) -> tuple[rl.Texture, rl.Vector2, float]:
+     default_pos = rl.Vector2(HOME_BTN.x, HOME_BTN.y)
++    if not show_home_button():  # jay: the button does nothing offroad, so draw it fully transparent
++      return default_img, default_pos, 0.0
+     state = ui_state.chestnut_state
+     if state == ChestnutState.DISCONNECTED:
+       return default_img, default_pos, 1.0
+@@ -106,9 +109,13 @@ class SidebarSP:
      return icon, rl.Vector2(x, y), opacity
  
    def _draw_metrics_w_sunnylink(self, rect: rl.Rectangle, _temp, _panda, _connect):
@@ -332,6 +410,7 @@ index 815e701..bf363e3 100644
 +    metrics = [_temp, _panda, _connect]
 +    if self._sunnylink_status.value != "DISABLED":  # jay: hide the sunnylink box when it's off
 +      metrics.append(self._sunnylink_status)
++    metrics = sidebar_metrics(metrics, Colors) or metrics  # jay: real temperature, only boxes that need attention
      start_y = int(rect.y) + METRIC_START_Y
      available_height = max(0, int(HOME_BTN.y) - METRIC_MARGIN - METRIC_HEIGHT - start_y)
      spacing = available_height / max(1, len(metrics) - 1)

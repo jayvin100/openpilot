@@ -1,9 +1,9 @@
 diff --git a/openpilot/jay/config.py b/openpilot/jay/config.py
 new file mode 100644
-index 0000000..1705be9
+index 0000000..999a11d
 --- /dev/null
 +++ b/openpilot/jay/config.py
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,66 @@
 +"""Settings for jay's customizations.
 +
 +Params keys are compiled into the C++ params library, so new keys can't be added from Python.
@@ -18,7 +18,6 @@ index 0000000..1705be9
 +
 +DEFAULTS: dict[str, bool | int | str] = {
 +  "onroad_minimal": False,       # driving screen: hide everything except speed, path and alerts
-+  "onroad_takeovers": True,      # driving screen: small chip with takeovers and % engaged this drive
 +  "screensaver_dim_night": True,  # screensaver: dimmer at night
 +  "storage_auto_clean": True,    # delete video before logs when the disk fills up
 +  "timezone": "Asia/Kuala_Lumpur",  # the device clock is UTC; used to show local times

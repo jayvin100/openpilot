@@ -1,10 +1,10 @@
 diff --git a/openpilot/jay/onroad.py b/openpilot/jay/onroad.py
 new file mode 100644
-index 0000000..a03d539
+index 0000000..e259145
 --- /dev/null
 +++ b/openpilot/jay/onroad.py
-@@ -0,0 +1,66 @@
-+"""Driving screen additions: minimal mode (no path, lane lines or HUD extras) and a live takeover chip.
+@@ -0,0 +1,25 @@
++"""Driving screen: minimal mode (no path, lane lines or HUD extras).
 +
 +Never hides alerts or driver monitoring: those are drawn by AlertRenderer and DriverStateRenderer, which this doesn't touch.
 +"""
@@ -12,11 +12,6 @@ index 0000000..a03d539
 +
 +from openpilot.jay import config
 +from openpilot.jay.guard import guarded
-+from openpilot.jay.ui.theme import C, T, measure, rounded, text, with_alpha
-+from openpilot.system.ui.lib.application import FontWeight
-+
-+CHIP_MARGIN = 60
-+CHIP_TOP = 45
 +
 +
 +@guarded(default=False)
@@ -34,70 +29,6 @@ index 0000000..a03d539
 +  hud.turn_signal_controller.render(rect)   # turn signals and blind spot
 +  hud.circular_alerts_renderer.render(rect)  # green light / lead departed
 +  return True
-+
-+
-+class TakeoverChip:
-+  """Top-right chip: '2 takeovers • 91%' for the current drive."""
-+  def __init__(self):
-+    self._stats = None
-+    self._started_frame = -1
-+
-+  @guarded()
-+  def render(self, rect: rl.Rectangle) -> None:
-+    from openpilot.selfdrive.ui.ui_state import ui_state  # imported lazily: ui_state imports UI modules
-+    if not config.get("onroad_takeovers"):
-+      return
-+    if self._stats is None:
-+      from openpilot.jay.drives import LiveDriveStats
-+      self._stats = LiveDriveStats()
-+    if ui_state.started_frame != self._started_frame:
-+      self._started_frame = ui_state.started_frame
-+      self._stats.reset()
-+    self._stats.update(ui_state.sm)
-+
-+    s = self._stats
-+    takeovers = s.disengagements
-+    parts = [f"{takeovers} takeover{'' if takeovers == 1 else 's'}"]
-+    if s.duration_s > 60 and s.engaged_frac is not None:
-+      parts.append(f"{s.engaged_frac * 100:.0f}%")
-+    label = " • ".join(parts)
-+
-+    size = T.SMALL
-+    w = measure(label, size, FontWeight.SEMI_BOLD).x + 2 * 30
-+    h = 76
-+    x = rect.x + rect.width - CHIP_MARGIN - w
-+    y = rect.y + CHIP_TOP
-+    rounded(rl.Rectangle(x, y, w, h), h / 2, rl.Color(0, 0, 0, 140))
-+    color = C.YELLOW if takeovers else with_alpha(C.TEXT, 0.9)
-+    text(label, x + 30, y + (h - size) / 2 - 3, size, color, FontWeight.SEMI_BOLD)
-diff --git a/openpilot/selfdrive/ui/onroad/augmented_road_view.py b/openpilot/selfdrive/ui/onroad/augmented_road_view.py
-index 0a87794..ebea8c5 100644
---- a/openpilot/selfdrive/ui/onroad/augmented_road_view.py
-+++ b/openpilot/selfdrive/ui/onroad/augmented_road_view.py
-@@ -12,6 +12,7 @@ from openpilot.selfdrive.ui.onroad.cameraview import CameraView
- from openpilot.system.ui.lib.application import gui_app
- from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
- from openpilot.common.transformations.orientation import rot_from_euler
-+from openpilot.jay.onroad import TakeoverChip
- 
- if gui_app.sunnypilot_ui():
-   from openpilot.selfdrive.ui.sunnypilot.onroad.alert_renderer import AlertRendererSP as AlertRenderer
-@@ -56,6 +57,7 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
-     self._hud_renderer = HudRenderer()
-     self.alert_renderer = AlertRenderer()
-     self.driver_state_renderer = DriverStateRenderer()
-+    self._jay_chip = TakeoverChip()
- 
-   def _render(self, rect):
-     # Only render when system is started to avoid invalid data access
-@@ -96,6 +98,7 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
- 
-     # Custom UI extension point - add custom overlays here
-     # Use self._content_rect for positioning within camera bounds
-+    self._jay_chip.render(self._content_rect)  # jay: live takeover count
- 
-     # End clipping region
-     rl.end_scissor_mode()
 diff --git a/openpilot/selfdrive/ui/onroad/model_renderer.py b/openpilot/selfdrive/ui/onroad/model_renderer.py
 index 6db7d34..d6b4bad 100644
 --- a/openpilot/selfdrive/ui/onroad/model_renderer.py

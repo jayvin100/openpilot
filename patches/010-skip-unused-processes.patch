@@ -1,0 +1,33 @@
+diff --git a/openpilot/jay/procs.py b/openpilot/jay/procs.py
+new file mode 100644
+index 0000000..22e821a
+--- /dev/null
++++ b/openpilot/jay/procs.py
+@@ -0,0 +1,15 @@
++"""Skips background processes for features that are switched off.
++
++Read once when the manager starts, so a change takes effect after a reboot.
++"""
++from openpilot.common.params import Params
++
++SUNNYLINK_PROCS = {"manage_sunnylinkd"}  # the others already check SunnylinkEnabled
++
++
++def trim(procs: list) -> list:
++  try:
++    skip = set() if Params().get_bool("SunnylinkEnabled") else SUNNYLINK_PROCS
++  except Exception:
++    return procs
++  return [p for p in procs if p.name not in skip]
+diff --git a/openpilot/system/manager/process_config.py b/openpilot/system/manager/process_config.py
+index 87ff85a..8d75f33 100644
+--- a/openpilot/system/manager/process_config.py
++++ b/openpilot/system/manager/process_config.py
+@@ -203,5 +203,7 @@ if os.path.exists("../../third_party/copyparty/copyparty-sfx.py"):
+   procs += [NativeProcess("copyparty-sfx", "openpilot/third_party/copyparty", ["./copyparty-sfx.py", *copyparty_args], and_(only_offroad, use_copyparty))]
+ 
+ procs += [PythonProcess("jaydrives", "openpilot.jay.drives", only_offroad)]  # jay
++from openpilot.jay.procs import trim as jay_trim_procs  # jay
++procs = jay_trim_procs(procs)  # jay: no sunnylink daemon while sunnylink is off
+ 
+ managed_processes = {p.name: p for p in procs}

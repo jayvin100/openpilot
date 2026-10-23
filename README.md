@@ -25,12 +25,14 @@ The workflow in `.github/workflows/build.yml` runs every 3 hours, and whenever `
 
 ## What the patches change
 
-- **Home:** one dashboard with the last drive (distance, % engaged, takeovers), live Firehose uploads, and storage. Replaces the prime ad and the Firehose prompt. The sunnylink box and panel are hidden.
+- **Home:** a Ready card (clock, software update status, last drive), live Firehose uploads with time left for the current queue, and storage. Replaces the prime ad and the Firehose prompt.
+- **Sidebar:** shows the real device temperature; the vehicle and connect boxes only appear when something is wrong; the comma button is hidden offroad, where it does nothing.
 - **Screensaver:** a still clock with upload status, shifted a few pixels each minute against OLED burn-in, dimmed at night.
 - **Storage:** below 15% free, deletes video comma already uploaded, then video older than 7 days, then video older than a day, until 18% is free. Logs are kept.
 - **Drive stats:** each drive is summarized from its qlogs after the car turns off.
-- **Driving screen:** optional minimal mode and a takeover counter. Alerts and driver monitoring are never hidden.
-- **Settings:** a "Jay" panel for all of the above.
+- **Driving screen:** optional minimal mode that hides the path, lane lines and HUD extras. Alerts, driver monitoring, turn signals and blind spot are never hidden.
+- **Settings:** a "Jay" panel for all of the above, opened by the gear. Unused panels (sunnylink, Trips, Firehose, Navigation) are removed, the rest reordered, and items that don't apply to the car (torque-only steering options on angle-steering cars, cruise button options, GitHub runner, copyparty) are hidden.
+- **Processes:** the sunnylink daemon doesn't start while sunnylink is off.
 
 ## Back to official
 

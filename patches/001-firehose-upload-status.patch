@@ -3,10 +3,10 @@ new file mode 100644
 index 0000000..e69de29
 diff --git a/openpilot/jay/upload_status.py b/openpilot/jay/upload_status.py
 new file mode 100644
-index 0000000..8117400
+index 0000000..fdcb84c
 --- /dev/null
 +++ b/openpilot/jay/upload_status.py
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,280 @@
 +"""Live upload status for the home screen card and screensaver.
 +
 +athenad keeps its upload queue in memory, so it dumps a small JSON snapshot once a second
@@ -18,6 +18,7 @@ index 0000000..8117400
 +import shutil
 +import threading
 +import time
++from collections import deque
 +
 +from openpilot.common.hardware.hw import Paths
 +from openpilot.common.params import Params
@@ -26,6 +27,9 @@ index 0000000..8117400
 +STATUS_PATH = "/tmp/jay_upload_status.json"
 +STALE_AFTER = 5.0  # seconds without a snapshot before athenad is considered disconnected
 +UPLOAD_ATTR_NAME = "user.upload"
++SPEED_WINDOW = 180.0  # seconds of recent uploading that the average speed covers
++SPEED_MIN_SAMPLE = 20.0  # seconds of uploading needed before the average speed is trusted
++MAX_TIME_LEFT = 12 * 3600  # longer estimates aren't worth showing
 +
 +FILE_KINDS = {
 +  "rlog": "full log",
@@ -96,6 +100,7 @@ index 0000000..8117400
 +  def run(self, end_event: threading.Event, upload_queue, cur_upload_items: dict) -> None:
 +    prev_done: dict[str, float] = {}
 +    prev_t = time.monotonic()
++    active: deque[tuple[float, float, float]] = deque()  # (time, seconds, bytes) for ticks with an upload running
 +    while not end_event.wait(self.INTERVAL):
 +      try:
 +        now = time.monotonic()
@@ -109,16 +114,31 @@ index 0000000..8117400
 +          current.append({"path": item.path, "progress": item.progress, "size": sz})
 +
 +        moved = sum(max(d - prev_done.get(p, d), 0) for p, d in done.items())
-+        speed = moved / (now - prev_t) if now > prev_t else 0.0
++        dt = now - prev_t
++        speed = moved / dt if dt > 0 else 0.0
 +        prev_done, prev_t = done, now
-+        self._sizes = {p: s for p, s in self._sizes.items() if p in done}
++
++        # average over the recent time something was uploading, so the estimate doesn't jump with every packet
++        if current and dt > 0:
++          active.append((now, dt, moved))
++        while active and active[0][0] < now - SPEED_WINDOW:
++          active.popleft()
++        active_s = sum(a[1] for a in active)
++        avg_speed = sum(a[2] for a in active) / active_s if active_s >= SPEED_MIN_SAMPLE else None
++
++        queued = [i for i in list(upload_queue.queue) if i is not None]
++        queued_bytes = sum(self._size(i.path) for i in queued)
++        keep = set(done) | {i.path for i in queued}
++        self._sizes = {p: s for p, s in self._sizes.items() if p in keep}
 +
 +        with self._lock:
 +          snapshot = {
 +            "t": time.time(),
-+            "queued": sum(1 for i in list(upload_queue.queue) if i is not None),
++            "queued": len(queued),
++            "queued_bytes": queued_bytes,
 +            "current": current,
 +            "speed": speed,
++            "avg_speed": avg_speed,
 +            "success": self.success,
 +            "failed": self.failed,
 +            "bytes_done": self.bytes_done,
@@ -143,6 +163,33 @@ index 0000000..8117400
 +  if abs(time.time() - data.get("t", 0)) > STALE_AFTER:
 +    return None
 +  return data
++
++
++def time_left(status: dict | None) -> float | None:
++  """Seconds until the files athenad has right now (uploading + queued) are sent at the recent speed.
++  None when nothing is uploading, the speed isn't known yet, or the estimate is too long to mean much.
++  comma decides what to pull next, so this only covers the current queue."""
++  if not status or not status.get("current"):
++    return None
++  speed = status.get("avg_speed")
++  if not speed or speed <= 0 or "queued_bytes" not in status:
++    return None
++  remaining = status["queued_bytes"] + sum(c["size"] * (1 - c["progress"]) for c in status["current"])
++  secs = remaining / speed
++  return secs if 0 < secs <= MAX_TIME_LEFT else None
++
++
++def format_time_left(secs: float) -> str:
++  """90 -> '~2 min left', 1500 -> '~25 min left', 5400 -> '~1.5 h left'"""
++  m = secs / 60
++  if m < 1.5:
++    return "~1 min left"
++  if m < 10:
++    return f"~{round(m)} min left"
++  if m < 55:
++    return f"~{round(m / 5) * 5} min left"
++  h = round(m / 30) / 2
++  return f"~{h:g} h left"
 +
 +
 +class UploadStats:
