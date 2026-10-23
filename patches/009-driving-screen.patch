@@ -1,10 +1,10 @@
 diff --git a/openpilot/jay/onroad.py b/openpilot/jay/onroad.py
 new file mode 100644
-index 0000000..9f605b8
+index 0000000..a03d539
 --- /dev/null
 +++ b/openpilot/jay/onroad.py
-@@ -0,0 +1,61 @@
-+"""Driving screen additions: minimal HUD mode and a live takeover chip.
+@@ -0,0 +1,66 @@
++"""Driving screen additions: minimal mode (no path, lane lines or HUD extras) and a live takeover chip.
 +
 +Never hides alerts or driver monitoring: those are drawn by AlertRenderer and DriverStateRenderer, which this doesn't touch.
 +"""
@@ -20,10 +20,15 @@ index 0000000..9f605b8
 +
 +
 +@guarded(default=False)
++def minimal_mode() -> bool:
++  return bool(config.get("onroad_minimal"))
++
++
++@guarded(default=False)
 +def render_minimal_hud(hud, rect: rl.Rectangle) -> bool:
 +  """Called from HudRendererSP._render after speed and set speed are drawn.
 +  In minimal mode, draws only the safety-relevant extras and returns True so the rest is skipped."""
-+  if not config.get("onroad_minimal"):
++  if not minimal_mode():
 +    return False
 +  hud.speed_limit_renderer.render(rect)
 +  hud.turn_signal_controller.render(rect)   # turn signals and blind spot
@@ -93,6 +98,30 @@ index 0a87794..ebea8c5 100644
  
      # End clipping region
      rl.end_scissor_mode()
+diff --git a/openpilot/selfdrive/ui/onroad/model_renderer.py b/openpilot/selfdrive/ui/onroad/model_renderer.py
+index 6db7d34..d6b4bad 100644
+--- a/openpilot/selfdrive/ui/onroad/model_renderer.py
++++ b/openpilot/selfdrive/ui/onroad/model_renderer.py
+@@ -11,6 +11,7 @@ from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
+ from openpilot.system.ui.widgets import Widget
+ 
+ from openpilot.selfdrive.ui.sunnypilot.onroad.model_renderer import ChevronMetrics, ModelRendererSP
++from openpilot.jay.onroad import minimal_mode
+ 
+ CLIP_MARGIN = 500
+ MIN_DRAW_DISTANCE = 10.0
+@@ -121,8 +122,9 @@ class ModelRenderer(Widget, ChevronMetrics, ModelRendererSP):
+       self._transform_dirty = False
+ 
+     # Draw elements
+-    self._draw_lane_lines()
+-    self._draw_path()
++    if not minimal_mode():  # jay: minimal driving screen hides path and lane lines, keeps lead markers
++      self._draw_lane_lines()
++      self._draw_path()
+ 
+     if render_lead_indicator and radar_state:
+       self._draw_lead_indicator()
 diff --git a/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py b/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py
 index f8e4257..8f9d66f 100644
 --- a/openpilot/selfdrive/ui/sunnypilot/onroad/hud_renderer.py
