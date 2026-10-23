@@ -6,15 +6,13 @@ This branch (`tools`) holds only the build automation and patches. The installab
 
 | Branch | Built from | Install |
 |---|---|---|
-| `nightly-jay` | official openpilot `nightly` + `patches/openpilot/` | `installer.comma.ai/jayvin100/nightly-jay` |
-| `dev-jay` | official sunnypilot `dev` + `patches/sunnypilot/` (old, kept for rollback) | `installer.comma.ai/jayvin100/dev-jay` |
-| `staging-jay` | official sunnypilot `staging` + `patches/sunnypilot/` (old) | `installer.comma.ai/jayvin100/staging-jay` |
+| `nightly-jay` | official openpilot `nightly` + `patches/` | `installer.comma.ai/jayvin100/nightly-jay` |
 
 The workflow in `.github/workflows/build.yml` runs every 3 hours, and whenever `patches/` changes. If a patch stops applying, the run fails and the branch keeps its last good build.
 
 ## Patches
 
-- Plain `git diff` files against the prebuilt branch tree, applied in filename order (`001-name.patch`, `002-...`). `patches/openpilot/` and `patches/sunnypilot/` are separate stacks.
+- Plain `git diff` files against the prebuilt branch tree, applied in filename order (`001-name.patch`, `002-...`).
 - Python only. The prebuilt branches ship compiled binaries, and C++ changes would need an on-device rebuild.
 - No changes to safety limits, panda safety, or driver monitoring.
 
@@ -24,7 +22,7 @@ The workflow in `.github/workflows/build.yml` runs every 3 hours, and whenever `
 `scripts/device.py push TREE FILE...` and `restart-ui` copy files from a worktree to the device and restart the UI, for quick testing.
 `scripts/drive_report.py [N|route]` prints a drive's takeovers, their causes, and steering stats.
 
-## What the openpilot patches change
+## What the patches change
 
 - **Home:** a Ready card (clock, software update status, last drive), live Firehose uploads with time left for the current queue, and storage. Replaces the prime ad and the setup prompt.
 - **Sidebar:** shows the real device temperature; the vehicle and connect boxes only appear when something is wrong; the comma button is hidden offroad, where it does nothing.
