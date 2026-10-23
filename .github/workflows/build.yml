@@ -1,6 +1,7 @@
 name: Build custom branches
 
-# Rebuilds dev-jay / staging-jay = latest official sunnypilot prebuilt branch + patches/*.patch.
+# Rebuilds each target = latest official prebuilt branch + patches/<base>/*.patch:
+#   nightly-jay = openpilot nightly, dev-jay / staging-jay = sunnypilot dev / staging.
 # Skips when neither upstream nor the patches changed. Fails (and emails) if a patch no longer applies;
 # the existing branch is left untouched in that case, so the device keeps its last good build.
 
@@ -31,12 +32,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - upstream: dev
+          - base: openpilot
+            repo: https://github.com/commaai/openpilot.git
+            upstream: nightly
+            target: nightly-jay
+          - base: sunnypilot
+            repo: https://github.com/sunnypilot/sunnypilot.git
+            upstream: dev
             target: dev-jay
-          - upstream: staging
+          - base: sunnypilot
+            repo: https://github.com/sunnypilot/sunnypilot.git
+            upstream: staging
             target: staging-jay
     env:
-      UPSTREAM_REPO: https://github.com/sunnypilot/sunnypilot.git
+      UPSTREAM_REPO: ${{ matrix.repo }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +55,7 @@ jobs:
       - name: Build ${{ matrix.target }}
         run: |
           set -euo pipefail
-          patches=$(find tools/patches -name '*.patch' | sort)
+          patches=$(find tools/patches/${{ matrix.base }} -name '*.patch' | sort)
           patch_hash=$( (for p in $patches; do basename "$p"; cat "$p"; done) | sha256sum | cut -c1-16)
           upstream_sha=$(git ls-remote "$UPSTREAM_REPO" "refs/heads/${{ matrix.upstream }}" | cut -f1)
           echo "upstream ${{ matrix.upstream }} = $upstream_sha, patches = $patch_hash"

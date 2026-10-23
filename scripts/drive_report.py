@@ -8,7 +8,7 @@
 
   --fresh       re-summarize from the qlogs instead of using /data/jay/drives.json
   --dev [PATH]  upload a local openpilot/jay/drives.py to /tmp on the device and use it
-                (default: the first ../sp-*/openpilot/jay/drives.py next to this repo)
+                (default: the first ../op-*/ or ../sp-*/openpilot/jay/drives.py next to this repo)
   --json        print the raw summary
 
 The qlog parsing runs on the device (openpilot.jay.drives from patches/004); this script only formats.
@@ -84,8 +84,9 @@ print(json.dumps(out))
 
 
 def find_dev_module() -> str | None:
-  for p in sorted(glob.glob(os.path.join(os.path.dirname(REPO), "sp-*", "openpilot", "jay", "drives.py"))):
-    return p
+  for pattern in ("op-*", "sp-*"):
+    for p in sorted(glob.glob(os.path.join(os.path.dirname(REPO), pattern, "openpilot", "jay", "drives.py"))):
+      return p
   return None
 
 

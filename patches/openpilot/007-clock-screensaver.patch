@@ -1,0 +1,192 @@
+diff --git a/openpilot/jay/screensaver.py b/openpilot/jay/screensaver.py
+new file mode 100644
+index 0000000..adb3d24
+--- /dev/null
++++ b/openpilot/jay/screensaver.py
+@@ -0,0 +1,165 @@
++"""Screensaver: a still clock with Firehose status in the middle of the screen, shown offroad for a while before the
++screen turns off. Stock openpilot turns the screen off 30 s after the last touch.
++
++The panel is OLED, so the content shifts a few pixels once a minute (too little to notice) to spread wear.
++keep_awake() is called from Device._update_wakefulness every frame and decides when the clock shows.
++"""
++import math
++import time
++
++import pyray as rl
++
++from openpilot.jay import config
++from openpilot.jay.guard import guarded
++from openpilot.jay.home import local_time
++from openpilot.jay.ui.theme import C, T, bar, measure, text, text_center, with_alpha
++from openpilot.jay.upload_status import shared_upload_stats
++from openpilot.system.ui.lib.application import gui_app, FontWeight
++from openpilot.system.ui.widgets import Widget
++
++CLOCK_SIZE = 240
++SHIFT_X, SHIFT_Y = 16, 12  # max burn-in shift in px
++NIGHT_START, NIGHT_END = 21, 7  # local hours
++NIGHT_ALPHA = 0.45
++
++
++class JayScreenSaver(Widget):
++  def __init__(self):
++    super().__init__()
++    self.set_rect(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
++    self._stats = shared_upload_stats()
++    self._start_time: float | None = None
++    self._dismiss = False
++    self._screensaver_timeout = 300
++    self._clock = ""
++    self._ampm = ""
++    self._date = ""
++    self._status = ""
++    self._progress: float | None = None
++    self._alpha = 1.0
++    self._offset = (0.0, 0.0)
++
++  @property
++  def is_active(self) -> bool:
++    return self._start_time is not None and not self._dismiss
++
++  @property
++  def was_dismissed(self) -> bool:
++    return self._dismiss
++
++  def initialize(self):
++    self._screensaver_timeout = int(config.get("screensaver_timeout"))
++    if self._start_time is None:
++      self._start_time = time.monotonic()
++    self._dismiss = False
++
++  def hide_event(self):
++    super().hide_event()
++    self._dismiss = False
++    self._start_time = None
++
++  def _handle_mouse_release(self, mouse_pos):
++    self._dismiss = True  # keep_awake() pops it
++    self._start_time = None
++    return super()._handle_mouse_release(mouse_pos)
++
++  def _update_state(self):
++    super()._update_state()
++    if self._start_time and time.monotonic() - self._start_time > self._screensaver_timeout:
++      self._dismiss = True
++      self._start_time = None
++
++    now = local_time(time.time())
++    self._clock = now.strftime("%I:%M").lstrip("0")
++    self._ampm = now.strftime("%p").lower()
++    self._date = now.strftime("%A, %d %B").replace(" 0", " ")
++    night = now.hour >= NIGHT_START or now.hour < NIGHT_END
++    self._alpha = NIGHT_ALPHA if night and config.get("screensaver_dim_night") else 1.0
++
++    minute = int(time.time() // 60)
++    self._offset = (SHIFT_X * math.sin(minute * 0.7), SHIFT_Y * math.cos(minute * 1.3))
++
++    self._stats.update()
++    self._status, self._progress = self._status_line()
++
++  @guarded(default=("", None))
++  def _status_line(self) -> tuple[str, float | None]:
++    s = self._stats
++    parts = [] if s.firehose is None else [f"Firehose {s.firehose}" + (f" (+{s.firehose_delta})" if s.firehose_delta > 0 else "")]
++    status = s.status
++    if status is None:
++      return " • ".join(parts + ["offline"]), None
++    current = status["current"]
++    if current:
++      parts.append(f"{len(current)} uploading")
++    if status["queued"]:
++      parts.append(f"{status['queued']} waiting")
++    if not current and not status["queued"]:
++      parts.append("all caught up")
++    progress = max((c["progress"] for c in current), default=None)
++    return " • ".join(parts), progress
++
++  def _render(self, rect: rl.Rectangle):
++    self.set_rect(rect)
++    rl.clear_background(rl.BLACK)
++    a = self._alpha
++    cx = rect.x + rect.width / 2 + self._offset[0]
++    y = rect.y + rect.height / 2 - 250 + self._offset[1]
++
++    # Clock with a small am/pm after it, centered as one unit
++    clock_w = measure(self._clock, CLOCK_SIZE, FontWeight.BOLD).x
++    ampm_w = measure(self._ampm, T.H2, FontWeight.SEMI_BOLD).x
++    x = cx - (clock_w + 20 + ampm_w) / 2
++    text(self._clock, x, y, CLOCK_SIZE, with_alpha(C.TEXT, 0.9 * a), FontWeight.BOLD)
++    text(self._ampm, x + clock_w + 20, y + CLOCK_SIZE - T.H2 - 40, T.H2, with_alpha(C.TEXT_DIM, a), FontWeight.SEMI_BOLD)
++
++    y += CLOCK_SIZE + 10
++    text_center(self._date, cx, y, T.H2, with_alpha(C.TEXT_DIM, a))
++
++    y += 140
++    text_center(self._status, cx, y, T.BODY, with_alpha(C.TEXT_FAINT, a))
++    if self._progress is not None:
++      w = 520
++      bar(rl.Rectangle(cx - w / 2, y + 80, w, 10), self._progress, with_alpha(C.BLUE, 0.8 * a), with_alpha(C.TRACK, a))
++    return -1
++
++
++_saver: JayScreenSaver | None = None
++_done = False  # the clock was dismissed or timed out; stays off until stock wants the screen on again
++
++
++def _hide() -> None:
++  if _saver is not None and gui_app.widget_in_stack(_saver):
++    if gui_app.get_active_widget() is _saver:
++      gui_app.pop_widget()
++    else:
++      gui_app.pop_widget(gui_app._nav_stack.index(_saver))
++
++
++@guarded(default=None)
++def _keep_awake(on: bool) -> bool:
++  global _saver, _done
++  if on:
++    _hide()
++    _done = False
++    return True
++  if _done or not config.get("screensaver"):
++    return False
++  if _saver is None:
++    _saver = JayScreenSaver()
++  if not gui_app.widget_in_stack(_saver):
++    _saver.initialize()
++    gui_app.push_widget(_saver)
++    return True
++  if not _saver.is_active:  # tapped or timed out
++    _hide()
++    _done = True
++    return False
++  return True
++
++
++def keep_awake(on: bool) -> bool:
++  """Takes whether stock wants the screen on and returns whether it stays on. Offroad, when stock would turn the
++  screen off, the clock shows for screensaver_timeout seconds first. On an error, stock behavior."""
++  awake = _keep_awake(on)
++  return on if awake is None else awake
+diff --git a/openpilot/selfdrive/ui/ui_state.py b/openpilot/selfdrive/ui/ui_state.py
+index bc64de5..8e9aedc 100644
+--- a/openpilot/selfdrive/ui/ui_state.py
++++ b/openpilot/selfdrive/ui/ui_state.py
+@@ -15,6 +15,7 @@ from openpilot.common.hardware import HARDWARE, PC
+ from openpilot.common.hardware.usb import cable_connected, get_usb_state, is_chestnut_usb_id
+ from openpilot.selfdrive.modeld.helpers import chestnut_compiled
+ from openpilot.selfdrive.selfdrived.alertmanager import OFFROAD_ALERTS
++from openpilot.jay.screensaver import keep_awake
+ 
+ BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
+ PARAM_UPDATE_TIME = 1 / 5.0
+@@ -379,7 +380,7 @@ class Device:
+         callback()
+     self._prev_timed_out = interaction_timeout
+ 
+-    self._set_awake(ui_state.ignition or not interaction_timeout or PC)
++    self._set_awake(keep_awake(ui_state.ignition or not interaction_timeout or PC))  # jay: clock screensaver before the screen turns off
+ 
+   def _set_awake(self, on: bool):
+     if on != self._awake:
