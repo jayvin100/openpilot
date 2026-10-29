@@ -33,7 +33,7 @@ class ModelInfoTest(unittest.TestCase):
     self.artifact(checkpoint)
     info = installed_model(self.path)
     self.assertEqual(info.name, 'comma driving model')
-    self.assertEqual(info.released, 'Not published')
+    self.assertEqual(info.released, 'Unavailable')
     self.assertEqual(info.checkpoint, checkpoint)
 
   def test_missing_truncated_invalid_and_missing_metadata(self):
