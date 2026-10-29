@@ -1,0 +1,105 @@
+diff --git a/openpilot/jay/road_mode.py b/openpilot/jay/road_mode.py
+new file mode 100644
+index 0000000..fe8a3db
+--- /dev/null
++++ b/openpilot/jay/road_mode.py
+@@ -0,0 +1,49 @@
++"""Temporary offroad override. Never bypass normal onroad startup conditions."""
++from pathlib import Path
++
++from opendbc.car.structs import car
++
++REQUEST = Path("/tmp/jay_offroad_override")
++
++
++def can_enter(sm) -> bool:
++  return (sm.all_checks(["carState", "selfdriveState"]) and sm["carState"].standstill
++          and sm["carState"].gearShifter == car.CarState.GearShifter.park
++          and not sm["selfdriveState"].enabled)
++
++
++class OffroadOverride:
++  def __init__(self):
++    self.active = False
++    REQUEST.unlink(missing_ok=True)
++
++  def allow_onroad(self, sm, ignition: bool) -> bool:
++    requested = REQUEST.exists()
++    if not ignition or (requested and not self.active and not can_enter(sm)):
++      REQUEST.unlink(missing_ok=True)
++      requested = False
++    self.active = requested
++    return not self.active
++
++
++def road_mode_button():
++  from openpilot.selfdrive.ui.ui_state import ui_state
++  from openpilot.system.ui.lib.application import gui_app
++  from openpilot.system.ui.widgets import DialogResult
++  from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
++  from openpilot.system.ui.widgets.list_view import button_item
++
++  def clicked():
++    if REQUEST.exists():
++      REQUEST.unlink(missing_ok=True)
++    elif ui_state.is_onroad() and can_enter(ui_state.sm):
++      def confirmed(result):
++        if result == DialogResult.CONFIRM and ui_state.is_onroad() and can_enter(ui_state.sm):
++          REQUEST.touch()
++      gui_app.push_widget(ConfirmDialog("Enter offroad mode? Driving assistance and drive recording will stop. "
++                                      "Stay parked until you select GO ONROAD.", "Go offroad", callback=confirmed))
++
++  item = button_item("Road Mode", lambda: "GO ONROAD" if REQUEST.exists() else "GO OFFROAD", callback=clicked,
++                     description="Temporary offroad mode while the ignition is on. Requires Park and openpilot disengaged.")
++  item.action_item.set_enabled(lambda: REQUEST.exists() or (ui_state.is_onroad() and can_enter(ui_state.sm)))
++  return item
+diff --git a/openpilot/jay/settings_panel.py b/openpilot/jay/settings_panel.py
+index 56b4615..e8a14fc 100644
+--- a/openpilot/jay/settings_panel.py
++++ b/openpilot/jay/settings_panel.py
+@@ -6,6 +6,7 @@ and puts the rest in a useful order.
+ """
+ from openpilot.jay import config
+ from openpilot.jay.guard import guarded
++from openpilot.jay.road_mode import road_mode_button
+ from openpilot.system.ui.widgets import Widget
+ from openpilot.system.ui.widgets.list_view import toggle_item
+ from openpilot.system.ui.widgets.scroller_tici import Scroller
+@@ -20,6 +21,7 @@ class JaySettingsLayout(Widget):
+   def __init__(self):
+     super().__init__()
+     items = [
++      road_mode_button(),
+       config_toggle("onroad_minimal", "Minimal Driving Screen",
+                     "Hide the path and lane lines while driving. Speed, alerts and driver monitoring always stay on."),
+       config_toggle("screensaver", "Clock Screensaver",
+diff --git a/openpilot/system/hardware/hardwared.py b/openpilot/system/hardware/hardwared.py
+index e012cf8..e6bb20b 100755
+--- a/openpilot/system/hardware/hardwared.py
++++ b/openpilot/system/hardware/hardwared.py
+@@ -202,7 +202,7 @@ def hw_state_thread(end_event, hw_queue):
+ def hardware_thread(end_event, hw_queue) -> None:
+   system_stats = LinuxSystemStats() if sys.platform == "linux" else None
+   pm = messaging.PubMaster(['deviceState'])
+-  sm = messaging.SubMaster(["peripheralState", "gpsLocationExternal", "selfdriveState", "pandaStates", "chestnutState"], poll="pandaStates")
++  sm = messaging.SubMaster(["peripheralState", "gpsLocationExternal", "selfdriveState", "pandaStates", "chestnutState", "carState"], poll="pandaStates")  # jay
+ 
+   count = 0
+ 
+@@ -239,6 +239,7 @@ def hardware_thread(end_event, hw_queue) -> None:
+   offroad_cycle_count = 0
+ 
+   params = Params()
++  from openpilot.jay.road_mode import OffroadOverride; offroad_override = OffroadOverride()  # jay
+   power_monitor = PowerMonitoring()
+ 
+   uptime_offroad: float = params.get("UptimeOffroad", return_default=True)
+@@ -279,6 +280,8 @@ def hardware_thread(end_event, hw_queue) -> None:
+         onroad_conditions["ignition"] = False
+         cloudlog.error("panda timed out onroad")
+ 
++    onroad_conditions["jay_not_offroad"] = offroad_override.allow_onroad(sm, onroad_conditions["ignition"])  # jay
++
+     # Run at 2Hz, plus either edge of ignition
+     ign_edge = (started_ts is not None) != all(onroad_conditions.values())
+     if (sm.frame % round(SERVICE_LIST['pandaStates'].frequency * DT_HW) != 0) and not ign_edge:

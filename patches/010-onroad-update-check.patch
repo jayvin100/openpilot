@@ -1,0 +1,91 @@
+diff --git a/openpilot/jay/settings_panel.py b/openpilot/jay/settings_panel.py
+index d876e19..56b4615 100644
+--- a/openpilot/jay/settings_panel.py
++++ b/openpilot/jay/settings_panel.py
+@@ -53,8 +53,10 @@ _removed: list = []
+ def arrange_panels(panels: dict) -> dict:
+   """Returns the panels to show, in order. Called once with SettingsLayout's panel dict; None (on error) keeps stock."""
+   from openpilot.selfdrive.ui.layouts.settings.settings import PanelInfo, PanelType  # imported lazily: settings imports this module
++  from openpilot.jay.software_panel import JaySoftwareLayout
+ 
+   panels = {PanelType.JAY: PanelInfo("Jay", JaySettingsLayout()), **panels}
++  panels[PanelType.SOFTWARE] = PanelInfo("Software", JaySoftwareLayout())
+   kept = {}
+   for panel_type, info in panels.items():
+     if panel_type.name in REMOVED_PANELS:
+diff --git a/openpilot/jay/software_panel.py b/openpilot/jay/software_panel.py
+new file mode 100644
+index 0000000..e2d5e6c
+--- /dev/null
++++ b/openpilot/jay/software_panel.py
+@@ -0,0 +1,43 @@
++"""Keep the stock offroad updater; use a read-only check onroad."""
++import threading
++
++from openpilot.common.basedir import BASEDIR
++from openpilot.jay.guard import guarded
++from openpilot.jay.update_check import check_remote
++from openpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout
++from openpilot.selfdrive.ui.ui_state import ui_state
++from openpilot.system.ui.lib.multilang import tr
++
++
++class JaySoftwareLayout(SoftwareLayout):
++  def __init__(self):
++    super().__init__()
++    self._check_thread = None
++    self._check_status = "Not checked yet"
++
++  @guarded()
++  def _update_state(self):
++    super()._update_state()
++    if ui_state.is_onroad():
++      self._download_btn.set_visible(True)
++      self._download_btn.action_item.set_text(tr("CHECK"))
++      self._download_btn.action_item.set_value(self._check_status)
++      self._download_btn.action_item.set_enabled(self._check_thread is None or not self._check_thread.is_alive())
++
++  @guarded()
++  def _on_download_update(self):
++    if ui_state.is_offroad():
++      return super()._on_download_update()
++    if self._check_thread is not None and self._check_thread.is_alive():
++      return
++    branch = ui_state.params.get("UpdaterTargetBranch") or ui_state.params.get("GitBranch") or ""
++    self._check_status = "Checking..."
++
++    def worker():
++      try:
++        self._check_status = check_remote(BASEDIR, branch)
++      except Exception:
++        self._check_status = "Check failed - retry"
++
++    self._check_thread = threading.Thread(target=worker, daemon=True)
++    self._check_thread.start()
+diff --git a/openpilot/jay/update_check.py b/openpilot/jay/update_check.py
+new file mode 100644
+index 0000000..457d88c
+--- /dev/null
++++ b/openpilot/jay/update_check.py
+@@ -0,0 +1,21 @@
++"""A lightweight, read-only remote check that can run while driving."""
++import os
++import subprocess
++
++
++def check_remote(basedir: str, branch: str) -> str:
++  env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
++
++  def git(*args):
++    return subprocess.check_output(["git", *args], cwd=basedir, env=env, timeout=20,
++                                   stderr=subprocess.STDOUT, text=True).strip()
++
++  if not branch or branch.startswith("-"):
++    raise ValueError("No target branch selected")
++  output = git("ls-remote", "--exit-code", "origin", f"refs/heads/{branch}")
++  remote = next((line.split()[0] for line in output.splitlines()
++                 if line.split()[1:] == [f"refs/heads/{branch}"]), None)
++  if remote is None:
++    raise ValueError("Target branch not found")
++  current = git("rev-parse", "HEAD")
++  return "Up to date" if current == remote else f"Update available ({remote[:7]})"
