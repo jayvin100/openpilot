@@ -13,6 +13,7 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.wifi_manager import WifiManager
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.network import NetworkUI
+from openpilot.jay.settings_panel import arrange_panels
 
 # Constants
 SIDEBAR_WIDTH = 500
@@ -37,6 +38,7 @@ class PanelType(IntEnum):
   SOFTWARE = 3
   FIREHOSE = 4
   DEVELOPER = 5
+  JAY = 6  # jay
 
 
 @dataclass
@@ -63,6 +65,7 @@ class SettingsLayout(Widget):
       PanelType.FIREHOSE: PanelInfo(tr_noop("Firehose"), FirehoseLayout()),
       PanelType.DEVELOPER: PanelInfo(tr_noop("Developer"), DeveloperLayout()),
     }
+    self._panels = arrange_panels(self._panels) or self._panels  # jay: adds the Jay panel, drops unused ones, reorders
 
     self._font_medium = gui_app.font(FontWeight.MEDIUM)
     self._close_icon = gui_app.texture("icons/close2.png", CLOSE_ICON_SIZE, CLOSE_ICON_SIZE)
@@ -159,6 +162,7 @@ class SettingsLayout(Widget):
         return
 
   def set_current_panel(self, panel_type: PanelType):
+    panel_type = panel_type if panel_type in self._panels else PanelType.DEVICE  # jay: a removed panel opens Device
     if panel_type != self._current_panel:
       self._panels[self._current_panel].instance.hide_event()
       self._current_panel = panel_type

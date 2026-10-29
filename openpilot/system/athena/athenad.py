@@ -44,6 +44,7 @@ from openpilot.system.loggerd.xattr_cache import getxattr, setxattr
 from openpilot.tools.lib.helpers import RE
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.version import get_build_metadata
+from openpilot.jay.upload_status import UploadStatusWriter
 from openpilot.common.hardware.hw import Paths
 from openpilot.system.athena.rpc import dispatcher, dumps_call, handle, is_call, is_response, loads
 
@@ -142,6 +143,7 @@ log_recv_queue: Queue[str] = queue.Queue()
 cancelled_uploads: set[str] = set()
 
 cur_upload_items: dict[int, UploadItem | None] = {}
+upload_status = UploadStatusWriter()
 
 send_seq = itertools.count()
 def send_queue_push(data: str, priority: int) -> None:
@@ -193,6 +195,7 @@ def handle_long_poll(ws: WebSocket, exit_event: threading.Event | None) -> None:
     threading.Thread(target=upload_handler, args=(end_event,), name='upload_handler3'),
     threading.Thread(target=upload_handler, args=(end_event,), name='upload_handler4'),
     threading.Thread(target=log_handler, args=(end_event,), name='log_handler'),
+    threading.Thread(target=upload_status.run, args=(end_event, upload_queue, cur_upload_items), name='upload_status'),
   ] + [
     threading.Thread(target=jsonrpc_handler, args=(end_event,), name=f'worker_{x}')
     for x in range(HANDLER_THREADS)
@@ -307,13 +310,21 @@ def upload_handler(end_event: threading.Event) -> None:
         with _do_upload(item, partial(cb, sm, item, tid, end_event)) as response:
           if response.status_code not in (200, 201, 401, 403, 412):
             cloudlog.event("athena.upload_handler.retry", status_code=response.status_code, fn=fn, sz=sz, network_type=network_type, metered=metered)
+            upload_status.record_failure()
             retry_upload(tid, end_event)
           else:
             cloudlog.event("athena.upload_handler.success", fn=fn, sz=sz, network_type=network_type, metered=metered)
+            upload_status.record_success(fn, sz)
+            try:
+              from openpilot.jay.storage import mark_uploaded
+              mark_uploaded(fn, response.status_code)
+            except Exception:
+              cloudlog.exception("jay.storage.mark_uploaded failed")
 
         UploadQueueCache.cache(upload_queue)
       except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.SSLError):
         cloudlog.event("athena.upload_handler.timeout", fn=fn, sz=sz, network_type=network_type, metered=metered)
+        upload_status.record_failure()
         retry_upload(tid, end_event)
       except AbortTransferException:
         cloudlog.event("athena.upload_handler.abort", fn=fn, sz=sz, network_type=network_type, metered=metered)

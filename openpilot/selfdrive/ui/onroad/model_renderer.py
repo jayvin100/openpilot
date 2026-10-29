@@ -9,6 +9,7 @@ from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
 from openpilot.system.ui.widgets import Widget
+from openpilot.jay.onroad import minimal_mode
 
 CLIP_MARGIN = 500
 MIN_DRAW_DISTANCE = 10.0
@@ -112,8 +113,9 @@ class ModelRenderer(Widget):
       self._transform_dirty = False
 
     # Draw elements
-    self._draw_lane_lines()
-    self._draw_path()
+    if not minimal_mode():  # jay: minimal driving screen hides path and lane lines, keeps lead markers
+      self._draw_lane_lines()
+      self._draw_path()
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()

@@ -125,4 +125,6 @@ procs = [
   PythonProcess("joystick", "openpilot.tools.joystick.joystick_control", and_(joystick, iscar)),
 ]
 
+procs += [PythonProcess("jaydrives", "openpilot.jay.drives", only_offroad)]  # jay
+
 managed_processes = {p.name: p for p in procs}

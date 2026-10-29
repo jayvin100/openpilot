@@ -10,6 +10,7 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, T
 from openpilot.system.ui.lib.multilang import tr, trn
 from openpilot.system.ui.widgets.label import gui_label
 from openpilot.system.ui.widgets import Widget
+from openpilot.jay.home import JayHome, short_version
 
 HEADER_HEIGHT = 80
 HEAD_BUTTON_FONT_SIZE = 40
@@ -56,6 +57,7 @@ class HomeLayout(Widget):
     self._setup_widget = SetupWidget()
 
     self._setup_callbacks()
+    self._jay_home = JayHome()  # jay: one dashboard instead of the prime ad and the setup prompt
 
   def show_event(self):
     super().show_event()
@@ -169,8 +171,7 @@ class HomeLayout(Widget):
     gui_label(version_rect, self._version_text, 48, rl.WHITE, alignment=TextAlignment.RIGHT)
 
   def _render_home_content(self):
-    self._render_left_column()
-    self._render_right_column()
+    self._jay_home.render(self.content_rect)  # jay: replaces the prime and setup columns
 
   def _render_update_view(self):
     self.update_alert.render(self.content_rect)
@@ -205,5 +206,5 @@ class HomeLayout(Widget):
 
   def _get_version_text(self) -> str:
     brand = "openpilot"
-    description = self.params.get("UpdaterCurrentDescription")
+    description = short_version(self.params)  # jay
     return f"{brand} {description}" if description else brand

@@ -107,7 +107,7 @@ class MainLayout(Widget):
     self._sidebar.set_visible(False)
 
   def _on_settings_clicked(self):
-    self.open_settings(PanelType.DEVICE)
+    self.open_settings(PanelType.JAY)  # jay: the gear opens the Jay panel
 
   def _on_bookmark_clicked(self):
     for service in ('bookmarkButton', 'userBookmark'):

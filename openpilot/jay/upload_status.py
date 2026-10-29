@@ -1,0 +1,280 @@
+"""Live upload status for the home screen card and screensaver.
+
+athenad keeps its upload queue in memory, so it dumps a small JSON snapshot once a second
+(UploadStatusWriter) which the UI reads (read_upload_status). Firehose and on-device stats
+are collected on the UI side (UploadStats).
+"""
+import json
+import os
+import shutil
+import threading
+import time
+from collections import deque
+
+from openpilot.common.hardware.hw import Paths
+from openpilot.common.params import Params
+
+# UI fonts only contain ASCII plus a few extras (EXTRA_FONT_CHARS in system/ui/lib/application.py), e.g. "•" but not "·" or "…"
+STATUS_PATH = "/tmp/jay_upload_status.json"
+STALE_AFTER = 5.0  # seconds without a snapshot before athenad is considered disconnected
+UPLOAD_ATTR_NAME = "user.upload"
+SPEED_WINDOW = 180.0  # seconds of recent uploading that the average speed covers
+SPEED_MIN_SAMPLE = 20.0  # seconds of uploading needed before the average speed is trusted
+MAX_TIME_LEFT = 12 * 3600  # longer estimates aren't worth showing
+
+FILE_KINDS = {
+  "rlog": "full log",
+  "qlog": "log",
+  "fcamera.hevc": "road video",
+  "ecamera.hevc": "wide video",
+  "dcamera.hevc": "driver video",
+  "qcamera.ts": "preview video",
+}
+
+
+def describe_upload(path: str) -> str:
+  """'/data/media/0/realdata/0000002f--d22d40ad1d--12/rlog.zst' -> 'full log • #47 min 12' (drive 47, minute 12)"""
+  segment, name = os.path.split(path)
+  segment = os.path.basename(segment)
+  base = name.removesuffix(".zst")
+  kind = FILE_KINDS.get(base, base)
+  try:
+    counter, _, seg = segment.split("--")
+    return f"{kind} • #{int(counter, 16)} min {int(seg)}"
+  except ValueError:
+    return f"{kind} • {segment}"
+
+
+def format_bytes(n: float) -> str:
+  for unit in ("B", "KB", "MB", "GB"):
+    if n < 1000 or unit == "GB":
+      return f"{n:.0f} {unit}" if unit in ("B", "KB") else f"{n:.1f} {unit}"
+    n /= 1000
+  return ""
+
+
+class UploadStatusWriter:
+  INTERVAL = 1.0
+
+  def __init__(self, path: str = STATUS_PATH):
+    self._path = path
+    self._lock = threading.Lock()
+    self._sizes: dict[str, int] = {}
+    self.success = 0
+    self.failed = 0
+    self.bytes_done = 0
+    self.last_success = ""
+    self.last_success_t = 0.0
+
+  def record_success(self, fn: str, sz: int) -> None:
+    with self._lock:
+      self.success += 1
+      self.bytes_done += max(sz, 0)
+      self.last_success = fn
+      self.last_success_t = time.time()
+
+  def record_failure(self) -> None:
+    with self._lock:
+      self.failed += 1
+
+  def _size(self, path: str) -> int:
+    if path not in self._sizes:
+      # .zst files may be compressed on the fly from the uncompressed original
+      for p in (path, path.removesuffix(".zst")):
+        try:
+          self._sizes[path] = os.path.getsize(p)
+          break
+        except OSError:
+          self._sizes[path] = 0
+    return self._sizes[path]
+
+  def run(self, end_event: threading.Event, upload_queue, cur_upload_items: dict) -> None:
+    prev_done: dict[str, float] = {}
+    prev_t = time.monotonic()
+    active: deque[tuple[float, float, float]] = deque()  # (time, seconds, bytes) for ticks with an upload running
+    while not end_event.wait(self.INTERVAL):
+      try:
+        now = time.monotonic()
+        current = []
+        done: dict[str, float] = {}
+        for item in list(cur_upload_items.values()):
+          if item is None:
+            continue
+          sz = self._size(item.path)
+          done[item.path] = item.progress * sz
+          current.append({"path": item.path, "progress": item.progress, "size": sz})
+
+        moved = sum(max(d - prev_done.get(p, d), 0) for p, d in done.items())
+        dt = now - prev_t
+        speed = moved / dt if dt > 0 else 0.0
+        prev_done, prev_t = done, now
+
+        # average over the recent time something was uploading, so the estimate doesn't jump with every packet
+        if current and dt > 0:
+          active.append((now, dt, moved))
+        while active and active[0][0] < now - SPEED_WINDOW:
+          active.popleft()
+        active_s = sum(a[1] for a in active)
+        avg_speed = sum(a[2] for a in active) / active_s if active_s >= SPEED_MIN_SAMPLE else None
+
+        queued = [i for i in list(upload_queue.queue) if i is not None]
+        queued_bytes = sum(self._size(i.path) for i in queued)
+        keep = set(done) | {i.path for i in queued}
+        self._sizes = {p: s for p, s in self._sizes.items() if p in keep}
+
+        with self._lock:
+          snapshot = {
+            "t": time.time(),
+            "queued": len(queued),
+            "queued_bytes": queued_bytes,
+            "current": current,
+            "speed": speed,
+            "avg_speed": avg_speed,
+            "success": self.success,
+            "failed": self.failed,
+            "bytes_done": self.bytes_done,
+            "last_success": self.last_success,
+            "last_success_t": self.last_success_t,
+          }
+        tmp = self._path + ".tmp"
+        with open(tmp, "w") as f:
+          json.dump(snapshot, f)
+        os.replace(tmp, self._path)
+      except Exception:
+        pass
+
+
+def read_upload_status(path: str = STATUS_PATH) -> dict | None:
+  """Latest athenad snapshot, or None if athenad hasn't written one recently."""
+  try:
+    with open(path) as f:
+      data = json.load(f)
+  except (OSError, ValueError):
+    return None
+  if abs(time.time() - data.get("t", 0)) > STALE_AFTER:
+    return None
+  return data
+
+
+def time_left(status: dict | None) -> float | None:
+  """Seconds until the files athenad has right now (uploading + queued) are sent at the recent speed.
+  None when nothing is uploading, the speed isn't known yet, or the estimate is too long to mean much.
+  comma decides what to pull next, so this only covers the current queue."""
+  if not status or not status.get("current"):
+    return None
+  speed = status.get("avg_speed")
+  if not speed or speed <= 0 or "queued_bytes" not in status:
+    return None
+  remaining = status["queued_bytes"] + sum(c["size"] * (1 - c["progress"]) for c in status["current"])
+  secs = remaining / speed
+  return secs if 0 < secs <= MAX_TIME_LEFT else None
+
+
+def format_time_left(secs: float) -> str:
+  """90 -> '~2 min left', 1500 -> '~25 min left', 5400 -> '~1.5 h left'"""
+  m = secs / 60
+  if m < 1.5:
+    return "~1 min left"
+  if m < 10:
+    return f"~{round(m)} min left"
+  if m < 55:
+    return f"~{round(m / 5) * 5} min left"
+  h = round(m / 30) / 2
+  return f"~{h:g} h left"
+
+
+class UploadStats:
+  """Polls the athenad snapshot, the cached Firehose count, and on-device storage."""
+  STATUS_INTERVAL = 1.0
+  PARAMS_INTERVAL = 5.0
+  STORAGE_INTERVAL = 60.0
+
+  def __init__(self):
+    self._params = Params()
+    self.status: dict | None = None
+    self.firehose: int | None = None
+    self.firehose_at_start: int | None = None
+    self.segments = 0
+    self.drives = 0
+    self.qlogs_uploaded = 0
+    self.disk_used_pct = 0
+    self._last_status = 0.0
+    self._last_params = 0.0
+    self._storage_thread = threading.Thread(target=self._storage_loop, daemon=True)
+    self._storage_thread.start()
+
+  @property
+  def firehose_delta(self) -> int:
+    if self.firehose is None or self.firehose_at_start is None:
+      return 0
+    return self.firehose - self.firehose_at_start
+
+  def update(self) -> None:
+    now = time.monotonic()
+    if now - self._last_status >= self.STATUS_INTERVAL:
+      self._last_status = now
+      self.status = read_upload_status()
+    if now - self._last_params >= self.PARAMS_INTERVAL:
+      self._last_params = now
+      try:
+        stats = self._params.get("ApiCache_FirehoseStats")
+        if stats:
+          self.firehose = int(stats.get("firehose", 0))
+          if self.firehose_at_start is None:
+            self.firehose_at_start = self.firehose
+      except Exception:
+        pass
+
+  def _storage_loop(self) -> None:
+    while True:
+      try:
+        self._scan_storage()
+      except Exception:
+        pass
+      time.sleep(self.STORAGE_INTERVAL)
+
+  def _scan_storage(self) -> None:
+    root = Paths.log_root()
+    segments = [d for d in os.listdir(root) if d.count("--") == 2]
+    uploaded = 0
+    for seg in segments:
+      for name in ("qlog.zst", "qlog"):
+        try:
+          if os.getxattr(os.path.join(root, seg, name), UPLOAD_ATTR_NAME) == b"1":
+            uploaded += 1
+            break
+        except (OSError, AttributeError):
+          continue
+    usage = shutil.disk_usage(root)
+    self.segments = len(segments)
+    self.drives = len({s.rsplit("--", 1)[0] for s in segments})
+    self.qlogs_uploaded = uploaded
+    self.disk_used_pct = round(100 * usage.used / (usage.used + usage.free)) if usage.used + usage.free else 0  # matches df
+
+
+def status_summary(stats: UploadStats, network_type: str, metered: bool) -> tuple[str, float | None]:
+  """One-line upload status, plus the progress of the furthest-along upload (None when not uploading)."""
+  if network_type == "none":
+    return "Offline", None
+  if metered:
+    return "Paused on metered connection", None
+  status = stats.status
+  if status is None:
+    return "Waiting for connection to comma...", None
+  current = status["current"]
+  if not current:
+    return f"Idle • {status['queued']} waiting", None
+  top = max(current, key=lambda c: c["progress"])
+  extra = f" (+{len(current) - 1})" if len(current) > 1 else ""
+  return f"Uploading {describe_upload(top['path'])}{extra} • {format_bytes(status['speed'])}/s", top["progress"]
+
+
+_shared_stats: UploadStats | None = None
+
+
+def shared_upload_stats() -> UploadStats:
+  """One poller shared by the home card and the screensaver."""
+  global _shared_stats
+  if _shared_stats is None:
+    _shared_stats = UploadStats()
+  return _shared_stats

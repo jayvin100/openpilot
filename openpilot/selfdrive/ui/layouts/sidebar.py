@@ -8,6 +8,7 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, F
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
+from openpilot.jay.home import show_home_button, sidebar_metrics
 
 SIDEBAR_WIDTH = 300
 METRIC_HEIGHT = 126
@@ -166,6 +167,7 @@ class Sidebar(Widget):
     button_img = self._flag_img if ui_state.started else self._home_img
 
     tint = Colors.BUTTON_PRESSED if (ui_state.started and flag_pressed) else Colors.BUTTON_NORMAL
+    tint = tint if show_home_button() else rl.BLANK  # jay: the button does nothing offroad, so don't draw it
     rl.draw_texture_ex(button_img, rl.Vector2(HOME_BTN.x, HOME_BTN.y), 0.0, 1.0, tint)
 
     # Microphone button
@@ -199,6 +201,7 @@ class Sidebar(Widget):
 
   def _draw_metrics(self, rect: rl.Rectangle):
     metrics = [(self._temp_status, 338), (self._panda_status, 496), (self._connect_status, 654)]
+    metrics = sidebar_metrics(metrics, Colors) or metrics  # jay: real temperature, only boxes that need attention
 
     for metric, y_offset in metrics:
       self._draw_metric(rect, metric, rect.y + y_offset)

@@ -73,6 +73,12 @@ def deleter_step() -> tuple[bool, str | None]:
 
 def deleter_thread(exit_event: threading.Event):
   while not exit_event.is_set():
+    try:
+      from openpilot.jay.storage import step as jay_storage_step
+      jay_storage_step()
+    except Exception:
+      cloudlog.exception("jay.storage.step failed")
+
     out_of_space, _ = deleter_step()
     exit_event.wait(.1 if out_of_space else 30)
 
