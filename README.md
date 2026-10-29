@@ -31,6 +31,7 @@ The workflow in `.github/workflows/build.yml` runs every 3 hours, and whenever `
 - **Drive stats:** each drive is summarized from its qlogs after the car turns off.
 - **Driving screen:** optional minimal mode that hides the path and lane lines. Alerts and driver monitoring are never hidden.
 - **Road mode:** Settings > Jay has Go Offroad / Go Onroad. Entering requires fresh vehicle data, Park, standstill and openpilot disengaged. It stops assistance and drive recording until resumed, and clears when ignition turns off or hardwared restarts.
+- **Driving model:** Settings > Software shows the installed comma 3X model and its verified upstream release date. Unknown models show their checkpoint and an unavailable date.
 - **Update checks:** Settings > Software allows a read-only check of the selected branch while onroad. Downloads and installation use the stock offroad updater.
 - **Settings:** a "Jay" panel for all of the above, opened by the gear. The Firehose panel is removed (the home screen shows it) and the rest reordered.
 
